@@ -1,0 +1,17 @@
+systems:
+  nmrbox:
+    label: NMRbox SSH
+    kind: nmrbox
+    hpc_profile: nmrbox-condor
+    # Optional: use a full profile file instead of a profile name.
+    # hpc_profile_file: /absolute/path/to/nmrbox-condor.yaml
+    ssh_target: your_username@sulfur.nmrbox.org
+    remote_project_dir: /home/your_username/docking
+
+  cluster-login:
+    label: Generic HPC Login
+    kind: ssh
+    hpc_profile: bibalex-apptainer-conda
+    ssh_target: your_username@login.cluster.example.org
+    remote_project_dir: /cluster/users/your_username/docking
+
