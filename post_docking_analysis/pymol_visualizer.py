@@ -68,13 +68,14 @@ class PyMOLVisualizer:
             f.write(pymol_script)
         
         # Execute PyMOL script
-        self._execute_pymol_script(script_file)
-        
-        # Save session
         session_file = self.output_dir / f"{scene_name}.pse"
-        self._save_pymol_session(session_file)
-        
-        print(f"✅ Comparative scene created: {session_file}")
+        executed = self._execute_pymol_script(script_file)
+        if executed and session_file.exists():
+            print(f"✅ Comparative scene created: {session_file}")
+        elif executed:
+            print(f"⚠️ PyMOL ran but session was not created: {session_file}")
+        else:
+            print(f"⚠️ Comparative scene script generated but not executed: {script_file}")
         return session_file
     
     def create_interaction_analysis(self, pdb_file: Path, ligand_resname: str = "UNK",
@@ -112,13 +113,14 @@ class PyMOLVisualizer:
             f.write(pymol_script)
         
         # Execute PyMOL script
-        self._execute_pymol_script(script_file)
-        
-        # Save session
         session_file = self.output_dir / f"{scene_name}.pse"
-        self._save_pymol_session(session_file)
-        
-        print(f"✅ Interaction analysis created: {session_file}")
+        executed = self._execute_pymol_script(script_file)
+        if executed and session_file.exists():
+            print(f"✅ Interaction analysis created: {session_file}")
+        elif executed:
+            print(f"⚠️ PyMOL ran but session was not created: {session_file}")
+        else:
+            print(f"⚠️ Interaction script generated but not executed: {script_file}")
         return session_file
     
     def create_best_poses_gallery(self, pdb_files: List[Path], 
@@ -152,13 +154,14 @@ class PyMOLVisualizer:
             f.write(pymol_script)
         
         # Execute PyMOL script
-        self._execute_pymol_script(script_file)
-        
-        # Save session
         session_file = self.output_dir / f"{scene_name}.pse"
-        self._save_pymol_session(session_file)
-        
-        print(f"✅ Best poses gallery created: {session_file}")
+        executed = self._execute_pymol_script(script_file)
+        if executed and session_file.exists():
+            print(f"✅ Best poses gallery created: {session_file}")
+        elif executed:
+            print(f"⚠️ PyMOL ran but session was not created: {session_file}")
+        else:
+            print(f"⚠️ Gallery script generated but not executed: {script_file}")
         return session_file
     
     def _generate_comparative_script(self, reference_pdb: Path, novel_pdb: Path,
@@ -181,6 +184,12 @@ cmd.show("cartoon", "all")
 cmd.color("gray78", "all")
 cmd.set("cartoon_transparency", 0.55)
 cmd.set("cartoon_smooth_loops", 1)
+
+# Highlight frequently inspected catalytic residues
+cmd.select("highlight_res", "resi 212+213+214")
+cmd.show("sticks", "highlight_res")
+cmd.color("red", "highlight_res")
+cmd.set("stick_radius", 0.3, "highlight_res")
 
 # Highlight specific residues if provided
 """
@@ -265,6 +274,7 @@ cmd.set("ray_trace_frames", 3)
 
 # Save high-resolution image
 cmd.png("{self.output_dir}/{scene_name}.png", dpi={self.dpi})
+cmd.save("{self.output_dir}/{scene_name}.pse")
 
 print("Comparative scene created successfully!")
 """
@@ -281,6 +291,8 @@ print("Comparative scene created successfully!")
 
 # Clear workspace
 cmd.delete("all")
+cmd.deselect()
+cmd.delete("pocket")
 
 # Load structure
 cmd.load("{pdb_file}", "structure")
@@ -348,6 +360,7 @@ cmd.set("ray_trace_frames", 3)
 
 # Save high-resolution image
 cmd.png("{self.output_dir}/{scene_name}.png", dpi={self.dpi})
+cmd.save("{self.output_dir}/{scene_name}.pse")
 
 print("Interaction analysis created successfully!")
 """
@@ -416,14 +429,15 @@ cmd.set("ray_trace_frames", 3)
 
 # Save high-resolution image
 cmd.png("{self.output_dir}/{scene_name}.png", dpi={self.dpi})
+cmd.save("{self.output_dir}/{scene_name}.pse")
 
 print("Best poses gallery created successfully!")
 """
         
         return script
     
-    def _execute_pymol_script(self, script_file: Path):
-        """Execute PyMOL script."""
+    def _execute_pymol_script(self, script_file: Path) -> bool:
+        """Execute PyMOL script and return success status."""
         try:
             # Try to execute PyMOL script
             result = subprocess.run(
@@ -435,16 +449,21 @@ print("Best poses gallery created successfully!")
             
             if result.returncode != 0:
                 print(f"⚠️ PyMOL execution warning: {result.stderr}")
+                return False
             else:
                 print("✅ PyMOL script executed successfully")
+                return True
                 
         except subprocess.TimeoutExpired:
             print("⚠️ PyMOL script execution timed out")
+            return False
         except FileNotFoundError:
             print("⚠️ PyMOL not found. Please install PyMOL to use 3D visualization features.")
+            return False
         except Exception as e:
             print(f"⚠️ Error executing PyMOL script: {e}")
-    
+            return False
+
     def _save_pymol_session(self, session_file: Path):
         """Save PyMOL session."""
         try:
@@ -518,7 +537,16 @@ def create_comparative_analysis(reference_pdb: Path, novel_pdb: Path,
         'novel_interactions': novel_interaction,
         'output_directory': output_dir
     }
-    
-    print("✅ Comparative analysis completed")
-    return analysis_results
 
+    generated_sessions = [
+        path for path in (comparative_session, ref_interaction, novel_interaction)
+        if Path(path).exists()
+    ]
+    analysis_results["generated_session_count"] = len(generated_sessions)
+    analysis_results["status"] = "completed" if len(generated_sessions) == 3 else "partial_or_skipped"
+
+    if analysis_results["status"] == "completed":
+        print("✅ Comparative analysis completed")
+    else:
+        print("⚠️ Comparative analysis finished with missing PyMOL session outputs")
+    return analysis_results

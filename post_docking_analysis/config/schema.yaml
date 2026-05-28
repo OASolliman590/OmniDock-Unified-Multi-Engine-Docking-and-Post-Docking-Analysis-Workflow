@@ -89,6 +89,31 @@ visualization:
   # Whether to generate 2D interaction maps with PandaMap
   generate_2d_interactions: true
 
+  # PandaMap rendering hints (single-command CLI mode)
+  pandamap:
+    show_surface: true
+    show_3d_cues: true
+    width: 1200
+    height: 900
+    generate_text_reports: true
+    estimate_delta_g: true
+    write_capability_manifest: true
+    qc_min_non_generic_ligand_ratio: 0.60
+    qc_require_reports_when_supported: true
+
+  # ProLIF defaults for interaction-map readability
+  prolif:
+    dpi: 350
+    figsize: [14, 10]
+    max_complexes: 60
+
+  # LigPlot+ defaults for robust batch rendering
+  ligplot:
+    contact_type: "2"
+    hydrogenate: "auto"
+    strip_metals: "auto"
+    no_abort: true
+
 # Advanced Options
 advanced:
   # Fix missing chains in structures
@@ -104,3 +129,29 @@ advanced:
   receptor_pattern: "*receptor*.pdb"
   ligand_pattern: "*ligand*.sdf"
   docking_result_pattern: "*out*.pdbqt"
+
+# Quality Control and Classification
+quality_control:
+  ligand_qc:
+    enabled: true
+    admet_filters_enabled: true
+    max_lipinski_violations: 1
+    max_molecular_weight: 650.0
+    max_logp: 6.0
+    max_tpsa: 180.0
+    max_rotatable_bonds: 15
+    max_formal_charge_abs: 2
+    min_heavy_atom_count: 6
+    block_pains: true
+    block_brenk: true
+    block_reactive: true
+  receptor_qc:
+    enabled: true
+    min_atom_count: 100
+    min_heavy_atom_count: 60
+    min_chain_count: 1
+    max_coordinate_span: 500.0
+  hit_classification:
+    policy: "target_aware"
+    strong_percentile: 0.10
+    moderate_percentile: 0.35

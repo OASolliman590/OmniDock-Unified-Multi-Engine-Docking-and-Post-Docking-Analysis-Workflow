@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-PDB Prepare Wizard - Command Line Interface
-==========================================
+Omni-DockForge - Legacy PDB CLI Compatibility Layer
+===================================================
 
-Command-line interface for the PDB preparation pipeline with batch processing capabilities.
+Command-line interface for legacy PDB-preparation workflows.
+For new projects, prefer `python main.py workflow ...` commands.
 
 Author: Molecular Docking Pipeline
 Version: 2.1.0
@@ -21,6 +22,73 @@ from core_pipeline import MolecularDockingPipeline, extract_residue_level_coordi
 if EXCEL_AVAILABLE:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
+
+
+COMMON_SOLVENTS = {"HOH", "WAT", "DOD"}
+COMMON_METALS = {"ZN", "MN", "MG", "FE", "CU", "CO", "NI", "CD", "CA"}
+COMMON_COFACTORS = {
+    "NAD", "NDP", "NAP", "FAD", "FMN", "ATP", "ADP", "AMP", "GDP", "GTP",
+    "SAM", "SAH", "COA", "HEM", "PLP",
+}
+COMMON_ADDITIVES = {"NA", "K", "CL", "SO4", "PO4", "GOL", "EDO", "IPA", "1PE", "PEG", "BME", "MES", "TRS"}
+NON_ANCHOR_DEFAULT = COMMON_SOLVENTS | COMMON_METALS | COMMON_COFACTORS | COMMON_ADDITIVES
+
+
+def _non_h_atom_count(residue) -> int:
+    count = 0
+    for atom in residue.get_atoms():
+        element = str(getattr(atom, "element", "")).strip().upper()
+        atom_name = str(atom.get_name()).strip().upper()
+        if element == "H" or atom_name.startswith("H"):
+            continue
+        count += 1
+    return count
+
+
+def _select_ligand_instance(
+    hetatm_details: List[tuple],
+    target_ligand: Optional[str] = None,
+    ligand_mode: str = "auto",
+    preferred_ligands: Optional[List[str]] = None,
+    ignore_for_anchor: Optional[set[str]] = None,
+) -> tuple[Optional[str], Optional[str], Optional[int]]:
+    preferred = {item.upper() for item in (preferred_ligands or []) if item}
+    ignore = set(ignore_for_anchor or NON_ANCHOR_DEFAULT)
+
+    if target_ligand:
+        target = target_ligand.upper()
+        for resname, c_id, r_id, _ in hetatm_details:
+            if resname == target:
+                return resname, c_id, r_id
+
+    if ligand_mode == "auto":
+        common_solvents = {"HOH", "NA", "CL", "SO4", "CA", "MG", "ZN", "FE", "CU", "MN"}
+        for resname, c_id, r_id, _ in hetatm_details:
+            if resname not in common_solvents:
+                return resname, c_id, r_id
+        return None, None, None
+
+    # Heuristic mode: prioritize non-additive, non-cofactor ligands and larger heavy-atom content.
+    ranked = []
+    for resname, c_id, r_id, residue in hetatm_details:
+        heavy_atoms = _non_h_atom_count(residue)
+        score = 0
+        if resname not in ignore:
+            score += 100
+        if resname in preferred:
+            score += 200
+        score += min(heavy_atoms, 60) / 10.0
+        ranked.append((score, heavy_atoms, resname, c_id, r_id))
+
+    ranked.sort(reverse=True)
+    if not ranked:
+        return None, None, None
+
+    best = ranked[0]
+    # If every candidate is from ignored classes, skip automatic ligand extraction.
+    if best[0] < 50:
+        return None, None, None
+    return best[2], best[3], best[4]
 
 def load_config(config_file: str) -> Dict[str, Any]:
     """Load configuration from JSON file."""
@@ -108,7 +176,7 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
         # Step 2: Enumerate HETATMs
         hetatm_details, unique_hetatms = pipeline.enumerate_hetatms(pdb_file)
         
-        # Step 3: Select ligand (from config or first available)
+        # Step 3: Select ligand (config override, then auto/heuristic logic)
         selected_hetatm = None
         chain_id = None
         res_id = None
@@ -116,27 +184,28 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
         if unique_hetatms:
             ligand_config = config.get('ligand_selection', {})
             target_ligand = ligand_config.get(pdb_id.lower())
-            
-            if target_ligand:
-                # Find specific ligand from config
-                for resname, c_id, r_id, _ in hetatm_details:
-                    if resname == target_ligand.upper():
-                        selected_hetatm = resname
-                        chain_id = c_id
-                        res_id = r_id
-                        print(f"✓ Using configured ligand: {selected_hetatm}_{chain_id}_{res_id}")
-                        break
-            
-            if not selected_hetatm:
-                # Use first available ligand (exclude common ions/water)
-                common_solvents = {'HOH', 'NA', 'CL', 'SO4', 'CA', 'MG', 'ZN', 'FE', 'CU', 'MN'}
-                for resname, c_id, r_id, _ in hetatm_details:
-                    if resname not in common_solvents:
-                        selected_hetatm = resname
-                        chain_id = c_id
-                        res_id = r_id
-                        print(f"✓ Auto-selected ligand: {selected_hetatm}_{chain_id}_{res_id}")
-                        break
+            ligand_mode = str(config.get("ligand_mode", "auto")).strip().lower() or "auto"
+            preferred_ligands = config.get("preferred_ligands", []) or []
+            ignore_for_anchor = set(item.upper() for item in (config.get("ignore_for_anchor", []) or []))
+            if not ignore_for_anchor:
+                ignore_for_anchor = set(NON_ANCHOR_DEFAULT)
+
+            selected_hetatm, chain_id, res_id = _select_ligand_instance(
+                hetatm_details,
+                target_ligand=target_ligand,
+                ligand_mode=ligand_mode,
+                preferred_ligands=preferred_ligands,
+                ignore_for_anchor=ignore_for_anchor,
+            )
+            if selected_hetatm:
+                if target_ligand:
+                    print(f"✓ Using configured ligand: {selected_hetatm}_{chain_id}_{res_id}")
+                elif ligand_mode == "heuristic":
+                    print(f"✓ Heuristic-selected ligand: {selected_hetatm}_{chain_id}_{res_id}")
+                else:
+                    print(f"✓ Auto-selected ligand: {selected_hetatm}_{chain_id}_{res_id}")
+            else:
+                print("⚠️  No suitable ligand candidate found with current selection mode; proceeding without ligand extraction.")
             
             if selected_hetatm:
                 # Save ligand as separate PDB
@@ -195,7 +264,11 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
         cleaning_config = config.get('cleaning', {})
         pdb_specific_cleaning = cleaning_config.get(pdb_id.lower())
         
-        if pdb_specific_cleaning:
+        preserve_full_receptor = bool(cleaning_config.get("preserve_full_receptor", False))
+        if preserve_full_receptor:
+            to_remove_list = []
+            print("✓ Full receptor unchanged mode enabled: cleaning step will be skipped")
+        elif pdb_specific_cleaning:
             to_remove_list = pdb_specific_cleaning
         else:
             # Default cleaning strategy
@@ -203,7 +276,15 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
             if default_strategy == 'all':
                 to_remove_list = unique_hetatms
             elif default_strategy == 'common':
-                common_residues = ['HOH', 'NA', 'CL', 'SO4', 'CA', 'MG', 'ZN', 'FE', 'CU', 'MN']
+                common_residues = {'HOH', 'NA', 'CL', 'SO4', 'PO4', 'GOL', 'EDO', 'IPA', '1PE'}
+                preserve_metals = bool(cleaning_config.get("preserve_metals", True))
+                preserve_cofactors = bool(cleaning_config.get("preserve_cofactors", True))
+                preserve_residues = set(item.upper() for item in (cleaning_config.get("preserve_residues", []) or []))
+                if not preserve_metals:
+                    common_residues.update(COMMON_METALS)
+                if not preserve_cofactors:
+                    common_residues.update(COMMON_COFACTORS)
+                common_residues = {res for res in common_residues if res not in preserve_residues}
                 to_remove_list = [r for r in common_residues if r in unique_hetatms]
             elif default_strategy == 'none':
                 to_remove_list = []
@@ -212,7 +293,42 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
         
         # Note: Don't auto-remove selected ligand - let user decide via config
         # If ligand is in removal list, it will be removed (creating apo receptor)
-        cleaned_pdb = pipeline.clean_pdb(pdb_file, to_remove_list, pdb_id=pdb_id)
+        keep_selected_chain = bool(cleaning_config.get("keep_selected_chain", False)) and not preserve_full_receptor
+        explicit_keep_chain_id = str(cleaning_config.get("keep_chain_id", "") or "").strip()
+        explicit_keep_chain_ids_raw = cleaning_config.get("keep_chain_ids", [])
+        explicit_keep_chain_ids = []
+        if isinstance(explicit_keep_chain_ids_raw, str):
+            explicit_keep_chain_ids = [part.strip() for part in explicit_keep_chain_ids_raw.split(",") if part.strip()]
+        elif isinstance(explicit_keep_chain_ids_raw, list):
+            explicit_keep_chain_ids = [str(part).strip() for part in explicit_keep_chain_ids_raw if str(part).strip()]
+        keep_chain_id = None
+        keep_chain_ids = None
+        if keep_selected_chain:
+            if explicit_keep_chain_ids:
+                keep_chain_ids = explicit_keep_chain_ids
+                print(f"✓ Keeping configured receptor chain(s) during cleaning: {', '.join(keep_chain_ids)}")
+            elif explicit_keep_chain_id:
+                keep_chain_ids = [explicit_keep_chain_id]
+                print(f"✓ Keeping configured receptor chain during cleaning: {explicit_keep_chain_id}")
+            elif selected_hetatm and chain_id:
+                keep_chain_ids = [chain_id]
+                print(
+                    f"✓ Keeping ligand-matched chain during cleaning: {chain_id} "
+                    "(set cleaning.keep_chain_ids to override)"
+                )
+        if keep_chain_ids:
+            keep_chain_id = keep_chain_ids[0] if len(keep_chain_ids) == 1 else None
+            print(f"✓ Chain filter active: {', '.join(keep_chain_ids)}")
+        if preserve_full_receptor:
+            cleaned_pdb = pdb_file
+        else:
+            cleaned_pdb = pipeline.clean_pdb(
+                pdb_file,
+                to_remove_list,
+                pdb_id=pdb_id,
+                keep_chain_id=keep_chain_id,
+                keep_chain_ids=keep_chain_ids,
+            )
         
         # Step 6: Analyze pocket properties using cleaned structure (if coordinates were extracted)
         if selected_hetatm and coords is not None:
@@ -238,7 +354,7 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
         return False
 
 def add_to_excel_workbook(workbook, pdb_id, results):
-    """Add results to Excel workbook."""
+    """Upsert results into the Summary sheet by PDB ID."""
     try:
         # Create or get worksheet
         if "Summary" not in workbook.sheetnames:
@@ -249,18 +365,24 @@ def add_to_excel_workbook(workbook, pdb_id, results):
             
             # Style headers
             for cell in ws[1]:
-                cell.font = Font(bold=True)
-                cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
-                cell.alignment = Alignment(horizontal="center")
+                    cell.font = Font(bold=True)
+                    cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+                    cell.alignment = Alignment(horizontal="center")
         else:
             ws = workbook["Summary"]
+
+        normalized_pdb = str(pdb_id).strip().upper()
+
+        # Replace prior entries for this PDB so reruns overwrite stale values.
+        for row_idx in range(ws.max_row, 1, -1):
+            cell_value = ws.cell(row=row_idx, column=1).value
+            existing_pdb = str(cell_value).strip().upper() if cell_value is not None else ""
+            if existing_pdb == normalized_pdb:
+                ws.delete_rows(row_idx, 1)
         
         # Add results
         for key, value in results.items():
-            ws.append([pdb_id, key, value])
-            
-        # Add separator row
-        ws.append(["", "", ""])
+            ws.append([normalized_pdb, key, value])
         
     except Exception as e:
         print(f"⚠️  Failed to add results to Excel: {e}")
@@ -268,7 +390,7 @@ def add_to_excel_workbook(workbook, pdb_id, results):
 def create_sample_config():
     """Create a sample configuration file."""
     sample_config = {
-        "description": "Sample configuration for PDB Prepare Wizard CLI",
+        "description": "Sample configuration for Omni-DockForge legacy PDB CLI",
         "ligand_selection": {
             "7cmd": "TTT",
             "6wx4": "LIG",
@@ -295,7 +417,7 @@ def create_sample_config():
 def main():
     """Main CLI function."""
     parser = argparse.ArgumentParser(
-        description="PDB Prepare Wizard - Command Line Interface",
+        description="Omni-DockForge - Legacy PDB CLI compatibility mode",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -356,7 +478,7 @@ Examples:
     output_dir = Path(args.output)
     
     # Run analysis
-    print(f"\n🚀 Starting PDB Prepare Wizard CLI")
+    print(f"\n🚀 Starting Omni-DockForge legacy PDB CLI")
     print(f"Output directory: {output_dir.absolute()}")
     print(f"PDBs to process: {len(pdb_list)}")
     
@@ -391,4 +513,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ Unexpected error: {e}")
         sys.exit(1)
-

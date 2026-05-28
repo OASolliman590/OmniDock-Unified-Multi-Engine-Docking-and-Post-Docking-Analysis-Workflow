@@ -14,14 +14,12 @@ sys.path.insert(0, str(docking_analysis_path))
 from .config_manager import load_config
 from .input_handler import find_docking_files, validate_complex_files
 from .docking_parser import parse_all_docking_results
-from .affinity_analyzer import analyze_protein_ligand_breakdown
-from .rmsd_analyzer import calculate_rmsd_matrix, analyze_pose_clustering, analyze_conformational_diversity, create_rmsd_visualizations
 from .structure_quality import assess_structure_quality, create_quality_visualizations
 from .correlation_analyzer import analyze_vina_cnn_correlation, analyze_score_distributions, analyze_score_agreement, create_correlation_visualizations
 from .pymol_visualizer import PyMOLVisualizer, create_comparative_analysis
 from .pymol_generate import render_pymol_scene
 from .pandamap_integration import PandaMapAnalyzer
-from .plugin_manager import PluginManager
+from .plip_integration import PLIPAnalyzer, run_plip_analysis
 from .logging_config import setup_logging, get_logger
 
 class PostDockingAnalysisPipeline:
@@ -55,10 +53,19 @@ class PostDockingAnalysisPipeline:
             self.config.set("paths.output_dir", output_dir)
         
         # Set paths from configuration
-        self.input_dir = Path(self.config.get("paths.input_dir")).resolve()
-        self.output_dir = Path(self.config.get("paths.output_dir")).resolve()
-        self.receptors_dir = Path(self.config.get("paths.receptors_dir", "")).resolve()
-        self.gnina_out_dir = Path(self.config.get("paths.gnina_out_dir", "")).resolve()
+        input_dir_value = str(self.config.get("paths.input_dir", "") or "").strip()
+        self.input_dir = Path(input_dir_value).expanduser().resolve() if input_dir_value else None
+        self.output_dir = Path(self.config.get("paths.output_dir")).expanduser().resolve()
+
+        receptors_dir_value = str(self.config.get("paths.receptors_dir", "") or "").strip()
+        self.receptors_dir = (
+            Path(receptors_dir_value).expanduser().resolve() if receptors_dir_value else None
+        )
+
+        gnina_out_dir_value = str(self.config.get("paths.gnina_out_dir", "") or "").strip()
+        self.gnina_out_dir = (
+            Path(gnina_out_dir_value).expanduser().resolve() if gnina_out_dir_value else None
+        )
         
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -76,6 +83,83 @@ class PostDockingAnalysisPipeline:
         
         # Initialize plugin manager
         self.plugin_manager = None
+
+    @staticmethod
+    def _infer_strong_binder_threshold(best_poses: pd.DataFrame, configured_threshold="auto") -> float:
+        """Infer strong-binder threshold from best-pose affinities with legacy-compatible defaults."""
+        values = pd.to_numeric(best_poses.get("vina_affinity"), errors="coerce")
+        values = values[values.notna()]
+        if values.empty:
+            return -8.0
+
+        if configured_threshold == "auto":
+            q25 = float(values.quantile(0.25))
+            q75 = float(values.quantile(0.75))
+            iqr = q75 - q25
+            return float(q25 - 1.5 * iqr)
+
+        try:
+            return float(configured_threshold)
+        except (TypeError, ValueError):
+            return -8.0
+
+    @staticmethod
+    def _add_protein_ligand_columns(best_poses: pd.DataFrame) -> pd.DataFrame:
+        """Attach protein/ligand decomposition columns using the legacy complex-name convention."""
+        annotated = best_poses.copy()
+        parts = annotated["complex_name"].astype(str).str.split("_")
+        annotated["protein"] = parts.str[0].fillna("Unknown")
+        annotated["ligand"] = parts.apply(lambda values: "_".join(values[1:]) if isinstance(values, list) and len(values) > 1 else "Unknown")
+        return annotated
+
+    def _analyze_affinity_dataframe(self, full_df: pd.DataFrame, comparative_benchmark: str, configured_threshold="auto") -> dict:
+        """Legacy-compatible affinity analysis that does not depend on removed stub modules."""
+        df = full_df.copy()
+        df["vina_affinity"] = pd.to_numeric(df.get("vina_affinity"), errors="coerce")
+        df = df[df["vina_affinity"].notna()]
+        df = df[df["vina_affinity"] < 0]
+        if comparative_benchmark != "*":
+            mask = df["complex_name"].astype(str).str.contains(comparative_benchmark, case=False, na=False)
+            df = df[mask]
+        if df.empty:
+            return {
+                "full_data": pd.DataFrame(),
+                "best_poses": pd.DataFrame(),
+                "summary_stats": pd.DataFrame(),
+                "top_overall": pd.DataFrame(),
+                "best_per_protein": pd.DataFrame(),
+                "best_per_ligand": pd.DataFrame(),
+                "strong_binder_threshold": -8.0,
+            }
+
+        best_poses = df.loc[df.groupby("complex_name")["vina_affinity"].idxmin()].copy()
+        best_poses = best_poses.sort_values("vina_affinity")
+        best_poses = self._add_protein_ligand_columns(best_poses)
+        threshold = self._infer_strong_binder_threshold(best_poses, configured_threshold)
+        best_poses["binder_category"] = pd.cut(
+            best_poses["vina_affinity"],
+            bins=[-float("inf"), threshold, -6.0, 0],
+            labels=["Strong binder", "Moderate binder", "Weak binder"],
+        )
+
+        summary_stats = df.groupby("complex_name").agg({"vina_affinity": ["min", "max", "mean", "std"]}).round(3)
+        summary_stats.columns = ["_".join(col).strip() for col in summary_stats.columns]
+        summary_stats = summary_stats.reset_index()
+
+        top_cols = [col for col in ["complex_name", "protein", "ligand", "vina_affinity", "binder_category", "pose"] if col in best_poses.columns]
+        top_overall = best_poses.head(10)[top_cols]
+        best_per_protein = best_poses.groupby("protein").first().reset_index().sort_values("vina_affinity")
+        best_per_ligand = best_poses.groupby("ligand").first().reset_index().sort_values("vina_affinity")
+
+        return {
+            "full_data": df,
+            "best_poses": best_poses,
+            "summary_stats": summary_stats,
+            "top_overall": top_overall,
+            "best_per_protein": best_per_protein,
+            "best_per_ligand": best_per_ligand,
+            "strong_binder_threshold": float(threshold),
+        }
         
     def validate_input(self):
         """
@@ -86,6 +170,10 @@ class PostDockingAnalysisPipeline:
         bool
             True if input is valid, False otherwise
         """
+        if self.input_dir is None:
+            self.logger.error("❌ Input directory is required and cannot be empty")
+            return False
+
         if not self.input_dir.exists():
             self.logger.error(f"❌ Input directory does not exist: {self.input_dir}")
             return False
@@ -108,16 +196,20 @@ class PostDockingAnalysisPipeline:
         Run the complete post-docking analysis pipeline.
         """
         self.logger.info("🚀 Starting Post-Docking Analysis Pipeline")
-        self.logger.info(f"📂 Input directory: {self.input_dir.absolute()}")
+        self.logger.info(f"📂 Input directory: {self.input_dir.absolute() if self.input_dir else '(unset)'}")
         self.logger.info(f"📂 Output directory: {self.output_dir.absolute()}")
-        
+
         try:
             # Validate input
             if not self.validate_input():
                 return False
-            
+
+            docking_types = self.config.get("analysis.docking_types", [])
+            if isinstance(docking_types, str):
+                docking_types = [docking_types]
+
             # Check if GNINA analysis is enabled
-            if "gnina" in self.config.get("analysis.docking_types", []):
+            if "gnina" in docking_types:
                 # Check if all_scores.csv exists, if not, try to generate it
                 gnina_scores = self.gnina_out_dir / "all_scores.csv" if self.gnina_out_dir else self.input_dir / "gnina_out" / "all_scores.csv"
                 
@@ -149,6 +241,10 @@ class PostDockingAnalysisPipeline:
                     if self.config.get("visualization.generate_2d_interactions", True):
                         if not self.generate_pandamap_interactions():
                             return False
+                    # PLIP 2D interaction diagrams
+                    if self.config.get("visualization.plip.enabled", True):
+                        if not self.generate_plip_diagrams():
+                            return False
                     # Execute plugins
                     if self.config.get("advanced.enable_plugins", True):
                         # Initialize plugins
@@ -158,14 +254,67 @@ class PostDockingAnalysisPipeline:
                             return False
                     self.logger.info("✅ Post-Docking Analysis (GNINA fast-path) completed successfully!")
                     return True
-            else:
-                self.logger.info("🔄 Running standard analysis pipeline...")
-                # Add standard analysis here if needed
-                return True
+
+            self.logger.info("🔄 Running standard analysis pipeline...")
+            return self._run_standard_pipeline()
                 
         except Exception as e:
             self.logger.error(f"❌ Pipeline execution failed: {e}")
             return False
+
+    def _run_standard_pipeline(self):
+        """
+        Run the legacy multi-step analysis path for non-GNINA or non-fast-path input.
+        """
+        structure_type = self.config.get("advanced.directory_structure", "AUTO")
+        self.complexes = find_docking_files(self.input_dir, structure_type)
+        self.complexes = validate_complex_files(self.complexes)
+        if not self.complexes:
+            self.logger.error("❌ No valid docking complexes found for standard analysis")
+            return False
+
+        if not self.parse_docking_results():
+            return False
+        if not self.analyze_binding_affinities():
+            return False
+
+        if (
+            self.config.get("binding_affinity.analyze_by_protein", True)
+            or self.config.get("binding_affinity.analyze_by_ligand", True)
+        ):
+            if not self.analyze_protein_ligand_breakdown():
+                return False
+
+        if self.config.get("analysis.rmsd_analysis", True):
+            if not self.analyze_rmsd_and_clustering():
+                return False
+
+        if not self.generate_reports():
+            return False
+
+        if self.config.get("analysis.generate_visualizations", True):
+            if not self.generate_visualizations():
+                return False
+
+        if self.config.get("analysis.extract_poses", True):
+            if not self.extract_best_poses_pdb():
+                return False
+
+        if self.config.get("visualization.generate_2d_interactions", True):
+            if not self.generate_pandamap_interactions():
+                return False
+
+        if self.config.get("visualization.plip.enabled", True):
+            if not self.generate_plip_diagrams():
+                return False
+
+        if self.config.get("advanced.enable_plugins", True):
+            self.initialize_plugins()
+            if not self.execute_plugins():
+                return False
+
+        self.logger.info("✅ Post-Docking Analysis (standard pipeline) completed successfully!")
+        return True
     
     def _analyze_from_gnina_scores(self, scores_csv: Path):
         """
@@ -203,15 +352,9 @@ class PostDockingAnalysisPipeline:
             # Top
             top_overall = best_poses.head(10)[['complex_name', 'vina_affinity', 'pose']]
             
-            # Calculate binding affinity analysis with threshold
-            try:
-                from .affinity_analyzer import analyze_binding_affinities
-            except ImportError:
-                import affinity_analyzer
-                analyze_binding_affinities = affinity_analyzer.analyze_binding_affinities
             comparative_benchmark = self.config.get("analysis.comparative_benchmark", "*")
             strong_binder_threshold = self.config.get("binding_affinity.strong_binder_threshold", "auto")
-            analysis_results = analyze_binding_affinities(full_df, comparative_benchmark, strong_binder_threshold)
+            analysis_results = self._analyze_affinity_dataframe(full_df, comparative_benchmark, strong_binder_threshold)
             
             self.results = {
                 'full_data': full_df,
@@ -247,6 +390,13 @@ class PostDockingAnalysisPipeline:
             if not gnina_out_dir.exists():
                 self.logger.error(f"❌ GNINA output directory not found: {gnina_out_dir}")
                 return False
+            
+            # Detect separate logs/ directory (GNINA HPC layout)
+            log_dir = None
+            sibling_logs = gnina_out_dir.parent / "logs"
+            if sibling_logs.is_dir() and any(sibling_logs.glob("*.log")):
+                log_dir = sibling_logs
+                self.logger.info(f"📂 Detected HPC layout — logs in {log_dir}")
                 
             # Look for pairlist.csv in the project directory
             pairlist_file = self.input_dir / "pairlist.csv"
@@ -256,7 +406,11 @@ class PostDockingAnalysisPipeline:
                 
             # Generate the CSV file
             output_file = gnina_out_dir / "all_scores.csv"
-            success = generate_all_scores_csv(gnina_out_dir, output_file, pairlist_file if pairlist_file.exists() else None)
+            success = generate_all_scores_csv(
+                gnina_out_dir, output_file,
+                pairlist_file if pairlist_file.exists() else None,
+                log_dir=log_dir
+            )
             
             if success:
                 self.logger.info(f"✅ Successfully generated {output_file}")
@@ -268,88 +422,6 @@ class PostDockingAnalysisPipeline:
         except Exception as e:
             self.logger.error(f"❌ Error generating all_scores.csv: {e}", exc_info=True)
             return False
-                
-        # Step 1: Find docking files
-        self.logger.info("🔍 Finding docking files...")
-        self.complexes = find_docking_files(self.input_dir)
-        self.logger.info(f"✅ Found {len(self.complexes)} complexes")
-        
-        # Validate complexes
-        self.complexes = validate_complex_files(self.complexes)
-        self.logger.info(f"✅ Validated {len(self.complexes)} complexes")
-        
-        if len(self.complexes) == 0:
-            self.logger.error("❌ No valid complexes found. Check input directory structure.")
-            return False
-            
-        # Print details about found complexes
-        for i, complex_info in enumerate(self.complexes, 1):
-            self.logger.debug(f"  {i}. {complex_info['name']}")
-            for key, value in complex_info.items():
-                if key != 'name' and key != 'directory':
-                    self.logger.debug(f"     {key}: {value}")
-        
-        # Step 2: Parse docking results
-        if not self.parse_docking_results():
-            return False
-            
-        # Step 3: Analyze binding affinities
-        if self.config.get("analysis.binding_affinity_analysis", True):
-            if not self.analyze_binding_affinities():
-                return False
-                
-        # Step 4: Generate reports
-        if not self.generate_reports():
-            return False
-            
-        # Step 5: Generate visualizations
-        if self.config.get("analysis.generate_visualizations", True):
-            if not self.generate_visualizations():
-                return False
-                
-        # Step 6: Extract best poses as PDB files
-        if self.config.get("analysis.extract_poses", True):
-            if not self.extract_best_poses_pdb():
-                return False
-        
-        # Step 7: Analyze protein vs ligand breakdown
-        if self.config.get("binding_affinity.analyze_by_protein", True) or self.config.get("binding_affinity.analyze_by_ligand", True):
-            if not self.analyze_protein_ligand_breakdown():
-                return False
-            
-        # Step 8: Perform RMSD analysis and clustering
-        if self.config.get("analysis.rmsd_analysis", True):
-            if not self.analyze_rmsd_and_clustering():
-                return False
-            
-        # Step 9: Assess structure quality
-        if not self.assess_structure_quality():
-            return False
-            
-        # Step 10: Analyze score correlations
-        if not self.analyze_correlations():
-            return False
-            
-        # Step 11: Create PyMOL visualizations
-        if self.config.get("visualization.generate_3d", True):
-            if not self.create_pymol_visualizations():
-                return False
-            
-        # Step 12: Generate PandaMap interaction visualizations
-        if self.config.get("visualization.generate_2d_interactions", True):
-            if not self.generate_pandamap_interactions():
-                return False
-                
-        # Step 13: Execute plugins
-        if self.config.get("advanced.enable_plugins", True):
-            # Initialize plugins
-            self.initialize_plugins()
-            # Execute plugins
-            if not self.execute_plugins():
-                return False
-                
-        self.logger.info("✅ Post-Docking Analysis Pipeline completed successfully!")
-        return True
         
     def parse_docking_results(self):
         """
@@ -410,7 +482,7 @@ class PostDockingAnalysisPipeline:
         full_df = pd.DataFrame(all_data)
         
         # Analyze binding affinities with comparative benchmark and dynamic threshold
-        analysis_results = analyze_binding_affinities(full_df, comparative_benchmark, strong_binder_threshold)
+        analysis_results = self._analyze_affinity_dataframe(full_df, comparative_benchmark, strong_binder_threshold)
         
         self.results = analysis_results
         
@@ -456,7 +528,10 @@ class PostDockingAnalysisPipeline:
             print("⚠️  openpyxl not available - Excel report generation skipped")
         
         # Generate summary report
-        best_poses = self.results['best_poses']
+        best_poses = self.results['best_poses'].copy()
+        if 'vina_affinity' in best_poses.columns:
+            best_poses['vina_affinity'] = pd.to_numeric(best_poses['vina_affinity'], errors='coerce')
+            best_poses = best_poses[best_poses['vina_affinity'].notna()].sort_values('vina_affinity')
         summary_lines = [
             "Post-Docking Analysis Summary Report",
             "==================================",
@@ -473,9 +548,11 @@ class PostDockingAnalysisPipeline:
         top_5 = best_poses.head(5)
         for idx, (_, row) in enumerate(top_5.iterrows(), 1):
             complex_name = row['complex_name'] if isinstance(row['complex_name'], str) else str(row['complex_name'])
-            vina_affinity = row['vina_affinity'] if isinstance(row['vina_affinity'], (int, float)) else float(row['vina_affinity'])
-            pose = row.get('pose', 1) if 'pose' in row else 1
-            pose = pose if isinstance(pose, (int, float)) else 1
+            vina_affinity = pd.to_numeric(row.get('vina_affinity'), errors='coerce')
+            if pd.isna(vina_affinity):
+                continue
+            pose = pd.to_numeric(row.get('pose', 1), errors='coerce')
+            pose = int(pose) if pd.notna(pose) else 1
             
             summary_lines.append(
                 f"  {idx}. {complex_name}: {vina_affinity:.2f} kcal/mol (Pose {pose})"
@@ -515,7 +592,7 @@ class PostDockingAnalysisPipeline:
         
         # Generate all visualizations using the enhanced module
         try:
-            import visualizer
+            from . import visualizer
             plot_files = visualizer.generate_all_visualizations(self.results, self.output_dir, self.config.config)
             print(f"✅ Generated {len(plot_files)} visualizations successfully!")
             return True
@@ -536,13 +613,18 @@ class PostDockingAnalysisPipeline:
         
         # Prefer GNINA SDF-based extraction when a gnina_out folder exists
         try:
-            import pose_extractor
-            # Try different possible GNINA directory names
-            possible_gnina_dirs = [
-                self.input_dir / "gnina_out",
-                self.input_dir / "gnina_out_cox2",
-                self.input_dir / "gnina_out_inha"
-            ]
+            from . import pose_extractor
+            # Prefer configured GNINA output directory when provided.
+            possible_gnina_dirs = []
+            if self.gnina_out_dir is not None:
+                possible_gnina_dirs.append(self.gnina_out_dir)
+            possible_gnina_dirs.extend(
+                [
+                    self.input_dir / "gnina_out",
+                    self.input_dir / "gnina_out_cox2",
+                    self.input_dir / "gnina_out_inha",
+                ]
+            )
             
             gnina_dir = None
             for possible_dir in possible_gnina_dirs:
@@ -551,7 +633,13 @@ class PostDockingAnalysisPipeline:
                     break
             
             if gnina_dir is not None:
-                written = pose_extractor.extract_best_poses_from_gnina(self.input_dir, self.output_dir, self.config.config)
+                written = pose_extractor.extract_best_poses_from_gnina(
+                    self.input_dir,
+                    self.output_dir,
+                    self.config.config,
+                    gnina_dir=gnina_dir,
+                    receptors_dir=self.receptors_dir,
+                )
                 if written > 0:
                     # Organize poses by affinity
                     best_poses_dir = self.output_dir / "best_poses"
@@ -709,8 +797,45 @@ class PostDockingAnalysisPipeline:
             return False
         
         try:
-            # Perform protein-ligand breakdown analysis
-            breakdown_results = analyze_protein_ligand_breakdown(self.results['best_poses'])
+            best_poses = self.results['best_poses'].copy()
+            if best_poses.empty:
+                print("⚠️  Best-pose table is empty; protein-ligand breakdown skipped")
+                return True
+            best_poses = self._add_protein_ligand_columns(best_poses)
+
+            best_per_protein = best_poses.groupby('protein').agg({
+                'vina_affinity': 'min',
+                'complex_name': 'first',
+                'ligand': 'first',
+            }).reset_index().sort_values('vina_affinity')
+            best_per_protein.columns = ['protein', 'best_affinity', 'best_complex', 'best_ligand']
+
+            best_per_ligand = best_poses.groupby('ligand').agg({
+                'vina_affinity': 'min',
+                'complex_name': 'first',
+                'protein': 'first',
+            }).reset_index().sort_values('vina_affinity')
+            best_per_ligand.columns = ['ligand', 'best_affinity', 'best_complex', 'best_protein']
+
+            protein_summary = best_poses.groupby('protein').agg({
+                'vina_affinity': ['min', 'max', 'mean', 'std', 'count'],
+            }).round(3)
+            protein_summary.columns = ['min_affinity', 'max_affinity', 'mean_affinity', 'std_affinity', 'pose_count']
+            protein_summary = protein_summary.reset_index()
+
+            ligand_summary = best_poses.groupby('ligand').agg({
+                'vina_affinity': ['min', 'max', 'mean', 'std', 'count'],
+            }).round(3)
+            ligand_summary.columns = ['min_affinity', 'max_affinity', 'mean_affinity', 'std_affinity', 'pose_count']
+            ligand_summary = ligand_summary.reset_index()
+
+            breakdown_results = {
+                'best_per_protein': best_per_protein,
+                'best_per_ligand': best_per_ligand,
+                'protein_summary': protein_summary,
+                'ligand_summary': ligand_summary,
+                'scores_with_breakdown': best_poses,
+            }
             
             # Store results
             if not hasattr(self, 'results'):
@@ -757,25 +882,60 @@ class PostDockingAnalysisPipeline:
             return False
         
         try:
-            # Get configuration parameters
-            clustering_method = self.config.get("rmsd.clustering_method", "kmeans")
-            n_clusters = self.config.get("rmsd.kmeans_clusters", 3)
-            comparative_benchmark = self.config.get("analysis.comparative_benchmark", "*")
-            
-            # Calculate RMSD matrix
-            rmsd_matrix = calculate_rmsd_matrix(self.results['full_data'])
-            
-            # Perform pose clustering with comparative benchmarking
-            clustering_results = analyze_pose_clustering(
-                self.results['full_data'], rmsd_matrix, 
-                method=clustering_method, n_clusters=n_clusters,
-                comparative_benchmark=comparative_benchmark
+            from .enhanced_rmsd_analyzer import (
+                analyze_conformational_diversity_enhanced,
+                analyze_pose_clustering_enhanced,
+                calculate_rmsd_matrix_from_pdbs,
+                create_rmsd_visualizations_enhanced,
             )
-            
-            # Analyze conformational diversity with comparative benchmarking
-            diversity_results = analyze_conformational_diversity(
-                self.results['full_data'], rmsd_matrix,
-                comparative_benchmark=comparative_benchmark
+
+            clustering_method = self.config.get("rmsd.clustering_method", "kmeans")
+            n_clusters = int(self.config.get("rmsd.kmeans_clusters", 3))
+            rmsd_workers = int(self.config.get("rmsd.workers", 0) or 0)
+            poses_dir = self.output_dir / "best_poses_pdb"
+            pdb_files = sorted(poses_dir.glob("*.pdb")) if poses_dir.exists() else []
+            if len(pdb_files) < 2:
+                print("⚠️  RMSD analysis skipped: need at least two best-pose PDB files")
+                self.results['rmsd_analysis'] = {
+                    'state': 'skipped_insufficient_pdbs',
+                    'poses_dir': str(poses_dir),
+                    'pdb_count': len(pdb_files),
+                }
+                return True
+
+            poses_df = self.results.get('best_poses', pd.DataFrame()).copy()
+            if poses_df.empty:
+                tags = [path.stem for path in pdb_files]
+                poses_df = pd.DataFrame({'tag': tags, 'vina_affinity': [np.nan] * len(tags)})
+            if 'tag' not in poses_df.columns:
+                if 'complex_name' in poses_df.columns:
+                    poses_df['tag'] = poses_df['complex_name'].astype(str)
+                else:
+                    poses_df['tag'] = [path.stem for path in pdb_files[: len(poses_df)]]
+
+            rmsd_matrix, filenames = calculate_rmsd_matrix_from_pdbs(
+                pdb_files, ligand_only=True, num_workers=rmsd_workers
+            )
+            matrix_n = rmsd_matrix.shape[0]
+            poses_df = poses_df.head(matrix_n).reset_index(drop=True)
+            if len(poses_df) < matrix_n:
+                missing = matrix_n - len(poses_df)
+                extra = pd.DataFrame({
+                    'tag': filenames[len(poses_df):matrix_n],
+                    'vina_affinity': [np.nan] * missing,
+                })
+                poses_df = pd.concat([poses_df, extra], ignore_index=True)
+
+            clustering_results = analyze_pose_clustering_enhanced(
+                poses_df,
+                rmsd_matrix,
+                pdb_files,
+                method=clustering_method,
+                n_clusters=n_clusters,
+            )
+            diversity_results = analyze_conformational_diversity_enhanced(
+                clustering_results.get('poses_with_clusters', poses_df),
+                clustering_results.get('rmsd_matrix', rmsd_matrix),
             )
             
             # Store results
@@ -790,7 +950,7 @@ class PostDockingAnalysisPipeline:
             # Create RMSD visualizations
             viz_dir = self.output_dir / "visualizations"
             viz_dir.mkdir(exist_ok=True)
-            create_rmsd_visualizations(
+            create_rmsd_visualizations_enhanced(
                 clustering_results, diversity_results, viz_dir,
                 dpi=self.config.get("visualization.dpi", 300)
             )
@@ -965,10 +1125,10 @@ class PostDockingAnalysisPipeline:
             # Get best poses PDB files
             poses_dir = self.output_dir / "best_poses_pdb"
             if poses_dir.exists():
-                pdb_files = list(poses_dir.glob("*.pdb"))
+                pdb_files = self._rank_pose_files_by_affinity(list(poses_dir.glob("*.pdb")))
                 
                 if len(pdb_files) >= 2:
-                    # Create comparative analysis between first two poses
+                    # Create comparative analysis between the two strongest ranked poses
                     reference_pdb = pdb_files[0]
                     novel_pdb = pdb_files[1]
                     
@@ -1031,10 +1191,11 @@ class PostDockingAnalysisPipeline:
             analyzer = PandaMapAnalyzer(conda_env=conda_env, config=self.config.config)
             
             # Generate comprehensive analysis
+            ligand_name = self._infer_pandamap_ligand_name()
             summary = analyzer.generate_comprehensive_analysis(
                 poses_dir=poses_dir,
                 output_dir=pandamap_dir,
-                ligand_name="UNK"
+                ligand_name=ligand_name
             )
             
             # Store results
@@ -1054,28 +1215,122 @@ class PostDockingAnalysisPipeline:
             print(f"❌ Error generating PandaMap interactions: {e}")
             return False
 
+    def generate_plip_diagrams(self):
+        """
+        Generate 2D protein-ligand interaction diagrams using PLIP.
+        
+        PLIP (Protein-Ligand Interaction Profiler) generates detailed 2D
+        diagrams showing hydrogen bonds, hydrophobic contacts, π-stacking,
+        salt bridges, and other interactions.
+        
+        Returns
+        -------
+        bool
+            True if analysis successful, False otherwise
+        """
+        print("🔬 Generating PLIP 2D interaction diagrams...")
+        
+        # Check if PLIP is enabled in configuration
+        plip_config = self.config.get("visualization.plip", {})
+        if not plip_config.get("enabled", True):
+            print("ℹ️  PLIP analysis disabled in configuration")
+            return True
+        
+        try:
+            # Determine poses directory - check multiple locations
+            poses_dir = None
+            
+            # Priority 1: best_poses with subdirectories (strong/moderate/weak)
+            best_poses_dir = self.output_dir / "best_poses"
+            if best_poses_dir.exists():
+                # Check if it has the expected subdirectory structure
+                subdirs = ['strong_binders', 'moderate_binders', 'weak_binders']
+                if any((best_poses_dir / d).exists() for d in subdirs):
+                    poses_dir = best_poses_dir
+                    print(f"📁 Using categorized poses from: {poses_dir}")
+            
+            # Priority 2: best_poses_pdb flat directory
+            if poses_dir is None:
+                best_poses_pdb_dir = self.output_dir / "best_poses_pdb"
+                if best_poses_pdb_dir.exists():
+                    poses_dir = best_poses_pdb_dir
+                    print(f"📁 Using poses from: {poses_dir}")
+            
+            if poses_dir is None or not poses_dir.exists():
+                print("⚠️ No poses directory found - skipping PLIP analysis")
+                return True
+            
+            # Create PLIP output directory
+            plip_output_dir = self.output_dir / "plip_diagrams"
+            plip_output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Initialize PLIP analyzer with configuration
+            analyzer = PLIPAnalyzer(config=plip_config)
+            try:
+                max_workers = max(1, int(plip_config.get("max_workers", 4) or 1))
+            except (TypeError, ValueError):
+                self.logger.warning(
+                    "⚠️ Invalid PLIP max_workers value '%s'; falling back to 1",
+                    plip_config.get("max_workers"),
+                )
+                max_workers = 1
+            
+            if not analyzer.plip_available:
+                print("⚠️ PLIP not installed - skipping 2D diagram generation")
+                print("   Install with: pip install plip")
+                return True
+            
+            # Check if this is a categorized structure or flat directory
+            subdirs = ['strong_binders', 'moderate_binders', 'weak_binders']
+            is_categorized = any((poses_dir / d).exists() for d in subdirs)
+            
+            if is_categorized:
+                # Analyze the complete best_poses structure
+                all_results = analyzer.analyze_best_poses_directory(
+                    poses_dir, plip_output_dir, max_workers=max_workers
+                )
+                
+                # Calculate totals
+                total_analyzed = sum(len(r) for r in all_results.values())
+                total_successful = sum(
+                    sum(1 for res in r.values() if res.success)
+                    for r in all_results.values()
+                )
+            else:
+                # Single directory
+                results = analyzer.analyze_directory(poses_dir, plip_output_dir, max_workers=max_workers)
+                total_analyzed = len(results)
+                total_successful = sum(1 for r in results.values() if r.success)
+            
+            # Store results
+            if not hasattr(self, 'results'):
+                self.results = {}
+            self.results['plip_diagrams'] = {
+                'total_analyzed': total_analyzed,
+                'successful': total_successful,
+                'output_dir': str(plip_output_dir)
+            }
+            
+            print(f"✅ PLIP analysis completed:")
+            print(f"   📊 Analyzed {total_analyzed} complexes")
+            print(f"   ✅ Generated {total_successful} 2D interaction diagrams")
+            print(f"   📂 Output directory: {plip_output_dir}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error generating PLIP diagrams: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def initialize_plugins(self):
         """
         Initialize plugin manager and load available plugins.
         """
-        print("🔌 Initializing plugin system...")
-        
-        try:
-            # Get plugin directories from configuration
-            plugin_dirs = self.config.get("advanced.plugin_directories", [])
-            
-            # Create plugin manager
-            self.plugin_manager = PluginManager(plugin_dirs)
-            
-            # Load plugins
-            self.plugin_manager.load_plugins()
-            
-            print(f"✅ Plugin system initialized with {len(self.plugin_manager.plugins)} plugins")
-            return True
-            
-        except Exception as e:
-            print(f"⚠️  Plugin system initialization failed: {e}")
-            return False
+        print("ℹ️  Plugin system has been retired; skipping plugin initialization.")
+        self.plugin_manager = None
+        return True
 
     def execute_plugins(self):
         """
@@ -1086,28 +1341,70 @@ class PostDockingAnalysisPipeline:
         bool
             True if plugins executed successfully, False otherwise
         """
-        if not self.plugin_manager or not self.plugin_manager.plugins:
-            print("⏭️  No plugins to execute")
-            return True
-        
-        print("⚙️  Executing analysis plugins...")
-        
+        print("ℹ️  Plugin execution skipped: plugin system retired.")
+        self.results['plugin_results'] = {
+            "status": "skipped_retired_plugin_system",
+            "reason": "Plugin manager and plugin bundles were removed during post-docking remediation.",
+        }
+        return True
+
+    def _load_pose_summary_dataframe(self):
+        """Load pose_summary.csv when available for affinity-based ranking."""
+        summary_file = self.output_dir / "reports" / "pose_summary.csv"
+        if not summary_file.exists():
+            return None
         try:
-            # Execute all plugins
-            plugin_results = self.plugin_manager.execute_all_plugins(
-                self.results, self.output_dir, self.config.config
+            return pd.read_csv(summary_file)
+        except Exception as exc:
+            self.logger.warning(f"⚠️  Could not read pose summary for ranking: {exc}")
+            return None
+
+    def _infer_pandamap_ligand_name(self) -> str:
+        """Infer a more useful ligand name than the legacy UNK fallback."""
+        try:
+            best_poses = self.results.get("best_poses")
+            if isinstance(best_poses, pd.DataFrame) and not best_poses.empty:
+                if "ligand" in best_poses.columns:
+                    ligand = str(best_poses.iloc[0].get("ligand") or "").strip()
+                    if ligand:
+                        return ligand
+                complex_name = str(best_poses.iloc[0].get("complex_name") or "").strip()
+                if complex_name:
+                    parts = complex_name.split("_")
+                    if len(parts) >= 2:
+                        return parts[-1]
+        except Exception:
+            pass
+        return "UNK"
+
+    def _rank_pose_files_by_affinity(self, files):
+        """Rank extracted pose files using pose_summary.csv affinity when available."""
+        pose_summary_df = self._load_pose_summary_dataframe()
+        if pose_summary_df is None or pose_summary_df.empty:
+            return sorted(files, key=lambda path: path.name)
+
+        pose_summary_df = pose_summary_df.copy()
+        if "pdb_file" in pose_summary_df.columns:
+            pose_summary_df["pdb_file"] = pose_summary_df["pdb_file"].astype(str)
+
+        ranked = []
+        for pdb_file in files:
+            rel_name = pdb_file.name
+            match = (
+                pose_summary_df[pose_summary_df["pdb_file"].str.endswith(rel_name)]
+                if "pdb_file" in pose_summary_df.columns
+                else pd.DataFrame()
             )
-            
-            # Store plugin results
-            self.results['plugin_results'] = plugin_results
-            
-            print("✅ All plugins executed successfully")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error executing plugins: {e}")
-            return False
-    
+            if match.empty:
+                affinity = float("inf")
+            else:
+                affinity = pd.to_numeric(match.iloc[0].get("vina_affinity"), errors="coerce")
+                if pd.isna(affinity):
+                    affinity = float("inf")
+            ranked.append((float(affinity), pdb_file.name, pdb_file))
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        return [item[2] for item in ranked]
+
     def _create_best_binding_poses_summary(self, best_poses_dir: Path, threshold: float):
         """
         Create a summary folder with the best binding poses from each category.
@@ -1129,7 +1426,7 @@ class PostDockingAnalysisPipeline:
         strong_binders_dir = best_poses_dir / "strong_binders"
         if strong_binders_dir.exists():
             strong_files = list(strong_binders_dir.glob("*.pdb"))
-            strong_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)  # Sort by modification time
+            strong_files = self._rank_pose_files_by_affinity(strong_files)
             
             for i, pdb_file in enumerate(strong_files[:5], 1):
                 dest_file = summary_dir / f"top_{i}_strong_binder_{pdb_file.name}"
@@ -1139,7 +1436,7 @@ class PostDockingAnalysisPipeline:
         moderate_binders_dir = best_poses_dir / "moderate_binders"
         if moderate_binders_dir.exists():
             moderate_files = list(moderate_binders_dir.glob("*.pdb"))
-            moderate_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            moderate_files = self._rank_pose_files_by_affinity(moderate_files)
             
             for i, pdb_file in enumerate(moderate_files[:5], 1):
                 dest_file = summary_dir / f"top_{i}_moderate_binder_{pdb_file.name}"
@@ -1154,7 +1451,7 @@ class PostDockingAnalysisPipeline:
             
             f.write("Strong Binders (≤{:.2f} kcal/mol):\n".format(threshold))
             if strong_binders_dir.exists():
-                strong_files = list(strong_binders_dir.glob("*.pdb"))
+                strong_files = _rank_pose_files(list(strong_binders_dir.glob("*.pdb")))
                 for i, pdb_file in enumerate(strong_files[:5], 1):
                     f.write(f"  {i}. {pdb_file.name}\n")
             else:
@@ -1162,7 +1459,7 @@ class PostDockingAnalysisPipeline:
             
             f.write(f"\nModerate Binders (-6.0 to {threshold:.2f} kcal/mol):\n")
             if moderate_binders_dir.exists():
-                moderate_files = list(moderate_binders_dir.glob("*.pdb"))
+                moderate_files = _rank_pose_files(list(moderate_binders_dir.glob("*.pdb")))
                 for i, pdb_file in enumerate(moderate_files[:5], 1):
                     f.write(f"  {i}. {pdb_file.name}\n")
             else:
@@ -1175,31 +1472,13 @@ def main():
     """
     Main function to run the pipeline from command line.
     """
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Post-Docking Analysis Pipeline")
-    parser.add_argument("-i", "--input", help="Input directory containing docking results")
-    parser.add_argument("-o", "--output", help="Output directory for results")
-    parser.add_argument("--config", help="Configuration file path (YAML or JSON)")
-    
-    args = parser.parse_args()
-    
-    # Initialize pipeline
-    pipeline = PostDockingAnalysisPipeline(
-        input_dir=args.input or "",
-        output_dir=args.output or "",
-        config_file=args.config
+    print(
+        "❌ Direct legacy pipeline entrypoint is disabled.\n"
+        "Use:\n"
+        "  1) python -m post_docking_analysis --project-dir <project_root> [--analysis-mode ...]\n"
+        "  2) python -m post_docking_analysis.simplified_cli --project-dir <gnina_root> --output <out_dir>\n"
     )
-    
-    # Run pipeline
-    success = pipeline.run_pipeline()
-    
-    if success:
-        print("\n🎉 Pipeline completed successfully!")
-        print(f"📁 Results saved to: {pipeline.output_dir}")
-    else:
-        print("\n❌ Pipeline failed!")
-        sys.exit(1)
+    return 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

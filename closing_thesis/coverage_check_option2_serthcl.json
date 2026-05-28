@@ -1,0 +1,11 @@
+{
+  "expected_plan_rows": 108,
+  "actual_plan_rows": 108,
+  "expected_metric_rows": 324,
+  "actual_metric_rows": 324,
+  "actual_pair_mean_rows": 108,
+  "actual_mcs_rows": 108,
+  "missing_metric_rows": 0,
+  "missing_pair_mean_rows": 0,
+  "missing_mcs_rows": 0
+}

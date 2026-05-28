@@ -37,9 +37,13 @@ setup(
     entry_points={
         "console_scripts": [
             "pdb-prepare-wizard=main:main",
-            "pdb-wizard-interactive=interactive_pipeline:run_interactive_pipeline",
+            "pdb-wizard-workflow=workflow.cli:main",
+            "pdb-wizard-interactive=workflow.interactive:run_interactive_workflow",
+            "pdb-wizard-legacy-interactive=interactive_pipeline:run_interactive_pipeline",
             "pdb-wizard-cli=cli_pipeline:main",
             "pdb-wizard-batch=batch_pdb_preparation:main",
+            "pdb-wizard-prepare-docking=docking.cli:prepare_docking_main",
+            "pdb-wizard-dock=docking.cli:dock_main",
             "post-docking-analysis=post_docking_analysis.cli:main",
         ],
     },

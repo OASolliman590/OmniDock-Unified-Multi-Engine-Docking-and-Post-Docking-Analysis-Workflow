@@ -232,7 +232,11 @@ class BatchPDBPreparationPipeline:
             # Step 4: Clean PDB
             cleaning_strategy = self._get_pdb_setting(pdb_config, "cleaning.strategy")
             
-            if isinstance(cleaning_strategy, str):
+            preserve_full_receptor = bool(self._get_pdb_setting(pdb_config, "cleaning.preserve_full_receptor", False))
+            if preserve_full_receptor:
+                to_remove_list = []
+                print("✓ Full receptor unchanged mode enabled: cleaning step will be skipped")
+            elif isinstance(cleaning_strategy, str):
                 if cleaning_strategy == "all":
                     to_remove_list = unique_hetatms
                 elif cleaning_strategy == "common":
@@ -252,7 +256,42 @@ class BatchPDBPreparationPipeline:
                 to_remove_list.remove(selected_hetatm)
                 print(f"✓ Removed {selected_hetatm} from cleaning list (selected as ligand)")
             
-            cleaned_pdb = pipeline.clean_pdb(pdb_file, to_remove_list, pdb_id=pdb_id)
+            keep_selected_chain = bool(self._get_pdb_setting(pdb_config, "cleaning.keep_selected_chain", False)) and not preserve_full_receptor
+            explicit_keep_chain_id = str(self._get_pdb_setting(pdb_config, "cleaning.keep_chain_id", "") or "").strip()
+            explicit_keep_chain_ids_raw = self._get_pdb_setting(pdb_config, "cleaning.keep_chain_ids", [])
+            explicit_keep_chain_ids = []
+            if isinstance(explicit_keep_chain_ids_raw, str):
+                explicit_keep_chain_ids = [part.strip() for part in explicit_keep_chain_ids_raw.split(",") if part.strip()]
+            elif isinstance(explicit_keep_chain_ids_raw, list):
+                explicit_keep_chain_ids = [str(part).strip() for part in explicit_keep_chain_ids_raw if str(part).strip()]
+            keep_chain_id = None
+            keep_chain_ids = None
+            if keep_selected_chain:
+                if explicit_keep_chain_ids:
+                    keep_chain_ids = explicit_keep_chain_ids
+                    print(f"✓ Keeping configured receptor chain(s) during cleaning: {', '.join(keep_chain_ids)}")
+                elif explicit_keep_chain_id:
+                    keep_chain_ids = [explicit_keep_chain_id]
+                    print(f"✓ Keeping configured receptor chain during cleaning: {explicit_keep_chain_id}")
+                elif selected_hetatm and chain_id:
+                    keep_chain_ids = [chain_id]
+                    print(
+                        f"✓ Keeping ligand-matched chain during cleaning: {chain_id} "
+                        "(set cleaning.keep_chain_ids to override)"
+                    )
+            if keep_chain_ids:
+                keep_chain_id = keep_chain_ids[0] if len(keep_chain_ids) == 1 else None
+                print(f"✓ Chain filter active: {', '.join(keep_chain_ids)}")
+            if preserve_full_receptor:
+                cleaned_pdb = pdb_file
+            else:
+                cleaned_pdb = pipeline.clean_pdb(
+                    pdb_file,
+                    to_remove_list,
+                    pdb_id=pdb_id,
+                    keep_chain_id=keep_chain_id,
+                    keep_chain_ids=keep_chain_ids,
+                )
             
             # Step 5: Extract active site coordinates and analyze
             results = {'pdb_id': pdb_id}

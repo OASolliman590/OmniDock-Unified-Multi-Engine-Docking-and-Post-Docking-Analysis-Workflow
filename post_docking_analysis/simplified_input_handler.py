@@ -29,10 +29,10 @@ def find_sdf_files(sdf_folder: Path) -> List[Path]:
         return []
     
     # Look for common SDF patterns
-    sdf_files = list(sdf_folder.glob("*.sdf"))
-    sdf_files.extend(sdf_folder.glob("*_top.sdf"))
+    sdf_files = set(sdf_folder.glob("*.sdf"))
+    sdf_files.update(sdf_folder.glob("*_top.sdf"))
     
-    return sorted(sdf_files)
+    return sorted([f for f in sdf_files if f.is_file()])
 
 
 def find_log_files(log_folder: Path) -> List[Path]:
@@ -99,10 +99,71 @@ def load_pairlist(pairlist_file: Optional[Path]) -> pd.DataFrame:
         return pd.DataFrame()
     
     try:
-        return pd.read_csv(pairlist_file)
+        pairlist_df = pd.read_csv(pairlist_file)
+        pair_intent_file = pairlist_file.parent / "metadata" / "pair_intent.csv"
+        if pair_intent_file.exists():
+            try:
+                pair_intent_df = pd.read_csv(pair_intent_file)
+                required = {"receptor", "site_id", "ligand"}
+                if required.issubset(pair_intent_df.columns):
+                    return pair_intent_df
+            except Exception:
+                pass
+        return pairlist_df
     except Exception as e:
         print(f"⚠️  Warning: Could not load pairlist.csv: {e}")
         return pd.DataFrame()
+
+
+def auto_detect_pairlist_file(*paths: Optional[Path]) -> Optional[Path]:
+    """
+    Attempt deterministic pairlist auto-discovery from input-folder ancestry.
+
+    Search order for each provided path:
+    1) path directory
+    2) up to four parent levels above that directory
+    """
+    roots: List[Path] = []
+    seen = set()
+
+    for raw_path in paths:
+        if raw_path is None:
+            continue
+        candidate = Path(raw_path).expanduser()
+        if candidate.is_file():
+            candidate = candidate.parent
+        try:
+            candidate = candidate.resolve()
+        except Exception:
+            pass
+
+        ancestry: List[Path] = []
+        current = candidate
+        for _ in range(5):
+            ancestry.append(current)
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
+        for root in ancestry:
+            key = str(root)
+            if key in seen:
+                continue
+            seen.add(key)
+            if root.exists() and root.is_dir():
+                roots.append(root)
+
+    for root in roots:
+        direct = root / "pairlist.csv"
+        if direct.is_file():
+            return direct
+
+    for root in roots:
+        for csv_path in sorted(root.glob("*pairlist*.csv")):
+            if csv_path.is_file():
+                return csv_path
+
+    return None
 
 
 def match_poses_to_receptors(
@@ -128,6 +189,45 @@ def match_poses_to_receptors(
         List of matched complexes with receptor and pose info
     """
     complexes = []
+
+    def _tokens(name: str) -> List[str]:
+        if not name:
+            return []
+        try:
+            stem = Path(str(name)).stem
+        except Exception:
+            stem = ""
+        tokens = [str(name), stem]
+        return [t.lower() for t in tokens if t]
+
+    def _match_receptor(receptor_name: str) -> Optional[Path]:
+        receptor_tokens = _tokens(receptor_name)
+        for rf in receptor_files:
+            rf_name = rf.name.lower()
+            if any(tok in rf_name for tok in receptor_tokens):
+                return rf
+        return None
+
+    def _match_sdf(receptor_name: str, ligand_name: str) -> Optional[Path]:
+        receptor_tokens = _tokens(receptor_name)
+        ligand_tokens = _tokens(ligand_name)
+
+        # Prefer SDFs that contain both receptor and ligand identifiers.
+        candidates = []
+        for sf in sdf_files:
+            sf_name = sf.name.lower()
+            if any(tok in sf_name for tok in receptor_tokens) and any(tok in sf_name for tok in ligand_tokens):
+                candidates.append(sf)
+
+        if candidates:
+            return sorted(candidates)[0]
+
+        # Fallback: ligand-only match (legacy behavior).
+        for sf in sdf_files:
+            sf_name = sf.name.lower()
+            if any(tok in sf_name for tok in ligand_tokens):
+                return sf
+        return None
     
     # If pairlist is available, use it for matching
     if pairlist_df is not None and not pairlist_df.empty:
@@ -137,18 +237,10 @@ def match_poses_to_receptors(
             site_id = row.get('site_id', 'unknown')
             
             # Find matching receptor file
-            receptor_file = None
-            for rf in receptor_files:
-                if receptor_name in rf.name or rf.stem in receptor_name:
-                    receptor_file = rf
-                    break
+            receptor_file = _match_receptor(str(receptor_name))
             
             # Find matching SDF file
-            sdf_file = None
-            for sf in sdf_files:
-                if ligand_name in sf.name or sf.stem.replace('_top', '') in ligand_name:
-                    sdf_file = sf
-                    break
+            sdf_file = _match_sdf(str(receptor_name), str(ligand_name))
             
             if receptor_file and sdf_file:
                 complexes.append({
@@ -163,7 +255,11 @@ def match_poses_to_receptors(
         # Fallback: filename pattern matching
         # Extract base names and try to match
         for sdf_file in sdf_files:
-            sdf_base = sdf_file.stem.replace('_top', '')
+            # Strip common suffixes added by GNINA HPC workflow
+            sdf_base = sdf_file.stem
+            for suffix in ('_poses', '_top', '_out'):
+                if sdf_base.endswith(suffix):
+                    sdf_base = sdf_base[:-len(suffix)]
             
             # Try to find matching receptor
             for receptor_file in receptor_files:
@@ -182,4 +278,3 @@ def match_poses_to_receptors(
                     break
     
     return complexes
-

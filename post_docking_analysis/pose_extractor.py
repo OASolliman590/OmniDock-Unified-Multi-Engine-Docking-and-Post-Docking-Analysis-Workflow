@@ -8,11 +8,269 @@ best pose for each complex into a separate folder.
 import pandas as pd
 from pathlib import Path
 import shutil
-from typing import Optional, List
+from typing import Dict, Optional, List
 import csv
 import re
+import math
 
-def extract_best_poses_from_gnina(input_dir: Path, output_dir: Path, config: dict = None) -> int:
+from post_docking_analysis.complex_validation import validate_complex_pdb_structure
+
+
+_BEST_POSE_CRITERIA_ALIASES = {
+    "affinity": "vina_affinity",
+    "vina": "vina_affinity",
+    "vina_affinity": "vina_affinity",
+    "cnn": "cnn_affinity",
+    "cnn_affinity": "cnn_affinity",
+}
+
+
+def _infer_element_symbol(atom_name: str, fallback: str = "C") -> str:
+    letters = "".join(ch for ch in str(atom_name or "").strip() if ch.isalpha())
+    if not letters:
+        return fallback
+    if len(letters) >= 2 and letters[1].islower():
+        return letters[:2]
+    return letters[:2].capitalize()
+
+
+def _sanitize_resname(value: str, fallback: str = "LIG") -> str:
+    token = "".join(ch for ch in str(value or "").strip().upper() if ch.isalnum())
+    if not token:
+        token = fallback
+    return token[:3].ljust(3, "X")
+
+
+def _infer_ligand_resname_from_tag(tag: str, fallback: str = "LIG") -> str:
+    token = str(tag or "").strip()
+    # Common pattern: receptor_site_1_ligand[_...]
+    match = re.search(r"_site_\d+_([^_]+)", token)
+    if match:
+        return _sanitize_resname(match.group(1), fallback=fallback)
+    parts = [p for p in token.split("_") if p]
+    return _sanitize_resname(parts[-1] if parts else fallback, fallback=fallback)
+
+
+def _infer_receptor_file_from_tag(tag: str, receptors_dir: Path) -> Path:
+    """
+    Resolve receptor file from a canonical tag like receptor_site_1_ligand.
+    """
+    token = str(tag or "").strip()
+    candidates: List[Path] = []
+
+    site_match = re.match(r"^(?P<receptor>.+?)_(site_\d+)_(?P<ligand>.+)$", token)
+    if site_match:
+        receptor_name = str(site_match.group("receptor")).strip()
+        if receptor_name:
+            candidates.append(receptors_dir / f"{receptor_name}_prep.pdbqt")
+            candidates.append(receptors_dir / f"{receptor_name}.pdbqt")
+            candidates.append(receptors_dir / f"{receptor_name}.pdb")
+
+    if "_prep_" in token:
+        prefix = token.split("_prep_")[0]
+        candidates.append(receptors_dir / f"{prefix}_prep.pdbqt")
+        candidates.append(receptors_dir / f"{prefix}.pdbqt")
+        candidates.append(receptors_dir / f"{prefix}.pdb")
+
+    parts = [part for part in token.split("_") if part]
+    if len(parts) >= 2:
+        prefix2 = f"{parts[0]}_{parts[1]}"
+        candidates.append(receptors_dir / f"{prefix2}_prep.pdbqt")
+        candidates.append(receptors_dir / f"{prefix2}.pdbqt")
+    elif parts:
+        candidates.append(receptors_dir / f"{parts[0]}_prep.pdbqt")
+        candidates.append(receptors_dir / f"{parts[0]}.pdbqt")
+
+    for path in candidates:
+        if path.exists():
+            return path
+
+    return candidates[0] if candidates else receptors_dir / f"{token}_prep.pdbqt"
+
+
+def _renumber_atom_serials(lines: List[str]) -> List[str]:
+    renumbered: List[str] = []
+    serial = 1
+    for line in lines:
+        if line.startswith(("ATOM", "HETATM")):
+            line = line.rstrip("\n").ljust(80)
+            line = f"{line[:6]}{serial:5d}{line[11:]}"
+            serial += 1
+        renumbered.append(line.rstrip("\n"))
+    return renumbered
+
+
+def _parse_pose_row(row: Dict[str, object]) -> Dict[str, object]:
+    parsed = dict(row)
+    parsed["tag"] = str(row.get("tag", ""))
+    parsed["mode"] = int(float(row.get("mode", 0)))
+    parsed["vina_affinity"] = float(row.get("vina_affinity", "nan"))
+    try:
+        parsed["cnn_affinity"] = float(row.get("cnn_affinity", "nan"))
+    except Exception:
+        parsed["cnn_affinity"] = float("nan")
+    try:
+        parsed["cnn_score"] = float(row.get("cnn_score", "nan"))
+    except Exception:
+        parsed["cnn_score"] = float("nan")
+    return parsed
+
+
+def _normalize_best_pose_criterion(value: object) -> str:
+    token = str(value or "").strip().lower()
+    return _BEST_POSE_CRITERIA_ALIASES.get(token, "vina_affinity")
+
+
+def _numeric_or_inf(value: object) -> float:
+    try:
+        numeric = float(value)
+    except Exception:
+        return float("inf")
+    return numeric if math.isfinite(numeric) else float("inf")
+
+
+def _is_better_pose(
+    candidate: Dict[str, object],
+    incumbent: Dict[str, object],
+    *,
+    criterion: str = "vina_affinity",
+) -> bool:
+    """
+    Deterministic tie-breaker:
+    1) lower primary criterion wins
+    2) lower vina_affinity wins
+    3) lower pose mode wins
+    """
+    cand_primary = _numeric_or_inf(candidate.get(criterion))
+    inc_primary = _numeric_or_inf(incumbent.get(criterion))
+    if cand_primary < inc_primary:
+        return True
+    if cand_primary > inc_primary:
+        return False
+
+    cand_aff = _numeric_or_inf(candidate.get("vina_affinity"))
+    inc_aff = _numeric_or_inf(incumbent.get("vina_affinity"))
+    if cand_aff < inc_aff:
+        return True
+    if cand_aff > inc_aff:
+        return False
+
+    return int(candidate.get("mode", 0)) < int(incumbent.get("mode", 0))
+
+
+def _extract_sdf_record_text(sdf_file: Path, pose_number: int) -> str:
+    """
+    Return one SDF mol record (1-based pose_number) from a possibly multi-pose SDF.
+    """
+    if pose_number < 1:
+        return ""
+    try:
+        content = sdf_file.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return ""
+    records = [record for record in content.split("$$$$") if record.strip()]
+    if pose_number > len(records):
+        return ""
+    record_body = records[pose_number - 1].strip("\n")
+    if not record_body:
+        return ""
+    record = record_body + "\n$$$$\n"
+    return record
+
+
+def _pdbqt_record_to_pdb_line(line: str) -> Optional[str]:
+    """
+    Convert one ATOM/HETATM PDBQT record to a simple PDB line.
+
+    Prefer fixed-column parsing when the line is well-formed, but fall back to
+    token parsing when spacing is irregular.
+    """
+    raw = str(line).rstrip("\n")
+    if not raw.startswith(("ATOM", "HETATM")):
+        return None
+
+    record = raw[0:6].strip() or "ATOM"
+    atom_num = raw[6:11].strip()
+    atom_name = raw[12:16].strip()
+    res_name = raw[17:20].strip() or "UNK"
+    chain_id = raw[21:22].strip() or "A"
+    res_num = raw[22:26].strip() or "1"
+    occupancy = raw[54:60].strip() if len(raw) > 54 else "1.00"
+    temp_factor = raw[60:66].strip() if len(raw) > 60 else "20.00"
+    element = raw[76:78].strip() if len(raw) > 76 else ""
+
+    try:
+        x = float(raw[30:38].strip())
+        y = float(raw[38:46].strip())
+        z = float(raw[46:54].strip())
+    except Exception:
+        parts = raw.split()
+        if len(parts) < 8:
+            return None
+        record = parts[0]
+        atom_num = parts[1]
+        atom_name = parts[2]
+        res_name = parts[3] if len(parts) > 3 else "UNK"
+        cursor = 4
+        chain_id = "A"
+        res_num = "1"
+
+        # Identify where xyz coordinates begin.
+        coord_start = None
+        for idx in range(4, len(parts) - 2):
+            try:
+                float(parts[idx])
+                float(parts[idx + 1])
+                float(parts[idx + 2])
+                coord_start = idx
+                break
+            except Exception:
+                continue
+        if coord_start is None:
+            return None
+
+        identity_tokens = parts[4:coord_start]
+        if len(identity_tokens) >= 2:
+            if len(identity_tokens[0]) == 1 and identity_tokens[0].isalpha():
+                chain_id = identity_tokens[0]
+                res_num = identity_tokens[1]
+            else:
+                res_num = identity_tokens[0]
+        elif len(identity_tokens) == 1:
+            token = identity_tokens[0]
+            if len(token) == 1 and token.isalpha():
+                chain_id = token
+                res_num = "1"
+            else:
+                res_num = token
+        cursor = coord_start
+        if len(parts) < cursor + 3:
+            return None
+        try:
+            x = float(parts[cursor])
+            y = float(parts[cursor + 1])
+            z = float(parts[cursor + 2])
+        except Exception:
+            return None
+        occupancy = parts[cursor + 3] if len(parts) > cursor + 3 else "1.00"
+        temp_factor = parts[cursor + 4] if len(parts) > cursor + 4 else "20.00"
+        element = parts[-1] if parts[-1].isalpha() and len(parts[-1]) <= 2 else ""
+
+    element = element or _infer_element_symbol(atom_name)
+    return (
+        f"{record:6s}{atom_num:>5s} {atom_name:<4s}{res_name:>3s} {chain_id:1s}{res_num:>4s}    "
+        f"{x:8.3f}{y:8.3f}{z:8.3f}{float(occupancy):6.2f}{float(temp_factor):6.2f}          {element:>2s}"
+    )
+
+def extract_best_poses_from_gnina(
+    input_dir: Path,
+    output_dir: Path,
+    config: dict = None,
+    gnina_dir: Optional[Path] = None,
+    receptors_dir: Optional[Path] = None,
+    scores_csv: Optional[Path] = None,
+    best_pose_criterion: Optional[str] = None,
+) -> int:
     """
     Extract best poses as PDB files using GNINA outputs in input_dir.
     
@@ -33,16 +291,24 @@ def extract_best_poses_from_gnina(input_dir: Path, output_dir: Path, config: dic
     # Use configuration or defaults
     if config is None:
         config = {}
-    
+
     extract_all = config.get("pose_extraction", {}).get("extract_all_poses", False)
-    criteria = config.get("pose_extraction", {}).get("best_pose_criteria", "affinity")
-    
-    # Try different possible GNINA directory names
-    possible_gnina_dirs = [
+    criterion_token = (
+        best_pose_criterion
+        if best_pose_criterion is not None
+        else config.get("pose_extraction", {}).get("best_pose_criteria", "affinity")
+    )
+    criterion = _normalize_best_pose_criterion(criterion_token)
+
+    # Prefer caller-provided paths, then fall back to legacy discovery.
+    possible_gnina_dirs = []
+    if gnina_dir is not None:
+        possible_gnina_dirs.append(Path(gnina_dir))
+    possible_gnina_dirs.extend([
         input_dir / "gnina_out",
         input_dir / "gnina_out_cox2",
         input_dir / "gnina_out_inha"
-    ]
+    ])
     
     gnina_dir = None
     for possible_dir in possible_gnina_dirs:
@@ -54,8 +320,8 @@ def extract_best_poses_from_gnina(input_dir: Path, output_dir: Path, config: dic
         print(f"❌ GNINA output directory not found in {input_dir}")
         return 0
     
-    receptors_dir = input_dir / "receptors"
-    scores_csv = gnina_dir / "all_scores.csv"
+    receptors_dir = Path(receptors_dir) if receptors_dir is not None else input_dir / "receptors"
+    scores_csv = Path(scores_csv) if scores_csv is not None else gnina_dir / "all_scores.csv"
 
     if not scores_csv.exists():
         print(f"❌ Scores CSV not found: {scores_csv}")
@@ -69,17 +335,16 @@ def extract_best_poses_from_gnina(input_dir: Path, output_dir: Path, config: dic
     if all_poses_dir:
         all_poses_dir.mkdir(parents=True, exist_ok=True)
 
-    # Read CSV and pick best mode (min vina_affinity) per tag
-    rows = []
+    # Read CSV and pick best mode per tag according to the configured criterion.
+    rows: List[Dict[str, object]] = []
     with scores_csv.open() as f:
         reader = csv.DictReader(f)
         for r in reader:
             try:
-                r['vina_affinity'] = float(r['vina_affinity'])
-                r['mode'] = int(float(r['mode']))
+                parsed = _parse_pose_row(r)
             except Exception:
                 continue
-            rows.append(r)
+            rows.append(parsed)
 
     if not rows:
         print(f"⚠️  No rows in {scores_csv}")
@@ -91,21 +356,26 @@ def extract_best_poses_from_gnina(input_dir: Path, output_dir: Path, config: dic
         poses_to_extract = rows
     else:
         # For best poses only, we'll pick the best per tag
-        best_by_tag = {}
+        best_by_tag: Dict[str, Dict[str, object]] = {}
+        rows.sort(key=lambda rec: (str(rec.get("tag", "")), int(rec.get("mode", 0))))
         for r in rows:
-            tag = r['tag']
-            if tag not in best_by_tag or r['vina_affinity'] < best_by_tag[tag]['vina_affinity']:
+            tag = str(r.get("tag", ""))
+            if tag not in best_by_tag or _is_better_pose(r, best_by_tag[tag], criterion=criterion):
                 best_by_tag[tag] = r
         poses_to_extract = list(best_by_tag.values())
 
     written = 0
+    manifest_rows: List[Dict[str, object]] = []
     for r in poses_to_extract:
         tag = r['tag']
+        pose_number = int(r.get("mode", 0) or 0)
+        ligand_resname = _infer_ligand_resname_from_tag(tag)
         sdf_file = gnina_dir / f"{tag}_top.sdf"
         if not sdf_file.exists():
-            print(f"⚠️  SDF not found for tag {tag}: {sdf_file}")
-            continue
-            
+            fallback_sdf = gnina_dir / f"{tag}.sdf"
+            if fallback_sdf.exists():
+                sdf_file = fallback_sdf
+
         # Determine output directory based on extraction type
         if extract_all:
             out_dir = all_poses_dir
@@ -114,20 +384,59 @@ def extract_best_poses_from_gnina(input_dir: Path, output_dir: Path, config: dic
             complex_dir = best_poses_dir / tag
             complex_dir.mkdir(exist_ok=True)
             out_dir = complex_dir
-            
-        out_pdb = out_dir / f"{tag}_pose{int(r['mode'])}.pdb"
-        
-        # Extract protein name from tag (e.g., 3LN1_COX2_prep_catalytic_ML1H -> 3LN1_COX2)
-        protein_name = tag.split('_prep_')[0] if '_prep_' in tag else tag.split('_')[0] + '_' + tag.split('_')[1]
-        receptor_file = receptors_dir / f"{protein_name}_prep.pdbqt"
-        
+
+        out_pdb = out_dir / f"{tag}_pose{pose_number}.pdb"
+
+        receptor_file = _infer_receptor_file_from_tag(tag, receptors_dir)
+
+        manifest_row: Dict[str, object] = {
+            "tag": tag,
+            "selected_pose": pose_number,
+            "selection_criterion": criterion,
+            "selected_score": r.get(criterion),
+            "vina_affinity": r.get("vina_affinity"),
+            "cnn_affinity": r.get("cnn_affinity"),
+            "cnn_score": r.get("cnn_score"),
+            "input_scores_csv": str(scores_csv),
+            "input_sdf_file": str(sdf_file),
+            "input_receptor_file": str(receptor_file),
+            "output_pdb": str(out_pdb),
+            "status": "",
+            "validation_is_valid": False,
+            "validation_errors": "",
+            "validation_warnings": "",
+            "receptor_atom_count": 0,
+            "ligand_atom_count": 0,
+        }
+
+        if pose_number <= 0:
+            manifest_row["status"] = "invalid_pose_number"
+            manifest_rows.append(manifest_row)
+            print(f"⚠️  Invalid pose index for tag {tag}: mode={r.get('mode')}")
+            continue
+
+        if not sdf_file.exists():
+            manifest_row["status"] = "missing_sdf"
+            manifest_rows.append(manifest_row)
+            print(f"⚠️  SDF not found for tag {tag}: {sdf_file}")
+            continue
+
         if not receptor_file.exists():
+            manifest_row["status"] = "missing_receptor"
+            manifest_rows.append(manifest_row)
             print(f"⚠️  Receptor file not found: {receptor_file}")
             continue
-        
+
+        pose_record_text = _extract_sdf_record_text(sdf_file, pose_number)
+        if not pose_record_text:
+            manifest_row["status"] = "missing_sdf_pose_record"
+            manifest_rows.append(manifest_row)
+            print(f"⚠️  Pose {pose_number} not found in SDF for tag {tag}: {sdf_file}")
+            continue
+
         # Try to get docking center coordinates from log file
         log_file = gnina_dir / f"{tag}.log"
-        docking_center = None
+        manifest_row["input_log_file"] = str(log_file)
         if log_file.exists():
             try:
                 with open(log_file, 'r') as f:
@@ -136,63 +445,68 @@ def extract_best_poses_from_gnina(input_dir: Path, output_dir: Path, config: dic
                     import re
                     center_match = re.search(r'--center_x\s+([\d.-]+)\s+--center_y\s+([\d.-]+)\s+--center_z\s+([\d.-]+)', log_content)
                     if center_match:
-                        docking_center = (float(center_match.group(1)), float(center_match.group(2)), float(center_match.group(3)))
+                        docking_center = (
+                            float(center_match.group(1)),
+                            float(center_match.group(2)),
+                            float(center_match.group(3)),
+                        )
+                        manifest_row["docking_center_xyz"] = ",".join(f"{value:.3f}" for value in docking_center)
                         print(f"📍 Found docking center: {docking_center}")
             except Exception as e:
                 print(f"⚠️  Could not extract docking center: {e}")
-        
+
+        wrote_output = False
+        fallback_reason = ""
+
         # Combine receptor and ligand to create complex using OpenBabel
         try:
             from openbabel import pybel
-            
+
             # Read receptor PDBQT file
             receptor_lines = []
-            if receptor_file.exists():
-                try:
-                    receptor_mol = next(pybel.readfile("pdbqt", str(receptor_file)))
-                    receptor_pdb = receptor_mol.write("pdb")
-                    for line in receptor_pdb.split('\n'):
-                        if line.startswith('ATOM'):
-                            # Fix the line format and assign chain A
-                            line = line.ljust(80)
-                            new_line = f"ATOM  {line[6:21]}A{line[22:]}"
-                            receptor_lines.append(new_line)
-                except Exception as e:
-                    print(f"⚠️  Could not read receptor {receptor_file}: {e}")
-                    continue
-            
-            # Read ligand SDF file
+            receptor_mol = next(pybel.readfile("pdbqt", str(receptor_file)))
+            receptor_pdb = receptor_mol.write("pdb")
+            for line in receptor_pdb.split('\n'):
+                if line.startswith('ATOM'):
+                    # Fix the line format and assign chain A
+                    line = line.ljust(80)
+                    new_line = f"ATOM  {line[6:21]}A{line[22:]}"
+                    receptor_lines.append(new_line)
+
+            # Read ligand pose record from selected SDF conformer block
             ligand_lines = []
-            try:
-                ligand_mol = next(pybel.readfile("sdf", str(sdf_file)))
-                ligand_pdb = ligand_mol.write("pdb")
-                for line in ligand_pdb.split('\n'):
-                    if line.startswith('ATOM') or line.startswith('HETATM'):
-                        # Fix the line format and assign chain B
-                        line = line.ljust(80)
-                        new_line = f"HETATM{line[6:21]}B{line[22:]}"
-                        new_line = new_line[:17] + "UNK" + new_line[20:]
-                        ligand_lines.append(new_line)
-            except Exception as e:
-                print(f"⚠️  Could not read ligand {sdf_file}: {e}")
-                continue
-            
+            ligand_mol = pybel.readstring("sdf", pose_record_text)
+            ligand_pdb = ligand_mol.write("pdb")
+            for line in ligand_pdb.split('\n'):
+                if line.startswith('ATOM') or line.startswith('HETATM'):
+                    # Fix the line format and assign chain B
+                    line = line.ljust(80)
+                    new_line = f"HETATM{line[6:21]}B{line[22:]}"
+                    new_line = new_line[:17] + ligand_resname + new_line[20:]
+                    ligand_lines.append(new_line)
+
             # Combine receptor and ligand
-            all_lines = receptor_lines + ligand_lines + ["END"]
+            all_lines = _renumber_atom_serials(receptor_lines + ligand_lines) + ["END"]
             combined_content = '\n'.join(all_lines)
-            
+
             # Write combined complex
             with open(out_pdb, 'w') as f:
                 f.write(combined_content)
-            
-            written += 1
+
+            wrote_output = True
             print(f"✅ Extracted complex {out_pdb.name} (receptor + ligand)")
-                    
+
         except ImportError:
-            print(f"⚠️  OpenBabel not available, using fallback method")
+            fallback_reason = "openbabel_unavailable"
+            print("⚠️  OpenBabel not available, using fallback method")
             # Fallback: use simple SDF to PDB conversion
             try:
-                ligand_pdb_content = _convert_sdf_to_pdb_simple(sdf_file)
+                ligand_pdb_content = _convert_sdf_to_pdb_simple(
+                    sdf_file,
+                    resname=ligand_resname,
+                    chain_id="B",
+                    pose_number=pose_number,
+                )
                 if ligand_pdb_content:
                     # Read receptor PDBQT file manually
                     with open(receptor_file, 'r') as f:
@@ -202,27 +516,9 @@ def extract_best_poses_from_gnina(input_dir: Path, output_dir: Path, config: dic
                     receptor_pdb_lines = []
                     for line in receptor_content.split('\n'):
                         if line.startswith(('ATOM', 'HETATM')):
-                            # Convert PDBQT to PDB format
-                            if len(line) >= 66:
-                                # Extract coordinates and atom info
-                                atom_type = line[0:6].strip()
-                                atom_num = line[6:11].strip()
-                                atom_name = line[12:16].strip()
-                                res_name = line[17:20].strip()
-                                chain_id = line[21:22] if len(line) > 21 else ' '
-                                res_num = line[22:26].strip()
-                                x = line[30:38].strip()
-                                y = line[38:46].strip()
-                                z = line[46:54].strip()
-                                occupancy = line[54:60].strip() if len(line) > 54 else '1.00'
-                                temp_factor = line[60:66].strip() if len(line) > 60 else '20.00'
-                                element = line[76:78].strip() if len(line) > 76 else atom_name[0]
-                                
-                                # Create proper PDB format line
-                                pdb_line = f"{atom_type:6s}{atom_num:5s} {atom_name:4s}{res_name:3s} {chain_id:1s}{res_num:4s}    {x:8s}{y:8s}{z:8s}  {occupancy:6s}{temp_factor:6s}           {element:2s}"
+                            pdb_line = _pdbqt_record_to_pdb_line(line)
+                            if pdb_line:
                                 receptor_pdb_lines.append(pdb_line)
-                            else:
-                                receptor_pdb_lines.append(line)
                         elif line.startswith(('REMARK', 'HEADER', 'TITLE', 'COMPND', 'SOURCE', 'AUTHOR', 'REVDAT', 'JRNL', 'SEQRES', 'HET', 'FORMUL', 'HELIX', 'SHEET', 'SSBOND', 'LINK', 'CISPEP', 'SITE', 'CRYST1', 'ORIGX1', 'ORIGX2', 'ORIGX3', 'SCALE1', 'SCALE2', 'SCALE3', 'MTRIX1', 'MTRIX2', 'MTRIX3', 'TVECT', 'MODEL', 'ENDMDL')):
                             receptor_pdb_lines.append(line)
                     
@@ -231,12 +527,13 @@ def extract_best_poses_from_gnina(input_dir: Path, output_dir: Path, config: dic
                     combined_content.extend(receptor_pdb_lines)
                     combined_content.append("")  # Empty line separator
                     combined_content.extend(ligand_pdb_content.split('\n'))
+                    combined_content = _renumber_atom_serials(combined_content)
                     
                     # Write combined complex
                     with open(out_pdb, 'w') as f:
                         f.write('\n'.join(combined_content))
-                    
-                    written += 1
+
+                    wrote_output = True
                     print(f"✅ Extracted complex {out_pdb.name} (receptor + ligand, fallback method)")
                 else:
                     print(f"⚠️  Failed to convert ligand from {sdf_file}")
@@ -245,19 +542,52 @@ def extract_best_poses_from_gnina(input_dir: Path, output_dir: Path, config: dic
                 # Final fallback: just copy the SDF file
                 try:
                     shutil.copy2(sdf_file, out_pdb)
-                    written += 1
+                    wrote_output = True
+                    fallback_reason = fallback_reason or "fallback_copy_sdf"
                     print(f"✅ Copied SDF as PDB: {out_pdb.name}")
                 except Exception as e2:
                     print(f"❌ Failed to copy {sdf_file}: {e2}")
         except Exception as e:
+            fallback_reason = fallback_reason or "openbabel_or_merge_error"
             print(f"⚠️  Error creating complex for {tag}: {e}")
             # Fallback: just copy the SDF file
             try:
                 shutil.copy2(sdf_file, out_pdb)
-                written += 1
+                wrote_output = True
+                fallback_reason = "fallback_copy_sdf"
                 print(f"✅ Copied SDF as PDB: {out_pdb.name}")
             except Exception as e2:
                 print(f"❌ Failed to copy {sdf_file}: {e2}")
+
+        if wrote_output:
+            validation = validate_complex_pdb_structure(out_pdb, receptor_reference=receptor_file)
+            validation_errors = [str(item) for item in (validation.get("errors") or [])]
+            validation_warnings = [str(item) for item in (validation.get("warnings") or [])]
+            manifest_row["validation_is_valid"] = bool(validation.get("is_valid", False))
+            manifest_row["validation_errors"] = "; ".join(validation_errors)
+            manifest_row["validation_warnings"] = "; ".join(validation_warnings)
+            manifest_row["receptor_atom_count"] = int(validation.get("receptor_atom_count", 0) or 0)
+            manifest_row["ligand_atom_count"] = int(validation.get("ligand_atom_count", 0) or 0)
+            if validation.get("is_valid", False):
+                manifest_row["status"] = "extracted"
+            else:
+                manifest_row["status"] = "invalid_complex_output"
+            if fallback_reason:
+                manifest_row["fallback_reason"] = fallback_reason
+            written += 1
+        else:
+            if not manifest_row["status"]:
+                manifest_row["status"] = "extraction_failed"
+            if fallback_reason:
+                manifest_row["fallback_reason"] = fallback_reason
+
+        manifest_rows.append(manifest_row)
+
+    if manifest_rows:
+        manifest_file = output_dir / "pose_extraction_manifest.csv"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(manifest_rows).to_csv(manifest_file, index=False)
+        print(f"🧾 Pose extraction manifest saved: {manifest_file}")
 
     print(f"✅ Extracted {written} poses to: {best_poses_dir}")
     if all_poses_dir:
@@ -441,7 +771,12 @@ def create_pose_summary_report(best_poses_dir: Path, output_dir: Path):
     else:
         print("⚠️  No pose data found for summary report")
 
-def _convert_sdf_to_pdb_simple(sdf_file: Path) -> str:
+def _convert_sdf_to_pdb_simple(
+    sdf_file: Path,
+    resname: str = "LIG",
+    chain_id: str = "A",
+    pose_number: int = 1,
+) -> str:
     """
     Simple SDF to PDB converter that extracts coordinates and creates basic PDB format.
     
@@ -456,8 +791,10 @@ def _convert_sdf_to_pdb_simple(sdf_file: Path) -> str:
         PDB content as string, or empty string if conversion fails
     """
     try:
-        with open(sdf_file, 'r') as f:
-            lines = f.readlines()
+        pose_record = _extract_sdf_record_text(sdf_file, pose_number)
+        if not pose_record:
+            return ""
+        lines = pose_record.splitlines(keepends=True)
         
         # Find the counts line (line 4 in SDF format)
         if len(lines) < 4:
@@ -476,6 +813,8 @@ def _convert_sdf_to_pdb_simple(sdf_file: Path) -> str:
         # Extract atom coordinates (lines 5 to 5+atom_count-1)
         pdb_lines = []
         atom_num = 1
+        safe_resname = _sanitize_resname(resname, fallback="LIG")
+        safe_chain = str(chain_id or "A").strip()[:1] or "A"
         
         for i in range(4, 4 + atom_count):
             if i >= len(lines):
@@ -494,7 +833,10 @@ def _convert_sdf_to_pdb_simple(sdf_file: Path) -> str:
                     element = parts[3] if len(parts) > 3 else "C"
                     
                     # Create PDB ATOM line with proper formatting
-                    pdb_line = f"HETATM{atom_num:5d}  {element:2s}  LIG A{atom_num:4d}    {x:8.3f}{y:8.3f}{z:8.3f}  1.00 20.00           {element:2s}"
+                    pdb_line = (
+                        f"HETATM{atom_num:5d}  {element:2s}  {safe_resname:3s} {safe_chain}{atom_num:4d}    "
+                        f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00 20.00           {element:2s}"
+                    )
                     pdb_lines.append(pdb_line)
                     atom_num += 1
                     

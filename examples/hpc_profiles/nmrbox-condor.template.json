@@ -1,0 +1,72 @@
+{
+  "name": "nmrbox-condor",
+  "scheduler": "condor",
+  "description": "Public-safe template for NMRbox HTCondor cluster. Copy to .workflow/hpc_profiles/nmrbox-condor.json and fill in local values.",
+  "shell_preamble": [
+    "if [ -f ~/.bashrc ]; then source ~/.bashrc; fi"
+  ],
+  "condor": {
+    "job_name_prefix": "dock"
+  },
+  "remote": {
+    "ssh_target": "<user>@sulfur.nmrbox.org",
+    "project_root_base": "/home/<user>/docking",
+    "sync_excludes": [
+      ".DS_Store",
+      "__pycache__/",
+      ".workflow/state.json"
+    ]
+  },
+  "engines": {
+    "gnina": {
+      "runtime": {
+        "binary": "/home/<user>/gnina",
+        "image": "/home/<user>/gnina.sif",
+        "use_gpu": true
+      },
+      "preamble": [],
+      "condor_gpu": {
+        "submit_mode": "condor_array",
+        "cpus": 16,
+        "memory": "48GB",
+        "disk": "20GB",
+        "gpus": 1,
+        "parallelism": 1
+      },
+      "condor_cpu": {
+        "submit_mode": "single_job",
+        "cpus": 16,
+        "memory": "48GB",
+        "disk": "20GB",
+        "gpus": 0,
+        "parallelism": 0
+      }
+    },
+    "vina": {
+      "runtime": {
+        "binary": "~/.local/bin/vina"
+      },
+      "condor": {
+        "submit_mode": "condor_array",
+        "cpus": 8,
+        "memory": "24GB",
+        "disk": "10GB",
+        "gpus": 0,
+        "parallelism": 4
+      }
+    },
+    "smina": {
+      "runtime": {
+        "binary": "~/.local/bin/smina"
+      },
+      "condor": {
+        "submit_mode": "condor_array",
+        "cpus": 8,
+        "memory": "24GB",
+        "disk": "10GB",
+        "gpus": 0,
+        "parallelism": 4
+      }
+    }
+  }
+}

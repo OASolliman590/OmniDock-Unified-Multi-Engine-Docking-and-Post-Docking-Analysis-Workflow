@@ -1,9 +1,72 @@
 # Changelog
 
-All notable changes to PDB Prepare Wizard will be documented in this file.
+All notable changes to Omni-DockForge (formerly PDB Prepare Wizard) will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased] - 2026-04-01
+
+### Added
+- **Omni-DockForge Platform Upgrade**: Introduced the `Omni-DockForge` naming and migration layer with compatibility notes for legacy command surfaces.
+- **Checkpoint & Revise Workflow**: Added checkpoint lineage metadata and renamed the old "maturation" concept to `Checkpoint & Revise`.
+- **Interactive Timeline and Task State Model**: Added explicit step-state tracking (`not_started`, `in_progress`, `completed`, `validated`, `failed`, `skipped`, `needs_review`) and timeline rendering in interactive workflow flows.
+- **Background Task Infrastructure**: Added non-blocking background task scaffolding so long-running workflow operations can continue while users navigate other menus.
+- **Engine-Aware Ligand Preparation Graph**: Added preparation-mode orchestration and validation for Open Babel, Meeko, AutoDockTools, and engine-aware combinations.
+- **Docking Runtime Abstraction**: Added execution-environment models and runtime adapters for local CPU/GPU and future backend expansion.
+- **Canonical Post-Docking Artifacts**: Added structured score outputs and canonical analysis mirrors under numbered project layout paths.
+- **Top-Pose Ligand Performance Atlas**: Added deterministic ligand-centric top-pose exports (per protein and global) with manifest and run-index integration.
+- **Validation Gate Framework**: Added redocking-validation gate artifacts and effective-policy fallback signaling for post-docking classification.
+- **Biology Integration and Plugin Hooks**: Added biology-annotation ingestion/reporting and pluggable rescoring/analysis capability gates (including OnionNet2 scaffold support).
+- **Reproducibility Metadata**: Added `.meta` run provenance artifacts (`config`, `manifest`, `env.lock` snapshot pathways) and session durability support.
+- **SQLite Optional Backend Path**: Added CSV+SQLite dual-write scaffolding with parity checks for scalable downstream querying.
+- **Artifact DAG Executor**: Added declarative artifact-graph execution for post-docking analysis with dependency-aware ordering, tiered parallel execution, cache-aware reruns, execution reports, and scope-based artifact requests.
+- **Consensus Strategy Injection**: Added explicit DAG consensus strategies for multi-engine, GNINA solo, Vina solo, and Smina solo runs with a unified `consensus_ranked.csv` schema across all four modes.
+- **Per-Complex Interaction Fan-Out**: Added per-complex threaded execution adapters for ProLIF, PandaMap, PoseView, and PyMOL interaction nodes, including per-complex result ledgers.
+
+### Changed
+- **Unified Post-Docking Execution Path**: User-facing canonical post-docking execution now routes through unified orchestration.
+- **Simplified CLI Wrapper Behavior**: Manifest-backed simplified CLI execution now enforces unified routing; legacy-only flags (`--no-rmsd`, `--no-visualizations`) are ignored in wrapper mode.
+- **Workflow Stage Target Contract**: Non-canonical legacy stage-target fallback was removed; canonical project context is now required for unified stage-target execution.
+- **RMSD User-Facing Scope Contract**: User-facing RMSD scope was constrained to `per_complex` to remove ambiguous global/per-protein paths.
+- **Preparation UX Cleanup**: Removed PLIP from preparation-phase prompts and kept PLIP interaction logic in post-docking analysis context.
+- **Default Post-Docking Runner**: Unified post-docking execution now defaults to DAG-first artifact resolution instead of the old linear step loop.
+- **Interaction Failure Handling**: Optional interaction branches now aggregate partial per-complex failures into warnings instead of behaving like single all-or-nothing stages.
+
+### Fixed
+- **Consensus Normalization Direction**: Fixed inverted min-max and z-score direction so stronger binders rank correctly.
+- **Pairlist Matching Safety**: Replaced ambiguous bidirectional substring matching with deterministic directional behavior and unmatched-file reporting.
+- **Correlation Statistics Rigor**: Added minimum sample-size guards and multiple-testing correction support for correlation outputs.
+- **Single-Engine QC Downgrade Bug**: Removed false low-agreement penalty behavior for single-engine runs.
+- **Atomic QC Downgrade Logic**: Prevented multi-step cascading downgrades by applying a single atomic QC classification pass.
+- **Complex Structure Integrity**: Preserved ligand residue identity in generated complexes and hardened pose-selection determinism.
+- **Report Formatting Contract**: Fixed newline serialization in report text assembly outputs.
+- **Analysis Session Progress Contract**: Hardened progress-file/session contract to avoid missing progress artifact failures.
+- **DAG Cache Invalidation Boundaries**: Removed volatile run identifiers from cache-driving artifacts so unchanged reruns correctly hit cache while downstream parameter changes invalidate only the necessary subgraph.
+- **Solo-Mode Consensus Semantics**: Fixed solo-mode consensus routing so GNINA can prioritize `cnn_affinity`, Vina can expose `rmsd_lb` pose-diversity context, and Smina can preserve scoring-weight provenance without breaking schema compatibility.
+- **Optional Interaction Recovery**: Hardened optional interaction nodes so missing tools or per-complex failures degrade to `completed_with_warnings` rather than aborting unrelated report-generation branches.
+
+### Verification
+- **Smoke Coverage**: `python test/test_dockforge_smoke.py --skip-all-engines --skip-prep-matrix` passed.
+- **Pipeline Smoke**: `python test_pipeline.py` passed.
+
+## [Unreleased] - 2026-04-12
+
+### Added
+- **Interactive HPC ADMET Control**: Added an explicit HPC prompt to keep ligand QC enabled while disabling ADMET filters for deployment and submission flows.
+- **HPC Resume Handoff Notes**: Added local session handoff guidance, resume commands, and operational notes for remote project-root usage.
+
+### Changed
+- **Workflow CLI Flag Forwarding**: `workflow/cli.py` now forwards ligand ADMET-related flags for `dock deploy` and `dock submit`, matching the downstream docking CLI contract.
+- **Interactive HPC QC Behavior**: The HPC panel now passes `--no-ligand-admet-filters` when selected, instead of forcing users to disable the entire ligand QC gate.
+
+### Fixed
+- **Whole-Project HPC Blocking**: Full-project reruns are no longer blocked solely by ADMET policy when users intentionally keep structural QC enabled and disable ADMET filtering.
+- **Interactive HPC Regression Coverage**: Added smoke coverage for both complete QC bypass and ligand-QC-with-ADMET-bypass scenarios.
+
+### Verification
+- `python -m py_compile workflow/interactive.py workflow/cli.py test/test_dockforge_smoke.py`
+- `MPLCONFIGDIR=/tmp/mpl PYTHONPATH=test python - <<'PY' ... _smoke_hpc_interactive_qc_bypass_contract(); _smoke_hpc_interactive_admet_bypass_contract() ... PY`
 
 ## [3.0.1] - 2025-01-15
 
@@ -173,7 +236,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Druggability scoring algorithm
 - Comprehensive CSV reporting
 
-## [Unreleased]
+## [Roadmap (Legacy Plans)]
 
 ### Planned
 - **Visualization**: 3D structure visualization capabilities

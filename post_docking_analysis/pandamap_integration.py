@@ -4,12 +4,12 @@ PandaMap integration module for post-docking analysis pipeline.
 This module handles 2D interaction map generation using PandaMap with configuration support.
 """
 import pandas as pd
-import numpy as np
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import Dict, Optional
 import subprocess
 import json
-import tempfile
+
+from .pandamap_runner import PandaMapRunner
 
 class PandaMapAnalyzer:
     """
@@ -28,7 +28,11 @@ class PandaMapAnalyzer:
             Configuration dictionary
         """
         self.conda_env = conda_env
-        self.config = config or {}
+        incoming = config or {}
+        # Accept either direct PandaMap keys or nested config tree.
+        nested_cfg = incoming.get("visualization", {}).get("pandamap", {}) if isinstance(incoming, dict) else {}
+        self.config = {**nested_cfg, **incoming} if isinstance(incoming, dict) else {}
+        self.runner = PandaMapRunner(conda_env=conda_env)
         
     def generate_2d_interaction_map(self, pdb_file: Path, ligand_name: str = "UNK",
                                   output_dir: Path = None, map_name: str = None) -> Path:
@@ -60,24 +64,33 @@ class PandaMapAnalyzer:
         if map_name is None:
             map_name = f"{pdb_file.stem}_2d_map"
             
-        # Create PandaMap command
-        cmd = [
-            "conda", "run", "-n", self.conda_env,
-            "pandamap", "generate",
-            "--input", str(pdb_file),
-            "--ligand", ligand_name,
-            "--output", str(output_dir / f"{map_name}.svg"),
-            "--format", "svg"
-        ]
+        cli_mode = self.runner.detect_cli_mode()
+        output_file = output_dir / f"{map_name}.svg"
+        if cli_mode == "single":
+            args = [
+                str(pdb_file),
+                "--ligand", ligand_name,
+                "--output", str(output_file),
+                "--dpi", str(self.config.get("dpi", 300))
+            ]
+            if not self.config.get("show_3d_cues", True):
+                args.append("--no-3d-cues")
+        else:
+            args = [
+                "generate",
+                "--input", str(pdb_file),
+                "--ligand", ligand_name,
+                "--output", str(output_file),
+                "--format", "svg"
+            ]
         
         try:
             # Execute PandaMap command
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = self.runner.run(args, timeout=300, cwd=output_dir)
             
-            if result.returncode == 0:
-                map_file = output_dir / f"{map_name}.svg"
-                print(f"✅ 2D interaction map generated: {map_file}")
-                return map_file
+            if result.returncode == 0 and output_file.exists():
+                print(f"✅ 2D interaction map generated: {output_file}")
+                return output_file
             else:
                 print(f"⚠️ PandaMap execution failed: {result.stderr}")
                 return None
@@ -122,24 +135,37 @@ class PandaMapAnalyzer:
         if vis_name is None:
             vis_name = f"{pdb_file.stem}_3d_vis"
             
-        # Create PandaMap command
-        cmd = [
-            "conda", "run", "-n", self.conda_env,
-            "pandamap", "visualize",
-            "--input", str(pdb_file),
-            "--ligand", ligand_name,
-            "--output", str(output_dir / f"{vis_name}.html"),
-            "--format", "html"
-        ]
+        cli_mode = self.runner.detect_cli_mode()
+        output_file = output_dir / f"{vis_name}.html"
+        if cli_mode == "single":
+            args = [
+                str(pdb_file),
+                "--ligand", ligand_name,
+                "--3d",
+                "--3d-output", str(output_file),
+                "--width", str(self.config.get("width", 1000)),
+                "--height", str(self.config.get("height", 800))
+            ]
+            if not self.config.get("show_surface", True):
+                args.append("--no-surface")
+            if not self.config.get("show_3d_cues", True):
+                args.append("--no-3d-cues")
+        else:
+            args = [
+                "visualize",
+                "--input", str(pdb_file),
+                "--ligand", ligand_name,
+                "--output", str(output_file),
+                "--format", "html"
+            ]
         
         try:
             # Execute PandaMap command
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = self.runner.run(args, timeout=300, cwd=output_dir)
             
-            if result.returncode == 0:
-                vis_file = output_dir / f"{vis_name}.html"
-                print(f"✅ 3D visualization generated: {vis_file}")
-                return vis_file
+            if result.returncode == 0 and output_file.exists():
+                print(f"✅ 3D visualization generated: {output_file}")
+                return output_file
             else:
                 print(f"⚠️ PandaMap execution failed: {result.stderr}")
                 return None

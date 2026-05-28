@@ -1,0 +1,104 @@
+{
+  "name": "bibalex-apptainer-conda",
+  "description": "Public-safe template. Copy into .workflow/hpc_profiles/<name>.json and fill in the local values.",
+  "shell_preamble": [
+    "if [ -f ~/.bashrc ]; then source ~/.bashrc; fi"
+  ],
+  "slurm": {
+    "job_name_prefix": "dock"
+  },
+  "remote": {
+    "ssh_target": "<user>@<hpc-host>",
+    "project_root_base": "/cluster/users/<user>/docking",
+    "sync_excludes": [
+      ".DS_Store",
+      "__pycache__/",
+      ".workflow/state.json"
+    ]
+  },
+  "engines": {
+    "gnina": {
+      "runtime": {
+        "binary": "/cluster/users/<user>/gnina",
+        "image": "/cluster/users/<user>/cuda12.3.2-cudnn9-runtime-ubuntu22.04.sif",
+        "use_gpu": false
+      },
+      "preamble": [
+        "if command -v module >/dev/null 2>&1; then module load apptainer >/dev/null 2>&1 || true; fi"
+      ],
+      "slurm_gpu": {
+        "submit_mode": "single_job",
+        "partition": "gpu",
+        "account": "<slurm-account>",
+        "time": "72:00:00",
+        "mem": "48G",
+        "cpus_per_task": 16,
+        "gpus": 1,
+        "array_parallelism": 1
+      },
+      "slurm_cpu": {
+        "submit_mode": "single_job",
+        "partition": "cpu",
+        "account": "<slurm-account>",
+        "time": "72:00:00",
+        "mem": "48G",
+        "cpus_per_task": 16,
+        "gpus": 0,
+        "array_parallelism": 2
+      }
+    },
+    "vina": {
+      "runtime": {
+        "conda_env": "dock-cpu",
+        "binary": "vina"
+      },
+      "slurm": {
+        "submit_mode": "single_job",
+        "partition": "cpu",
+        "account": "<slurm-account>",
+        "time": "24:00:00",
+        "mem": "24G",
+        "cpus_per_task": 16,
+        "gpus": 0,
+        "array_parallelism": 4
+      }
+    },
+    "smina": {
+      "runtime": {
+        "conda_env": "dock-cpu",
+        "binary": "smina"
+      },
+      "slurm": {
+        "submit_mode": "single_job",
+        "partition": "cpu",
+        "account": "<slurm-account>",
+        "time": "24:00:00",
+        "mem": "24G",
+        "cpus_per_task": 16,
+        "gpus": 0,
+        "array_parallelism": 4
+      }
+    },
+    "autodock4": {
+      "runtime": {
+        "binary": "autodock4",
+        "autogrid_binary": "autogrid4",
+        "parameter_file": "AD4.1_bound.dat",
+        "parameter_file_path": "<set-absolute-AD4.1_bound.dat-path>",
+        "autodocktools_python": "<set-mgltools-pythonsh>",
+        "autodocktools_prepare_gpf4": "<set-prepare_gpf4.py>",
+        "autodocktools_prepare_dpf4": "<set-prepare_dpf4.py>"
+      },
+      "slurm": {
+        "submit_mode": "slurm_array",
+        "partition": "cpu",
+        "account": "<slurm-account>",
+        "time": "24:00:00",
+        "mem": "24G",
+        "cpus_per_task": 16,
+        "gpus": 0,
+        "array_parallelism": 4
+      }
+    }
+  }
+}

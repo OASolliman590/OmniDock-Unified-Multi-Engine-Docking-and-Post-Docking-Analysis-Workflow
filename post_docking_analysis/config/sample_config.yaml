@@ -89,6 +89,48 @@ visualization:
   # Whether to generate 2D interaction maps with PandaMap
   generate_2d_interactions: true
 
+  # PandaMap rendering hints (single-command CLI mode)
+  pandamap:
+    show_surface: true
+    show_3d_cues: true
+    width: 1200
+    height: 900
+    generate_text_reports: true
+    estimate_delta_g: true
+    write_capability_manifest: true
+    qc_min_non_generic_ligand_ratio: 0.60
+    qc_require_reports_when_supported: true
+
+  # ProLIF defaults for interaction-map readability
+  prolif:
+    dpi: 350
+    figsize: [14, 10]
+    max_complexes: 60
+
+  # LigPlot+ defaults for robust batch rendering
+  ligplot:
+    contact_type: "2"
+    hydrogenate: "auto"
+    strip_metals: "auto"
+    no_abort: true
+  
+  # PLIP 2D Interaction Diagrams
+  # PLIP (Protein-Ligand Interaction Profiler) generates detailed 2D diagrams
+  # showing hydrogen bonds, hydrophobic contacts, π-stacking, salt bridges, etc.
+  # Install with: pip install plip  (or: conda install -c conda-forge plip)
+  plip:
+    # Enable/disable PLIP diagram generation
+    enabled: true
+    
+    # Output formats (png, xml, txt)
+    output_formats: [png, xml, txt]
+    
+    # Generate PyMOL session files (.pse) for 3D visualization
+    generate_pymol_session: true
+    
+    # Timeout in seconds for each complex analysis
+    timeout_seconds: 120
+
 # Advanced Options
 advanced:
   # Fix missing chains in structures
@@ -104,3 +146,6 @@ advanced:
   receptor_pattern: "*receptor*.pdb"
   ligand_pattern: "*ligand*.sdf"
   docking_result_pattern: "*out*.pdbqt"
+  
+  # Enable plugin system
+  enable_plugins: true

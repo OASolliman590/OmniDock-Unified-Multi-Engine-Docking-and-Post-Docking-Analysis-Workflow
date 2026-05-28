@@ -28,6 +28,9 @@
 ### 4. Simplified CLI (`simplified_cli.py`)
 - ✅ New CLI interface with 3-folder structure
 - ✅ Command-line arguments defined
+- ✅ Guided prompting for missing inputs in TTY sessions
+- ✅ GNINA project-root auto-detection
+- ✅ Optional per-target protein naming prompts
 
 ### 5. Publication-Quality PandaMap (`publication_pandamap.py`)
 - ✅ High DPI settings (300 DPI default)
@@ -64,7 +67,7 @@
 
 ### Visualizations
 - Affinity distribution histogram (with mean/median)
-- Top performers bar chart
+- Top performer per protein bar chart
 - Affinity heatmap (Protein × Ligand)
 - Binding affinity by protein
 - RMSD similarity matrix heatmap
@@ -82,6 +85,13 @@
 ## 📋 Usage
 
 ```bash
+python -m post_docking_analysis.simplified_cli \
+  --project-dir /path/to/GNINA_project \
+  --output /path/to/output \
+  --prompt-protein-names \
+  --enable-poseview
+
+# Or use explicit folders
 python -m post_docking_analysis.simplified_cli \
   --sdf-folder /path/to/sdf \
   --log-folder /path/to/logs \
@@ -107,30 +117,19 @@ output/
 │   ├── summary_stats.csv
 │   └── ...
 ├── rmsd_analysis/                    # RMSD results
-│   ├── rmsd_matrix.csv               # Pairwise RMSD matrix
-│   ├── poses_with_clusters.csv       # Poses with cluster assignments
-│   ├── cluster_summary.csv           # Cluster statistics
-│   ├── cluster_centroids.csv         # Representative poses per cluster
-│   ├── diversity_metrics.csv         # Diversity metrics per pose
-│   ├── diversity_overall_stats.csv   # Overall diversity statistics
-│   └── visualizations/               # RMSD visualizations
-│       ├── rmsd_heatmap.png         # RMSD similarity matrix
-│       ├── cluster_analysis.png      # Cluster plots
-│       └── diversity_analysis.png    # Diversity plots
+│   ├── per_complex_all_poses/        # All-pose RMSD per protein-ligand combination
+│   ├── per_protein_best_poses/       # Best-pose RMSD grouped by protein
+│   └── global_best_poses/            # Best-pose RMSD across all proteins
+├── interactions/                     # Canonical interaction outputs
+│   ├── pandamap/
+│   ├── prolif/
+│   ├── ligplot/
+│   └── poseview/
 ├── visualizations/                   # Enhanced 2D plots and heatmaps
 │   ├── affinity_distribution.png    # Histogram with mean/median
-│   ├── top_performers.png          # Top 10 bar chart
+│   ├── top_performers.png          # One best ligand per protein
 │   ├── affinity_heatmap.png        # Protein × Ligand heatmap
 │   └── affinity_by_protein.png     # Best affinity per protein
-└── pandamap_analysis/                 # Publication-quality interaction maps
-    ├── 2d_interaction_maps/
-    │   ├── complex1.pdf
-    │   ├── complex1.svg
-    │   └── complex1.png
-    ├── 3d_visualizations/
-    │   └── complex1.html
-    ├── pandamap_analysis_results.csv
-    └── pandamap_publication_analysis_summary.json
 ```
 
 ## 🎯 Key Features
@@ -141,6 +140,7 @@ output/
 4. **Publication Quality**: High-resolution figures (300 DPI)
 5. **Multiple Formats**: PDF, SVG, PNG for flexibility
 6. **Organized Output**: Poses organized by binding affinity
+7. **Pairlist Auto-Detection**: Searches resolved project/input ancestry when `--pairlist` is omitted
 7. **Comprehensive Reports**: CSV reports for further analysis
 
 ## ⚠️ Notes

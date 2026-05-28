@@ -1,391 +1,340 @@
-# Post-Docking Analysis System - Complete Guide
+# Post-Docking Analysis Guide
 
 ## Overview
 
-The Post-Docking Analysis System is a comprehensive tool for analyzing molecular docking results from both AutoDock Vina and GNINA docking programs. This system provides advanced analysis capabilities including binding affinity analysis, RMSD analysis, pose clustering, automated visualization, and comparative benchmarking.
+This repository provides two user-facing post-docking entry surfaces:
 
-## 🚀 Quick Start
+1. `post_docking_analysis` engine-aware canonical-project workflow (primary path)
+2. `post_docking_analysis.simplified_cli` legacy wrapper (auto-delegates to unified path for manifest-backed projects)
 
-### Installation
+The unified workflow includes:
+- automatic local/HPC layout detection
+- score aggregation from logs
+- receptor-ligand complex generation
+- hierarchical affinity analysis
+- per-complex RMSD analysis
+- multi-tool visualization generation
+- consolidated output packaging (`visualizations/` and `raw_data/`)
+- validation-gated hit classification with effective-policy fallback metadata
+
+For canonical projects containing GNINA, Vina, and/or Smina results under one manifest, the unified path adds:
+- engine-normalized score loading
+- comparative reporting across engines
+- unified score exports for downstream compatibility
+- favorite-engine continuation into deeper downstream analysis
+
+## Recommended Workflow (Simplified GNINA Pipeline)
+
+### Quick Start
 
 ```bash
-# Install as part of PDB Prepare Wizard package
-cd /path/to/pdb-prepare-wizard
-pip install -e .
-
-# Or install dependencies separately
-pip install -r post_docking_analysis/requirements.txt
-
-# Optional: Install visualization tools
-conda install -c conda-forge pymol pandamap openbabel
+python -m post_docking_analysis.simplified_cli \
+  --project-dir /path/to/GNINA_project \
+  --output /path/to/post_docking_output
 ```
 
-### Basic Usage
+### Explicit Input Mode
 
 ```bash
-# Analyze docking results with default settings
-python -m post_docking_analysis -i /path/to/docking/results -o /path/to/output
-
-# GNINA Fast Path (recommended)
-# If your project has gnina_out/all_scores.csv, the pipeline automatically uses streamlined processing
-python -m post_docking_analysis -i /path/to/project
-
-# Use configuration file
-python -m post_docking_analysis --config my_config.yaml
+python -m post_docking_analysis.simplified_cli \
+  --sdf-folder /path/to/gnina_out \
+  --log-folder /path/to/logs \
+  --receptors-folder /path/to/receptors \
+  --output /path/to/post_docking_output \
+  --pairlist /path/to/pairlist.csv
 ```
 
-## 📁 Input Data Structure
+### Common Flags
 
-### For GNINA Results (Recommended)
+- `--no-rmsd`: skip RMSD stage
+- `--no-visualizations`: skip visualization stages
+- `--ligplus-root /path/to/LigPlus`: run LigPlot+ with explicit LigPlus root
+- `--interactive`: prompt for missing paths/settings in a TTY session
+- `--prompt-protein-names`: prompt once per detected receptor/PDB target
+- `--enable-poseview`: enable PoseView REST API diagrams
 
+Note: user-facing RMSD scope is now `per_complex` only. Legacy global/per-protein RMSD scope toggles were removed from CLI contracts.
+
+When `--pairlist` is omitted, the simplified CLI auto-searches for
+`pairlist.csv` from the resolved project or input roots up to four parent
+levels above those paths.
+
+## Canonical Multi-Engine Workflow
+
+### Quick Start
+
+```bash
+python -m post_docking_analysis \
+  --project-dir /path/to/docking_project \
+  --analysis-mode comparative_all_engines \
+  --output /path/to/analysis_output
 ```
-docking_results/
-├── gnina_out/
-│   ├── all_scores.csv          # Auto-generated if missing
-│   ├── complex1_top.sdf
-│   ├── complex2_top.sdf
-│   └── *.log                   # GNINA log files
+
+### Continue From A Favorite Engine
+
+```bash
+python -m post_docking_analysis \
+  --project-dir /path/to/docking_project \
+  --analysis-mode favorite_engine_continue \
+  --favorite-engine vina \
+  --output /path/to/analysis_output
+```
+
+### Analysis Modes
+
+- `comparative_all_engines`: compare all detected engines and emit unified score tables
+- `single_engine`: analyze only one engine
+- `favorite_engine_continue`: compare/filter first, then continue downstream from one selected engine
+
+### Validation Gate And Effective Policy Fallback
+
+When hit classification policy is `reference_anchor`, DockForge evaluates the redocking validation gate first.
+
+- Validation gate artifact: `reports/validation_gate_status.json`
+- If gate status is not validated, classification policy automatically falls back to `target_percentile`
+- Requested vs effective policy is mirrored into:
+  - `reports/consolidated_run_summary.json`
+  - canonical score outputs under `4-Working/scores/consensus/`
+
+This prevents unvalidated reference ligands from being used as class anchors.
+
+### Top-Pose Atlas Controls
+
+Engine-aware CLI now supports explicit top-pose controls:
+- `--top-pose-policy {hybrid,best_affinity,best_consensus}`
+- `--top-pose-aggregation {best_target}`
+
+Example:
+
+```bash
+python -m post_docking_analysis \
+  --project-dir /path/to/docking_project \
+  --analysis-mode comparative_all_engines \
+  --analysis-scope top_pose_only \
+  --top-pose-policy best_affinity \
+  --top-pose-aggregation best_target
+```
+
+### Favorite-Engine Continuation Behavior
+
+- `gnina`: uses the existing simplified GNINA structural workflow
+- `vina` / `smina`: use a PDBQT-based structural bridge that reuses the simplified downstream stack where safe. It writes filtered reports, extracts best-pose complex PDBs, runs hierarchical affinity analysis, polypharmacology, general visualizations, PandaMap, structural-quality summaries, artifact consolidation, mirrors unified score tables under `deep_analysis/raw_data/`, and runs PDB-based RMSD analysis under `deep_analysis/rmsd_analysis/`
+
+Bridge stage notes are explicit about optional stage outcomes:
+- `completed`: stage ran and produced usable outputs
+- `disabled`: stage was intentionally turned off by configuration
+- `missing_dependency`: required Python or external dependency is unavailable
+- `missing_configuration`: required tool configuration such as `LIGPLUS_ROOT` is unavailable
+- `partial_scripts_only_missing_binary`: scripts/manifests were written but the external renderer binary was not available
+
+## Input Layouts
+
+### Local Layout
+
+```text
+project/
+├── gnina_out/      # SDF + .log in same folder
 ├── receptors/
-│   ├── receptor1.pdbqt
-│   ├── receptor2.pdbqt
-│   └── ...
-└── pairlist.csv                # Optional: receptor-ligand mappings
+└── pairlist.csv    # optional but recommended
 ```
 
-### For Vina Results
+### HPC Layout
 
-```
-docking_results/
-├── complex1/
-│   ├── receptor.pdbqt
-│   ├── ligand.sdf
-│   └── docking_output.pdbqt
-├── complex2/
-│   ├── receptor.pdbqt
-│   ├── ligand.sdf
-│   └── docking_output.pdbqt
-└── ...
+```text
+project/
+├── gnina_out/      # SDF files
+├── logs/           # .log files
+├── receptors/
+└── pairlist.csv    # optional but recommended
 ```
 
-## ⚙️ Configuration
+Layout detection is handled by `post_docking_analysis/gnina_hpc_adapter.py`.
 
-The system uses YAML configuration files for flexible control. A sample configuration is provided in `post_docking_analysis/config/sample_config.yaml`.
+## Simplified Pipeline Stages
 
-### Configuration Options
+1. Input discovery and validation
+2. `all_scores.csv` generation from GNINA logs
+3. Pose-to-receptor matching
+4. Complex PDB creation
+5. Hierarchical affinity analysis
+6. RMSD clustering/diversity analysis (optional)
+7. Report generation
+8. Visualization generation (optional)
+9. Artifact consolidation + manifest generation
 
-```yaml
-# Analysis Parameters
-analysis:
-  docking_types: [vina, gnina]      # Which docking types to analyze
-  comparative_benchmark: "*"        # "*" for all, or specific targets
-  binding_affinity_analysis: true
-  rmsd_analysis: true
-  generate_visualizations: true
-  extract_poses: true
+## Visualization Toolkit
 
-# Input/Output Directories
-paths:
-  input_dir: ""
-  output_dir: "./post_docking_results"
-  receptors_dir: ""
-  gnina_out_dir: ""
+The simplified pipeline can generate:
 
-# Pose Extraction
-pose_extraction:
-  extract_all_poses: false
-  best_pose_criteria: "affinity"
-  output_formats: [pdb]
+1. Overview affinity plots (`matplotlib`/`seaborn`)
+2. Hierarchical analysis visualizations
+3. RMSD visualizations
+4. PandaMap 2D/3D outputs (publication-oriented)
+5. py3Dmol interactive 3D HTML
+6. ProLIF interaction maps
+7. LigPlot+ interaction diagrams
 
-# Binding Affinity Analysis
-binding_affinity:
-  strong_binder_threshold: "auto"   # "auto", "comparative", or numeric value
-  top_performers_count: 10
-  analyze_by_protein: true
-  analyze_by_ligand: true
+Dependency contract:
+- required: core scoring/reporting, comparative analysis, RMSD, static plots
+- optional: `py3Dmol`, `ProLIF`, `LigPlot+`, `PoseView`
 
-# RMSD Analysis
-rmsd:
-  clustering_method: "kmeans"      # "kmeans" or "dbscan"
-  kmeans_clusters: 3
-  dbscan_epsilon: 2.0
-  dbscan_min_samples: 2
+If an optional dependency is missing, the pipeline records a skipped stage and
+continues. Those tools are not required for a validated baseline run.
 
-# Visualization
-visualization:
-  output_formats: [png]
-  dpi: 300
-  generate_3d: true
-  generate_2d_interactions: true
+See `post_docking_analysis/VISUALIZATION_GUIDE.md` for details.
 
-# Advanced Options
-advanced:
-  fix_chains: false
-  directory_structure: "AUTO"      # "AUTO", "SINGLE_FOLDER", "MULTI_FOLDER"
-  enable_plugins: true
-  log_level: "INFO"
-```
+## Protein Naming and Labeling
 
-## 📊 Output Structure
+The pipeline builds a protein naming map from receptor names and optional `pairlist.csv`.
 
-```
-post_docking_results/
-├── best_poses/                    # Best poses organized by complex
-│   ├── complex_1/
-│   ├── complex_2/
+Generated files:
+- `protein_name_mapping.csv`: detected name mapping
+- `protein_name_overrides.csv`: editable template for manual overrides
+
+Visualization filenames may be aliased with resolved protein display names when identifiers contain PDB-like codes.
+
+`top_performers.png` now reflects one best ligand per protein rather than a
+global top-N ranking.
+
+## Output Structure (Current)
+
+```text
+post_docking_output/
+├── all_scores.csv
+├── analysis/
+│   ├── best_poses.csv
+│   ├── best_per_protein.csv
+│   ├── cross_protein_affinity_matrix.csv
+│   └── visualizations/
+├── complexes/
+├── best_poses/
 │   ├── strong_binders/
 │   ├── moderate_binders/
 │   └── weak_binders/
-├── reports/                       # Analysis reports
-│   ├── best_affinities.csv
-│   ├── affinity_summary.csv
-│   ├── top_performers.csv
-│   ├── best_per_protein.csv
-│   ├── best_per_ligand.csv
-│   ├── pose_summary.csv
-│   └── summary_report.txt
-├── visualizations/                # 2D visualizations
-│   ├── binding_affinity_distribution.png
-│   ├── top_10_performers.png
-│   ├── vina_cnn_comparison.png
-│   └── ...
-├── pymol_visualizations/          # 3D PyMOL sessions
-│   ├── comparative_analysis.pse
-│   └── ...
-├── pandamap_analysis/             # 2D/3D interaction maps
-│   └── ...
-└── post_docking_analysis.log      # Detailed log file
+├── reports/
+├── rmsd_analysis/
+│   └── per_complex_all_poses/
+│       ├── per_complex_rmsd_summary.csv
+│       └── <complex_slug>/
+├── interactions/
+│   ├── pandamap/
+│   │   ├── 2d_interaction_maps/
+│   │   └── 3d_visualizations/
+│   ├── prolif/
+│   ├── ligplot/
+│   └── poseview/
+├── 3d_visualizations/
+├── visualizations/                 # consolidated visual assets
+└── raw_data/                       # consolidated raw artifacts
+    ├── visualization_manifest.csv
+    └── visualization_manifest.json
 ```
 
-## 🔧 Command-Line Options
+## Consolidated Outputs
 
-### Basic Options
-- `-i, --input DIR`: Input directory containing docking results
-- `-o, --output DIR`: Output directory for results
-- `--config FILE`: Configuration file path
-- `-v, --verbose`: Enable verbose output
+The pipeline now performs a final packaging step:
 
-### Processing Options
-- `--no-visualizations`: Skip visualization generation
-- `--no-analysis`: Skip binding affinity analysis
-- `--no-reports`: Skip report generation
-- `--fix-chains`: Fix chain issues in structures
+- `visualizations/` contains copied overview, hierarchical, RMSD, and 3D visual assets
+- `interactions/` remains the canonical home for PandaMap, ProLIF, LigPlot, and PoseView outputs
+- `raw_data/` contains tabular/log/text artifacts
+- `raw_data/visualization_manifest.*` links visualization files to related raw files
 
-### Help
-- `-h, --help`: Show help message
-- `--version`: Show version information
+This makes downstream report assembly and auditing easier.
 
-## 💻 Programmatic Usage
+## Canonical Multi-Engine Output Additions
+
+Engine-aware analysis writes:
+- `reports/combined_engine_scores.csv`
+- `reports/best_pose_per_tag_by_engine.csv`
+- `reports/engine_summary.csv`
+- `reports/best_engine_per_complex.csv`
+- `reports/validation_gate_status.json`
+- `reports/consolidated_run_summary.json`
+- `reports/consensus_ranked_hits_with_classes.csv`
+- `raw_data/unified_all_scores.csv`
+- `raw_data/unified_best_poses.csv`
+
+When `favorite_engine_continue` is used, outputs are written under:
+- `favorite_engine/`: filtered engine-specific score tables
+- `favorite_engine/deep_analysis/`: continued downstream artifacts for the chosen engine
+
+### Top-Pose Ligand Performance Atlas
+
+Comparative/favorite engine-aware runs now emit a dedicated ligand-centric atlas:
+
+- Session-local:
+  - `top_pose_ligand_performance/top_pose_per_ligand_per_protein.csv`
+  - `top_pose_ligand_performance/top_pose_per_ligand_global.csv`
+  - `top_pose_ligand_performance/ligand_performance_summary.csv`
+  - `top_pose_ligand_performance/top_pose_selection_manifest.json`
+- Canonical mirror:
+  - Legacy projects: `PROJECT_ROOT/5-Analysis/top_pose_ligand_performance/`
+  - Canonical layout: `PROJECT_ROOT/analysis/5-Analysis/top_pose_ligand_performance/`
+
+The atlas selection is deterministic and policy-aware (`hybrid` default), and rows include:
+- pose identity (`engine`, `tag`, `protein`, `ligand`, `site_id`, `pose`, `pose_file`)
+- consensus context (`consensus_score`, engine agreement/support fields)
+- interpretability context (`docking_quality_class`, `qc_status`, `admet_status`, optional `bio_*`)
+
+Use analysis scope `top_pose_only` when you want fast regeneration of this atlas without running heavy visualization/interaction stages.
+
+## Legacy Pipeline
+
+Legacy/config-driven command:
+
+```bash
+python -m post_docking_analysis -i /path/to/docking/results -o /path/to/output
+python -m post_docking_analysis --config my_config.yaml -i /path/to/docking/results
+```
+
+This path is still available for broader configuration scenarios, but GNINA projects should prefer the simplified CLI.
+For manifest-backed canonical projects, `simplified_cli` delegates to the unified pipeline path unless legacy-only flags (`--no-rmsd` / `--no-visualizations`) are requested.
+
+## Programmatic Usage
+
+### Simplified Pipeline
+
+```python
+from post_docking_analysis.simplified_pipeline import SimplifiedPostDockingPipeline
+
+pipeline = SimplifiedPostDockingPipeline(
+    sdf_folder="/path/to/gnina_out",
+    log_folder="/path/to/logs",
+    receptors_folder="/path/to/receptors",
+    output_dir="/path/to/output",
+    pairlist_file="/path/to/pairlist.csv",
+    run_rmsd=True,
+    run_visualizations=True,
+)
+success = pipeline.run()
+```
+
+### Legacy Pipeline
 
 ```python
 from post_docking_analysis.pipeline import PostDockingAnalysisPipeline
 
-# Initialize pipeline
 pipeline = PostDockingAnalysisPipeline(
     input_dir="/path/to/docking/results",
     output_dir="/path/to/output",
-    config_file="/path/to/config.yaml"
+    config_file="/path/to/config.yaml",
 )
-
-# Run complete analysis
-success = pipeline.run_pipeline()
-
-# Access results
-if success:
-    best_poses = pipeline.results['best_poses']
-    print(f"Best binding affinity: {best_poses['vina_affinity'].min():.2f} kcal/mol")
-```
-
-## 🎯 Key Features
-
-### 1. Binding Affinity Analysis
-- Identify top-performing compounds based on binding affinity
-- Comparative benchmarking against specified targets
-- Dynamic threshold calculation ("auto" mode)
-- Categorization as strong, moderate, or weak binders
-- Protein and ligand breakdown analysis
-
-### 2. Pose Extraction and Organization
-- Extract best poses into centralized folders
-- Organize by binding affinity categories
-- Support for multiple output formats (PDB, SDF, MOL2)
-- Automatic complex reconstruction from receptor + ligand
-
-### 3. RMSD Analysis
-- Pose clustering using K-means or DBSCAN
-- Conformational diversity analysis
-- Comparative benchmarking integration
-- Pose similarity matrices
-
-### 4. Visualization
-- Automated 2D visualizations (binding affinity distributions, heatmaps)
-- 3D visualizations with PyMOL
-- 2D interaction maps with PandaMap
-- Customizable output formats and DPI
-
-### 5. Automatic Data Preparation
-- Auto-generates `all_scores.csv` from GNINA log files
-- Uses `pairlist.csv` for accurate receptor-ligand mapping
-- Handles missing files gracefully
-
-### 6. Plugin System
-- Extensible architecture for custom analysis modules
-- Built-in example plugins (binding mode, enrichment)
-- Easy integration of new analysis methods
-
-## 📋 Pairlist Integration
-
-The system leverages `pairlist.csv` for accurate receptor-ligand mapping:
-
-```csv
-receptor,site_id,ligand,center_x,center_y,center_z,size_x,size_y,size_z
-4TRO_INHA_prep,catalytic,4TRO_INHA_NAD,0.075,-32.509,15.694,20,20,20
-3LN1_COX2_prep,catalytic,3LN1_COX2_CEL,27.9222,-24.2043,-14.4593,20,20,20
-```
-
-Benefits:
-- Accurate complex naming
-- Consistent tag names across analyses
-- Eliminates filename pattern matching errors
-- Better data organization
-
-## 🔄 Dynamic Strong Binder Threshold
-
-Three options for determining strong binders:
-
-1. **"auto"** (default): Automatically calculates threshold based on data distribution
-2. **"comparative"**: Uses average binding affinity of comparative benchmark
-3. **Numeric value**: Fixed threshold (e.g., -8.0 kcal/mol)
-
-## 🛠️ Preprocessing
-
-The system can automatically prepare your data:
-
-```bash
-# Preprocess GNINA results (generate all_scores.csv, identify pairs)
-python -m post_docking_analysis.preprocess /path/to/docking/results
-
-# Force regeneration
-python -m post_docking_analysis.preprocess /path/to/docking/results --force
-
-# Use pairlist.csv
-python -m post_docking_analysis.preprocess /path/to/docking/results --pairlist /path/to/pairlist.csv
-```
-
-## 📚 Examples
-
-### Example 1: Basic GNINA Analysis
-
-```bash
-python -m post_docking_analysis -i ./gnina_results -o ./analysis_output
-```
-
-### Example 2: Custom Configuration
-
-```bash
-# Create custom config
-cp post_docking_analysis/config/sample_config.yaml my_config.yaml
-
-# Edit my_config.yaml, then run
-python -m post_docking_analysis --config my_config.yaml -i ./data -o ./results
-```
-
-### Example 3: Python API
-
-```python
-from post_docking_analysis.pipeline import PostDockingAnalysisPipeline
-
-config = {
-    "analysis": {
-        "docking_types": ["gnina"],
-        "comparative_benchmark": "COX2",
-        "binding_affinity_analysis": True
-    },
-    "binding_affinity": {
-        "strong_binder_threshold": -9.0,
-        "top_performers_count": 20
-    }
-}
-
-pipeline = PostDockingAnalysisPipeline(
-    input_dir="/path/to/data",
-    output_dir="/path/to/results"
-)
-pipeline.config.update(config)
 success = pipeline.run_pipeline()
 ```
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
-### Common Issues
+1. Empty SDF files
+- The simplified pipeline skips empty SDFs automatically and records them in `skipped_empty_sdf_files.txt`.
 
-1. **Missing Dependencies**
-   ```bash
-   pip install -r post_docking_analysis/requirements.txt
-   conda install -c conda-forge pymol pandamap openbabel
-   ```
+2. PandaMap unavailable
+- Ensure PandaMap is installed in the configured conda env (default env name: `pandamap`).
 
-2. **File Not Found Errors**
-   - Check input directory structure matches expected format
-   - Verify file paths in configuration
-   - Ensure `all_scores.csv` exists or can be auto-generated
+3. LigPlot skipped
+- Set `LIGPLUS_ROOT`/`LIGPLUS_HOME` or pass `--ligplus-root`.
 
-3. **Memory Issues**
-   - Reduce number of complexes being analyzed
-   - Set `extract_all_poses: false` to analyze only best poses
-   - Process in smaller batches
+4. py3Dmol / ProLIF missing
+- Install in active environment; pipeline will skip those stages gracefully if unavailable.
 
-### Logging
-
-Detailed logs are generated in the output directory:
-- `post_docking_analysis.log` - Main log file with analysis progress
-- Log levels: DEBUG, INFO, WARNING, ERROR, CRITICAL
-
-## 🔌 Extending the System
-
-### Creating Custom Plugins
-
-1. Create plugin file in `post_docking_analysis/plugins/`:
-
-```python
-PLUGIN_NAME = "My Custom Analyzer"
-PLUGIN_VERSION = "1.0.0"
-PLUGIN_DESCRIPTION = "Description of my plugin"
-
-def analyze(data: dict, output_dir: Path, config: dict) -> dict:
-    # Your analysis code here
-    results = {
-        "plugin": PLUGIN_NAME,
-        "status": "completed",
-        "results": []
-    }
-    return results
-```
-
-2. Enable in configuration:
-```yaml
-advanced:
-  enable_plugins: true
-  plugin_directories: ["./plugins"]
-```
-
-## 📖 Requirements
-
-- Python 3.8+
-- Pandas, NumPy
-- Matplotlib, Seaborn
-- Scikit-learn
-- PyYAML
-- Open Babel (for pose extraction)
-- PyMOL (optional, for 3D visualizations)
-- PandaMap (optional, for interaction analysis)
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
----
-
-**Version**: 3.0.0  
-**Last Updated**: 2025-01-15  
-**Compatibility**: Python 3.8+, AutoDock Vina, GNINA
-
+5. Matplotlib cache warning
+- Set writable `MPLCONFIGDIR` in your environment.

@@ -1,11 +1,43 @@
-# PDB Prepare Wizard - Molecular Docking Pipeline v3.0
+# Omni-DockForge: End-to-End Docking, Consensus by Design.
+
+Formerly **PDB Prepare Wizard**.
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Conda](https://img.shields.io/badge/conda-forge-blue.svg)](https://conda-forge.org/)
 [![Biopython](https://img.shields.io/badge/Biopython-1.79+-green.svg)](https://biopython.org/)
 
-A comprehensive tool for preparing PDB files for molecular docking studies with advanced PLIP integration. This pipeline provides automated analysis of protein-ligand complexes, comprehensive interaction analysis, and druggability predictions with research-grade accuracy matching the official PLIP web server.
+A comprehensive platform for multi-engine docking project preparation, execution, and post-docking analysis. DockForge provides automated protein/ligand workflows, comparative docking analytics, and optional interaction-analysis stages.
+
+## DockForge Workflow Map
+
+DockForge is organized as a reusable project lifecycle rather than a one-shot script:
+
+1. Project setup and `workflow init`
+2. Receptor/ligand preparation (engine-aware)
+3. Pairlist and docking-folder materialization
+4. Docking execution (local or deployment-target aware)
+5. Post-docking analysis (full/comparison/QC/rescoring/report scopes)
+6. Checkpoint & Revise (freeze current progress, then continue from a controlled state)
+
+Interactive and CLI modes share the same state backbone (`.workflow/state.json`), so you can move between guided and scripted operation without losing workflow context.
+
+### Canonical Output Topology (Numbered)
+
+DockForge supports legacy compatibility, but the canonical auditable layout is:
+
+- `0-Input/`
+- `1-Preparation/`
+- `2-GridBoxes/`
+- `3-Docking/`
+- `4-Working/`
+- `5-Analysis/`
+- `6-Visualizations/`
+- `7-Reports/`
+- `.meta/`
+- `sessions/`
+
+`5-Analysis/START_HERE.md` is generated as the main post-docking navigation index, and `7-Reports/START_HERE.md` remains the consolidated cross-run report index.
 
 ## 🚀 Features
 
@@ -42,6 +74,8 @@ A comprehensive tool for preparing PDB files for molecular docking studies with 
 - **🆕 CLI Mode**: Command-line interface with configuration file support
 - **🆕 Batch Processing**: Enhanced batch processing with configuration-driven automation
 - **🆕 Unified Entry Point**: Single `main.py` entry point for all modes
+- **🆕 Docking Project Builder**: Build canonical multi-engine docking projects from prepared receptors, prepared ligands, Excel site metadata, and pair-intent rules
+- **🆕 Pairlist Automation Modes**: Support manual pairlists, protein-based pair generation, and optional all-proteins-to-all-ligands expansion
 
 ### Reporting & Analysis
 - **Multi-PDB Analysis**: Analyze multiple PDB structures in a single session
@@ -54,11 +88,13 @@ A comprehensive tool for preparing PDB files for molecular docking studies with 
   - **Statistical Analysis**: Generate comprehensive statistics and rankings
   - **Visualization**: Create binding affinity distributions and top performer plots
   - **Multi-format Reports**: CSV, Excel, and text summary reports
+- **🆕 Multi-Engine Docking Execution**: Run GNINA via container and Vina/Smina via conda or direct binaries from one canonical project
+- **🆕 Engine-Aware Analysis**: Compare GNINA, Vina, and Smina together or continue downstream from a selected favorite engine
 
 ### 🆕 AutoDock Preparation (v3.0.1)
 - **Enhanced AutoDock Preparation**: Comprehensive preparation for AutoDock Vina docking
   - **Multi-format Support**: Handles PDB, SDF, MOL2 for ligands; PDB for receptors
-  - **PLIP Integration**: Binding site validation and interaction analysis
+  - **Engine-aware ligand preparation**: Open Babel/Meeko/AutoDockTools orchestration
   - **Flexible Input/Output**: Same-folder or separate-folder scenarios
   - **PDB Ligand Extraction**: Extract ligands directly from PDB files
   - **Quality Control**: Comprehensive validation of prepared files
@@ -77,11 +113,12 @@ A comprehensive tool for preparing PDB files for molecular docking studies with 
 
 ### Dependencies
 - **Core**: numpy, pandas, biopython
-- **Optional**: plip (for advanced interaction analysis)
+- **Optional (post-docking only)**: plip (interaction analysis plugin path)
 - **Visualization**: matplotlib, seaborn
 - **Excel Support**: openpyxl (for Excel report generation)
 - **Post-Docking Analysis**: openbabel (for ligand processing and PDBQT conversion)
 - **Development**: jupyter
+- **Interactive Workflow**: questionary
 
 ## 🛠️ Installation
 
@@ -119,27 +156,42 @@ pip install -e .
 # Install core dependencies
 pip install numpy pandas biopython
 
-# Install optional PLIP for advanced analysis
+# Install optional PLIP for post-docking interaction analysis
 pip install plip
+
+# Optional downstream visualization extras
+pip install py3Dmol prolif
 
 # Install visualization tools
 pip install matplotlib seaborn
 
 # Install Excel support
 pip install openpyxl
+
+# Install interactive workflow prompts
+pip install questionary
 ```
+
+Post-docking dependency contract:
+- Core post-docking workflow: required
+- `py3Dmol`: optional
+- `ProLIF`: optional
+- `LigPlot+`: optional external tool
+- `PoseView`: optional network-backed stage
+
+The pipeline must complete when optional stages are unavailable. Missing optional
+dependencies are reported as skipped stages, not hard failures.
 
 ### 🆕 Recent Updates (v3.0.1)
 
 **🔧 Bug Fixes:**
 - **Fixed PDB→SDF→PDBQT Conversion**: Resolved explicit hydrogens requirement for Meeko
 - **Enhanced Error Handling**: Improved ligand preparation with proper error recovery
-- **PLIP Integration**: Fully working binding site validation and interaction analysis
+- **Preparation/analysis separation**: preparation no longer depends on interaction-analysis modules
 
 **✅ Test Results:**
 - **Ligand Preparation**: 6/6 files successfully converted (100% success rate)
 - **Receptor Preparation**: 4/5 files successfully prepared (80% success rate)
-- **PLIP Analysis**: Working with binding site detection and validation
 - **Quality Control**: All prepared files validated and ready for AutoDock Vina
 
 **🎯 Production Status:**
@@ -149,28 +201,88 @@ pip install openpyxl
 
 ## 🎯 Usage
 
-### Main Entry Point (v2.1.0)
+### Unified Workflow CLI
+
+`main.py` now has one grouped command surface plus backward-compatible legacy aliases.
 
 ```bash
-# Interactive mode (default) - User-friendly guided interface
+# Guided workflow shell (default)
 python main.py
 python main.py interactive
+python main.py workflow interactive
+python main.py workflow init --project-dir docking_project/ --layout-profile docking_legacy
+python main.py workflow status --project-dir docking_project/
+python main.py workflow jump --project-dir docking_project/ --target analyze.stage.rmsd --engine vina
 
-# CLI mode for batch processing with configuration support
+# PDB functionality
+python main.py pdb collect --project-dir docking_project/ -p 7CMD
+python main.py pdb fetch -p 7CMD -o results/
+python main.py pdb run -p "7CMD,6WX4" -o results/
+python main.py pdb batch -c pdb_batch_config.yaml -o batch_results/
+python main.py pdb prepare-both \
+  --receptors-input receptors_raw/ \
+  --ligands-input ligands_raw/ \
+  --receptors-output receptors_prep/ \
+  --ligands-output ligands_prep/
+
+# Legacy aliases still work
 python main.py cli -p 7CMD
-python main.py cli -p "7CMD,6WX4,1ABC" -o results/
-python main.py cli -p 7CMD -c config.json
-
-# Batch mode for processing multiple PDB files with configuration files
 python main.py batch -c pdb_batch_config.yaml
-python main.py batch -c pdb_batch_config.txt -o batch_results/
+python main.py prepare-docking \
+  --prepared-proteins receptors_prep/ \
+  --prepared-ligands ligands_prep/ \
+  --excel multi_pdb_analysis.xlsx \
+  --output docking_project/
 
-# Or use the installed commands (after pip install -e .)
-pdb-prepare-wizard                    # Main entry point
-pdb-wizard-interactive               # Interactive mode only
-pdb-wizard-cli -p 7CMD               # CLI mode only
-pdb-wizard-batch                     # Batch processing only
+# Build pairlists explicitly before materialization
+python main.py prep pairlist \
+  --project-dir docking_project/ \
+  --mode cocrystal_plus_all
+
+# Materialize the staged docking project
+python main.py prep project \
+  --project-dir docking_project/
+
+# Docking
+python main.py dock run \
+  --project-dir docking_project/ \
+  --engines gnina,vina,smina \
+  --favorite-engine gnina
+
+# Post-docking analysis
+python main.py analyze comparative --project-dir docking_project/
+python main.py analyze favorite-engine --project-dir docking_project/ --favorite-engine vina
+python main.py analyze stage rmsd --project-dir docking_project/ --engine vina
+python main.py analyze interactions pandamap --project-dir docking_project/ --engine smina
+python main.py analyze visuals pymol --project-dir docking_project/ --engine gnina
+
+# Installed commands (after pip install -e .)
+pdb-prepare-wizard
+pdb-wizard-workflow workflow interactive
+pdb-wizard-interactive
 ```
+
+The new workflow shell can resume or inspect state from `.workflow/state.json`, jump directly to specific functions, and continue from docking preparation into docking execution and post-docking analysis without switching entrypoints.
+
+`workflow init --layout-profile docking_legacy` bootstraps a staged docking project with:
+
+- `1-Raw_Ligand/`
+- `2-Raw_Protien/`
+- `3-Preparation/`
+- `4-Docking/`
+- `5-Analysis/`
+
+For compatibility, DockForge may create `5-Post_Docking_Analysis -> 5-Analysis`
+as a symlink when no prior legacy directory exists.
+
+`1-Raw_Ligand/` is now the single raw-ligand staging directory for mixed input
+formats. When the workflow can derive an SDF-normalized copy, it is written
+into the same folder beside the source ligand instead of a separate
+`1-Raw_Ligand_SDF/` tree.
+
+Within that layout, GNINA-compatible paths such as `4-Docking/gnina_out`,
+`4-Docking/logs`, `4-Docking/results`, `4-Docking/scripts`, and
+`4-Docking/scripts_hpc` are created alongside the Vina and Smina output roots.
 
 ### Batch Processing Configuration
 
@@ -309,7 +421,7 @@ python main.py cli -p "7CMD,6WX4" -c config.json
 Example configuration:
 ```json
 {
-  "description": "Sample configuration for PDB Prepare Wizard CLI",
+  "description": "Sample configuration for Omni-DockForge legacy PDB CLI",
   "ligand_selection": {
     "7cmd": "TTT",
     "6wx4": "LIG",
@@ -362,7 +474,8 @@ if residue_analysis:
 
 ### AutoDock Preparation Usage
 
-The enhanced AutoDock preparation system provides comprehensive preparation for AutoDock Vina docking with PLIP integration.
+The enhanced AutoDock preparation system is profile-driven and engine-aware.
+Preparation generates docking-ready assets and does not run PLIP.
 
 #### Command Line Usage
 
@@ -379,7 +492,9 @@ python autodock_preparation.py \
     --ligands-output ./ligands_prep \
     --receptors-output ./receptors_prep \
     --force-field AMBER \
-    --ph 7.4
+    --ph 7.4 \
+    --ligand-profile engine_aware_full \
+    --selected-engines gnina,vina,smina,autodock4
 
 # Run with bash script
 ./prep_autodock_enhanced.sh autodock_config.json
@@ -396,7 +511,8 @@ config = PreparationConfig(
     receptors_output="./receptors_prep",
     force_field="AMBER",
     ph=7.4,
-    plip_enabled=True
+    ligand_preparation_profile="engine_aware_full",
+    selected_engines=["gnina", "vina", "smina", "autodock4"],
 )
 
 # Initialize and run pipeline
@@ -412,8 +528,9 @@ if success:
 
 ```
 project_directory/
-├── ligands_raw/                 # Input ligands (SDF, MOL2, PDB)
+├── ligands_raw/                 # Input ligands (mixed formats; normalized SDF copies can live beside the source file)
 │   ├── ligand1.sdf
+│   ├── ligand1.mol
 │   ├── ligand2.mol2
 │   └── ligand3.pdb
 ├── receptors_raw/               # Input receptors (PDB)
@@ -433,85 +550,123 @@ project_directory/
 ├── receptors_prep/              # Prepared receptors (PDBQT)
 │   ├── receptor1.pdbqt
 │   ├── receptor2.pdbqt
-│   ├── plip_analysis/           # PLIP analysis results
 │   └── preparation_summary.txt  # Summary report
 └── logs/                        # Log files
 ```
 
+Ligand preparation normalizes each ligand to an explicit-hydrogen 3D SDF
+intermediate before generating PDBQT output. Existing 3D coordinates are kept
+when present; 2D inputs such as `.mol` or flat `.sdf` ligands are embedded to
+3D first so the Meeko/Vina-family preparation path receives chemically usable
+coordinates.
+When `autodock4` is selected, the engine-aware path includes AutoDockTools-compatible branching automatically.
+
 ### Post-Docking Analysis Usage
 
-The post-docking analysis module provides comprehensive analysis of molecular docking results from AutoDock Vina or GNINA.
+Two workflows are available:
 
-#### Command Line Usage
+1. Recommended for GNINA projects: `post_docking_analysis.simplified_cli`
+2. Legacy/config-driven workflow: `post_docking_analysis` (full pipeline)
+
+#### Recommended GNINA Workflow
 
 ```bash
-# Basic usage - analyze docking results in a directory
+# Auto-detects local vs HPC GNINA layout (gnina_out + logs + receptors)
+python -m post_docking_analysis.simplified_cli \
+  --project-dir /path/to/GNINA_project \
+  --output /path/to/post_docking_output
+
+# Explicit folder mode
+python -m post_docking_analysis.simplified_cli \
+  --sdf-folder /path/to/gnina_out \
+  --log-folder /path/to/logs \
+  --receptors-folder /path/to/receptors \
+  --output /path/to/post_docking_output \
+  --pairlist /path/to/pairlist.csv
+
+# Optional runtime switches
+# --no-rmsd
+# --no-visualizations
+# --ligplus-root /path/to/LigPlus
+```
+
+#### Legacy/Config Workflow
+
+```bash
 python -m post_docking_analysis -i /path/to/docking/results -o /path/to/output
-
-# With verbose output
-python -m post_docking_analysis -i /path/to/docking/results -o /path/to/output -v
-
-# Skip visualizations (faster processing)
-python -m post_docking_analysis -i /path/to/docking/results --no-visualizations
-
-# Use configuration file
-python -m post_docking_analysis --config my_config.json
+python -m post_docking_analysis --config my_config.yaml -i /path/to/docking/results
 ```
 
-#### Python API Usage
+#### Canonical Multi-Engine Workflow
 
-```python
-from post_docking_analysis.pipeline import PostDockingAnalysisPipeline
+```bash
+# Compare all engines in one canonical project
+python -m post_docking_analysis \
+  --project-dir /path/to/docking_project \
+  --analysis-mode comparative_all_engines \
+  -o /path/to/analysis_output
 
-# Initialize pipeline
-pipeline = PostDockingAnalysisPipeline(
-    input_dir="/path/to/docking/results",
-    output_dir="/path/to/output"
-)
-
-# Run complete analysis
-success = pipeline.run_pipeline()
-
-# Access results
-if success:
-    best_poses = pipeline.results['best_poses']
-    print(f"Best binding affinity: {best_poses['vina_affinity'].min():.2f} kcal/mol")
+# Continue downstream from one selected engine
+python -m post_docking_analysis \
+  --project-dir /path/to/docking_project \
+  --analysis-mode favorite_engine_continue \
+  --favorite-engine vina \
+  -o /path/to/analysis_output
 ```
 
-#### Expected Input Structure
+`favorite_engine_continue` behavior:
+- `gnina`: continues into the existing simplified structural workflow
+- `vina` / `smina`: continue into a unified structural bridge that reuses the simplified downstream stack where safe. It extracts best-pose complex PDBs, runs hierarchical affinity analysis, polypharmacology, general visualizations, PandaMap, report generation, structural quality, output consolidation, and PDB-based RMSD analysis under `rmsd_analysis/`. Per-protein and global best-pose RMSD always run when comparable complexes exist, and per-complex RMSD is added when multiple poses exist for the same tag. Bridge notes now report stage states explicitly such as `completed`, `disabled`, `missing_dependency`, and `missing_configuration`.
 
-The pipeline automatically detects and processes docking results in the following formats:
+#### Simplified Pipeline Input Layouts
 
+```text
+# Local layout
+project/
+├── gnina_out/        # SDF + log files
+├── receptors/
+└── pairlist.csv      # optional but recommended
+
+# HPC layout
+project/
+├── gnina_out/        # SDF files
+├── logs/             # log files
+├── receptors/
+└── pairlist.csv      # optional but recommended
 ```
-docking_results/
-├── complex_1/
-│   ├── ligand_vina_out.pdbqt    # Vina docking results
-│   ├── ligand.sdf               # Ligand structure
-│   └── complex_1.pdb            # Optional: receptor structure
-├── complex_2/
-│   ├── ligand_vina_out.pdbqt
-│   └── ligand.sdf
-└── receptors/                   # Optional: shared receptor files
-    └── receptor.pdbqt
-```
 
-#### Output Structure
+#### Visualization Kits (Simplified Pipeline)
 
-```
-output_directory/
-├── reports/                     # Analysis reports
-│   ├── best_poses.csv          # Best pose for each complex
-│   ├── full_data.csv           # All poses with scores
-│   ├── summary_stats.csv       # Statistical summaries
-│   ├── docking_analysis_results.xlsx  # Comprehensive Excel report
-│   └── summary_report.txt      # Human-readable summary
-├── visualizations/              # Generated plots
-│   ├── binding_affinity_distribution.png
-│   └── top_performers.png
-└── best_poses_pdb/             # Best poses as PDB files
-    ├── complex_1_pose1.pdb
-    ├── complex_2_pose1.pdb
-    └── ...
+1. Affinity overview plots (`matplotlib` / `seaborn`)
+2. Hierarchical analysis visualizations
+3. RMSD clustering/diversity visualizations
+4. PandaMap publication-quality 2D/3D maps
+5. py3Dmol interactive 3D HTML views
+6. ProLIF interaction maps
+7. LigPlot+ interaction diagrams
+
+#### Output Structure (Current)
+
+```text
+post_docking_output/
+├── analysis/                         # hierarchical analysis outputs
+├── complexes/                        # receptor+ligand PDB complexes
+├── best_poses/                       # categorized strongest poses
+├── reports/                          # tabular summaries
+├── rmsd_analysis/                    # scoped RMSD outputs
+│   ├── per_complex_all_poses/
+│   ├── per_protein_best_poses/
+│   └── global_best_poses/
+├── interactions/                     # canonical interaction outputs
+│   ├── pandamap/
+│   ├── prolif/
+│   ├── ligplot/
+│   └── poseview/
+├── 3d_visualizations/                # native py3Dmol outputs
+├── visualizations/                   # consolidated visual assets by type
+└── raw_data/                         # consolidated raw artifacts + manifest
+    ├── visualization_manifest.csv
+    └── visualization_manifest.json
 ```
 
 ## 📊 Output Files

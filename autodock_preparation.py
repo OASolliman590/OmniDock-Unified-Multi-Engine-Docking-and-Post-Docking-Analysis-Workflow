@@ -14,6 +14,21 @@ from dataclasses import dataclass
 import shutil
 import tempfile
 
+from docking.models import (
+    normalize_ligand_preparation_profile,
+    resolve_effective_ligand_preparation_profile,
+    validate_ligand_preparation_profile,
+)
+from docking.preparation.ligand_quality import validate_prepared_ligand_pdbqt
+from docking.preparation.ligand_preparation import prepare_ligand_for_vina_family
+
+
+def profile_requires_autodocktools(profile: str, selected_engines: Optional[List[str]] = None) -> bool:
+    effective = resolve_effective_ligand_preparation_profile(profile, selected_engines)
+    if effective in {"autodocktools_only", "openbabel_autodocktools", "openbabel_meeko_autodock"}:
+        return True
+    return False
+
 @dataclass
 class PreparationConfig:
     """Configuration for AutoDock preparation"""
@@ -25,14 +40,19 @@ class PreparationConfig:
     ph: float = 7.4
     allow_bad_res: bool = True
     default_altloc: str = "A"
-    plip_enabled: bool = True
-    plip_binding_site_detection: bool = True
+    receptor_use_pdb2pqr: bool = False
     validate_outputs: bool = True
     min_file_size_kb: int = 1
+    ligand_preparation_backend: str = "engine_aware_full"  # backward-compatible field
+    ligand_preparation_profile: str = "engine_aware_full"
+    selected_engines: List[str] = None
+    autodocktools_prepare_ligand4: str = ""
+    autodocktools_prepare_receptor4: str = ""
+    autodocktools_python: str = ""
 
 class AutoDockPreparationPipeline:
     """
-    Enhanced AutoDock preparation pipeline with PLIP integration
+    Enhanced AutoDock preparation pipeline.
     """
     
     def __init__(self, config: Optional[PreparationConfig] = None):
@@ -42,9 +62,127 @@ class AutoDockPreparationPipeline:
             ligands_output="./ligands_prep",
             receptors_output="./receptors_prep"
         )
+        if self.config.selected_engines is None:
+            self.config.selected_engines = []
+        # Keep legacy backend field in sync with the new profile field.
+        profile = str(self.config.ligand_preparation_profile or self.config.ligand_preparation_backend or "engine_aware_full").strip()
+        self.config.ligand_preparation_profile = profile
+        self.config.ligand_preparation_backend = profile
         self.logger = self._setup_logging()
         self.script_dir = Path(__file__).parent
         self.enhanced_script = self.script_dir / "prep_autodock_enhanced.sh"
+
+    def _tool_usable(self, tool: str) -> bool:
+        if not shutil.which(tool):
+            return False
+        if tool in {"mk_prepare_ligand.py", "mk_prepare_receptor.py"}:
+            completed = subprocess.run(
+                [tool, "--help"],
+                capture_output=True,
+                text=True,
+            )
+            return completed.returncode == 0
+        return True
+
+    def _resolve_autodocktools_prepare_ligand4(self) -> Optional[Path]:
+        candidates: List[Path] = []
+
+        script_hint = (self.config.autodocktools_prepare_ligand4 or "").strip()
+        if script_hint:
+            candidates.append(Path(script_hint).expanduser())
+
+        for env_key in ("AUTODOCKTOOLS_PREPARE_LIGAND4", "ADT_PREPARE_LIGAND4"):
+            env_value = str(os.environ.get(env_key, "") or "").strip()
+            if env_value:
+                candidates.append(Path(env_value).expanduser())
+
+        for command_name in ("prepare_ligand4.py", "prepare_ligand4"):
+            resolved = shutil.which(command_name)
+            if resolved:
+                candidates.append(Path(resolved).expanduser())
+
+        mgltools_root = str(os.environ.get("MGLTOOLS_PATH", "") or "").strip()
+        if mgltools_root:
+            candidates.append(Path(mgltools_root).expanduser() / "MGLToolsPckgs" / "AutoDockTools" / "Utilities24" / "prepare_ligand4.py")
+
+        candidates.extend(
+            [
+                self.script_dir / ".workflow" / "tools" / "autodocktools-prepare-py3k" / "AutoDockTools" / "Utilities24" / "prepare_ligand4.py",
+                self.script_dir / "tools" / "autodocktools-prepare-py3k" / "AutoDockTools" / "Utilities24" / "prepare_ligand4.py",
+                Path.home() / "mgltools_x86_64Linux2_1.5.7" / "MGLToolsPckgs" / "AutoDockTools" / "Utilities24" / "prepare_ligand4.py",
+                Path("/opt/mgltools/1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py"),
+                Path("/usr/local/MGLTools-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py"),
+            ]
+        )
+
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file():
+                return candidate.resolve()
+        return None
+
+    @staticmethod
+    def _derive_receptor_script_from_ligand_script(ligand_script: Optional[Path]) -> Optional[Path]:
+        if ligand_script is None:
+            return None
+        ligand_path = Path(ligand_script).expanduser()
+        receptor_candidate = ligand_path.with_name("prepare_receptor4.py")
+        if receptor_candidate.exists() and receptor_candidate.is_file():
+            return receptor_candidate.resolve()
+        return None
+
+    def _resolve_autodocktools_prepare_receptor4(self, ligand_script: Optional[Path] = None) -> Optional[Path]:
+        candidates: List[Path] = []
+
+        script_hint = (self.config.autodocktools_prepare_receptor4 or "").strip()
+        if script_hint:
+            candidates.append(Path(script_hint).expanduser())
+
+        for env_key in ("AUTODOCKTOOLS_PREPARE_RECEPTOR4", "ADT_PREPARE_RECEPTOR4"):
+            env_value = str(os.environ.get(env_key, "") or "").strip()
+            if env_value:
+                candidates.append(Path(env_value).expanduser())
+
+        if ligand_script is not None:
+            derived = self._derive_receptor_script_from_ligand_script(ligand_script)
+            if derived is not None:
+                candidates.append(derived)
+
+        configured_ligand_hint = (self.config.autodocktools_prepare_ligand4 or "").strip()
+        if configured_ligand_hint:
+            derived = self._derive_receptor_script_from_ligand_script(Path(configured_ligand_hint).expanduser())
+            if derived is not None:
+                candidates.append(derived)
+
+        for env_key in ("AUTODOCKTOOLS_PREPARE_LIGAND4", "ADT_PREPARE_LIGAND4"):
+            env_value = str(os.environ.get(env_key, "") or "").strip()
+            if env_value:
+                derived = self._derive_receptor_script_from_ligand_script(Path(env_value).expanduser())
+                if derived is not None:
+                    candidates.append(derived)
+
+        for command_name in ("prepare_receptor4.py", "prepare_receptor4"):
+            resolved = shutil.which(command_name)
+            if resolved:
+                candidates.append(Path(resolved).expanduser())
+
+        mgltools_root = str(os.environ.get("MGLTOOLS_PATH", "") or "").strip()
+        if mgltools_root:
+            candidates.append(Path(mgltools_root).expanduser() / "MGLToolsPckgs" / "AutoDockTools" / "Utilities24" / "prepare_receptor4.py")
+
+        candidates.extend(
+            [
+                self.script_dir / ".workflow" / "tools" / "autodocktools-prepare-py3k" / "AutoDockTools" / "Utilities24" / "prepare_receptor4.py",
+                self.script_dir / "tools" / "autodocktools-prepare-py3k" / "AutoDockTools" / "Utilities24" / "prepare_receptor4.py",
+                Path.home() / "mgltools_x86_64Linux2_1.5.7" / "MGLToolsPckgs" / "AutoDockTools" / "Utilities24" / "prepare_receptor4.py",
+                Path("/opt/mgltools/1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py"),
+                Path("/usr/local/MGLTools-1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_receptor4.py"),
+            ]
+        )
+
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file():
+                return candidate.resolve()
+        return None
         
     def _setup_logging(self) -> logging.Logger:
         """Setup logging for the preparation pipeline"""
@@ -75,7 +213,7 @@ class AutoDockPreparationPipeline:
             "input": {
                 "ligands": {
                     "path": self.config.ligands_input,
-                    "formats": ["sdf", "mol2", "pdb"],
+                    "formats": ["sdf", "mol", "mol2", "pdb"],
                     "in_same_folder": False
                 },
                 "receptors": {
@@ -93,12 +231,14 @@ class AutoDockPreparationPipeline:
                 "force_field": self.config.force_field,
                 "ph": self.config.ph,
                 "allow_bad_res": self.config.allow_bad_res,
-                "default_altloc": self.config.default_altloc
-            },
-            "plip": {
-                "enabled": self.config.plip_enabled,
-                "binding_site_detection": self.config.plip_binding_site_detection,
-                "interaction_analysis": True
+                "default_altloc": self.config.default_altloc,
+                "receptor_use_pdb2pqr": bool(self.config.receptor_use_pdb2pqr),
+                "ligand_preparation_backend": normalize_ligand_preparation_profile(self.config.ligand_preparation_profile or self.config.ligand_preparation_backend),
+                "ligand_preparation_profile": normalize_ligand_preparation_profile(self.config.ligand_preparation_profile or self.config.ligand_preparation_backend),
+                "selected_engines": [str(engine).strip().lower() for engine in (self.config.selected_engines or []) if str(engine).strip()],
+                "autodocktools_prepare_ligand4": self.config.autodocktools_prepare_ligand4,
+                "autodocktools_prepare_receptor4": self.config.autodocktools_prepare_receptor4,
+                "autodocktools_python": self.config.autodocktools_python,
             },
             "quality_control": {
                 "validate_outputs": self.config.validate_outputs,
@@ -120,22 +260,56 @@ class AutoDockPreparationPipeline:
         Returns:
             Tuple of (all_available, missing_dependencies)
         """
-        required_tools = [
-            "mk_prepare_ligand.py",
-            "mk_prepare_receptor.py", 
-            "pdb2pqr30",
-            "obabel"
-        ]
-        
+        required_tools = ["obabel", "jq"]
+        optional_tools = ["pdb2pqr30", "mk_prepare_ligand.py", "mk_prepare_receptor.py"]
+
         missing = []
         for tool in required_tools:
             if not shutil.which(tool):
                 missing.append(tool)
-                
+
         if missing:
             self.logger.error(f"Missing dependencies: {missing}")
             return False, missing
-            
+
+        missing_optional = [tool for tool in optional_tools if not self._tool_usable(tool)]
+        if missing_optional:
+            self.logger.warning(
+                "Optional preparation tools missing; shell fallback paths will be used where possible: %s",
+                ", ".join(missing_optional),
+            )
+
+        profile = normalize_ligand_preparation_profile(
+            self.config.ligand_preparation_profile or self.config.ligand_preparation_backend
+        )
+        self.config.ligand_preparation_profile = profile
+        self.config.ligand_preparation_backend = profile
+        compatibility = validate_ligand_preparation_profile(profile, self.config.selected_engines)
+        for warning in compatibility.warnings:
+            self.logger.warning(warning)
+        if not compatibility.is_valid:
+            missing.extend(compatibility.errors)
+            self.logger.error(
+                "Invalid ligand preparation profile/engine combination: %s",
+                "; ".join(compatibility.errors),
+            )
+            return False, missing
+
+        if profile_requires_autodocktools(profile, self.config.selected_engines):
+            resolved_script = self._resolve_autodocktools_prepare_ligand4()
+            if resolved_script is None:
+                script_hint = (self.config.autodocktools_prepare_ligand4 or "").strip()
+                if script_hint:
+                    missing.append(f"prepare_ligand4.py@{script_hint}")
+                else:
+                    missing.append("prepare_ligand4.py")
+            else:
+                self.config.autodocktools_prepare_ligand4 = str(resolved_script)
+                self.logger.info("AutoDockTools script resolved: %s", resolved_script)
+            if missing:
+                self.logger.error("Ligand preparation profile '%s' requires AutoDockTools but dependencies are missing: %s", profile, missing)
+                return False, missing
+
         self.logger.info("All required dependencies found")
         return True, []
     
@@ -184,33 +358,12 @@ class AutoDockPreparationPipeline:
             )
             
             if ligand_pdb:
-                # Convert PDB to PDBQT
                 base_name = Path(ligand_pdb).stem
                 pdbqt_file = Path(output_dir) / f"{base_name}.pdbqt"
-                
-                # Use obabel to convert PDB to SDF first, then to PDBQT
-                sdf_file = Path(output_dir) / f"{base_name}_temp.sdf"
-                
-                try:
-                    # PDB → SDF (with explicit hydrogens)
-                    subprocess.run([
-                        "obabel", ligand_pdb, "-O", str(sdf_file), "-h"
-                    ], check=True, capture_output=True)
-                    
-                    # SDF → PDBQT
-                    subprocess.run([
-                        "mk_prepare_ligand.py", "-i", str(sdf_file), "-o", str(pdbqt_file)
-                    ], check=True, capture_output=True)
-                    
-                    # Clean up intermediate file
-                    sdf_file.unlink()
-                    
-                except subprocess.CalledProcessError as e:
-                    # Clean up intermediate file if it exists
-                    if sdf_file.exists():
-                        sdf_file.unlink()
-                    raise e
-                
+
+                # Meeko expects explicit hydrogens and 3D coordinates, so
+                # normalize the extracted ligand before PDBQT conversion.
+                prepare_ligand_for_vina_family(Path(ligand_pdb), pdbqt_file)
                 self.logger.info(f"Prepared ligand: {pdbqt_file}")
                 return str(pdbqt_file)
                 
@@ -238,35 +391,101 @@ class AutoDockPreparationPipeline:
         try:
             # Make script executable
             os.chmod(self.enhanced_script, 0o755)
-            
-            # Run the enhanced script
-            result = subprocess.run([
-                str(self.enhanced_script), config_path
-            ], capture_output=True, text=True)
-            
-            if result.returncode == 0:
+
+            env = dict(os.environ)
+            profile = normalize_ligand_preparation_profile(
+                self.config.ligand_preparation_profile or self.config.ligand_preparation_backend
+            )
+            env["PDBWIZARD_LIGAND_PREP_BACKEND"] = profile
+            env["PDBWIZARD_LIGAND_PREP_PROFILE"] = profile
+            env["PDBWIZARD_LIGAND_PREP_PH"] = str(self.config.ph)
+            if self.config.selected_engines:
+                env["PDBWIZARD_SELECTED_ENGINES"] = ",".join(
+                    str(engine).strip().lower()
+                    for engine in self.config.selected_engines
+                    if str(engine).strip()
+                )
+            if self.config.autodocktools_prepare_ligand4:
+                env["AUTODOCKTOOLS_PREPARE_LIGAND4"] = str(Path(self.config.autodocktools_prepare_ligand4).expanduser())
+            if self.config.autodocktools_prepare_receptor4:
+                env["AUTODOCKTOOLS_PREPARE_RECEPTOR4"] = str(Path(self.config.autodocktools_prepare_receptor4).expanduser())
+            if self.config.autodocktools_python:
+                env["AUTODOCKTOOLS_PYTHON"] = str(Path(self.config.autodocktools_python).expanduser())
+
+            # Run the enhanced script and stream logs in real-time so long
+            # preparations do not appear stuck in interactive mode.
+            command = [str(self.enhanced_script), config_path]
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+                bufsize=1,
+            )
+            streamed_lines: List[str] = []
+            if process.stdout is not None:
+                for line in process.stdout:
+                    clean_line = line.rstrip()
+                    streamed_lines.append(clean_line)
+                    if clean_line:
+                        self.logger.info(clean_line)
+            return_code = process.wait()
+
+            if return_code == 0:
+                invalid_ligands = []
+                ligands_output = Path(self.config.ligands_output).expanduser().resolve()
+                if ligands_output.exists():
+                    for ligand_file in sorted(ligands_output.glob("*.pdbqt")):
+                        issues = validate_prepared_ligand_pdbqt(ligand_file)
+                        if issues:
+                            invalid_ligands.append(
+                                {
+                                    "ligand": ligand_file.name,
+                                    "issues": [issue.to_dict() for issue in issues],
+                                }
+                            )
+                if invalid_ligands:
+                    report_path = ligands_output / "ligand_preparation_validation_report.json"
+                    with open(report_path, "w", encoding="utf-8") as handle:
+                        json.dump({"ligands_output": str(ligands_output), "invalid_ligands": invalid_ligands}, handle, indent=2)
+                    self.logger.error(
+                        "Prepared ligand validation failed. Invalid AutoDock-ready outputs were generated: %s",
+                        ", ".join(item["ligand"] for item in invalid_ligands),
+                    )
+                    self.logger.error("Validation report saved to: %s", report_path)
+                    return False
                 self.logger.info("AutoDock preparation completed successfully")
-                self.logger.info(f"Output: {result.stdout}")
+                self.logger.info("Ligands output directory: %s", ligands_output)
+                self.logger.info("Receptors output directory: %s", Path(self.config.receptors_output).expanduser().resolve())
                 return True
             else:
-                self.logger.error(f"Preparation failed: {result.stderr}")
+                self.logger.error("Preparation failed with exit code %s", return_code)
+                if streamed_lines:
+                    self.logger.error("Last preparation log line: %s", streamed_lines[-1])
                 return False
                 
         except Exception as e:
             self.logger.error(f"Failed to run preparation script: {e}")
             return False
     
-    def analyze_preparation_results(self, output_dir: str) -> Dict:
+    def analyze_preparation_results(
+        self,
+        ligands_output_dir: Optional[str] = None,
+        receptors_output_dir: Optional[str] = None,
+    ) -> Dict:
         """
         Analyze the results of AutoDock preparation
         
         Args:
-            output_dir: Directory containing prepared files
+            ligands_output_dir: Directory containing prepared ligand PDBQT files
+            receptors_output_dir: Directory containing prepared receptor PDBQT files
             
         Returns:
             Dictionary with analysis results
         """
-        output_path = Path(output_dir)
+        ligands_path = Path(ligands_output_dir or self.config.ligands_output).expanduser().resolve()
+        receptors_path = Path(receptors_output_dir or self.config.receptors_output).expanduser().resolve()
         
         results = {
             "ligands": {
@@ -279,29 +498,23 @@ class AutoDockPreparationPipeline:
                 "files": [],
                 "total_size_mb": 0
             },
-            "plip_analysis": {
-                "available": False,
-                "reports": []
+            "paths": {
+                "ligands_output": str(ligands_path),
+                "receptors_output": str(receptors_path),
             }
         }
         
-        # Analyze ligands
-        ligand_files = list(output_path.glob("*.pdbqt"))
+        # Analyze ligands from ligand output directory
+        ligand_files = list(ligands_path.glob("*.pdbqt")) if ligands_path.exists() else []
         results["ligands"]["count"] = len(ligand_files)
         results["ligands"]["files"] = [str(f) for f in ligand_files]
         results["ligands"]["total_size_mb"] = sum(f.stat().st_size for f in ligand_files) / (1024 * 1024)
         
-        # Analyze receptors
-        receptor_files = list(output_path.glob("*.pdbqt"))
+        # Analyze receptors from receptor output directory
+        receptor_files = list(receptors_path.glob("*.pdbqt")) if receptors_path.exists() else []
         results["receptors"]["count"] = len(receptor_files)
         results["receptors"]["files"] = [str(f) for f in receptor_files]
         results["receptors"]["total_size_mb"] = sum(f.stat().st_size for f in receptor_files) / (1024 * 1024)
-        
-        # Check for PLIP analysis
-        plip_dirs = list(output_path.glob("*/plip_analysis"))
-        if plip_dirs:
-            results["plip_analysis"]["available"] = True
-            results["plip_analysis"]["reports"] = [str(d / "report.txt") for d in plip_dirs if (d / "report.txt").exists()]
         
         return results
     
@@ -319,7 +532,9 @@ class AutoDockPreparationPipeline:
                 "config": {
                     "force_field": self.config.force_field,
                     "ph": self.config.ph,
-                    "plip_enabled": self.config.plip_enabled
+                    "ligand_preparation_profile": normalize_ligand_preparation_profile(
+                        self.config.ligand_preparation_profile or self.config.ligand_preparation_backend
+                    ),
                 },
                 "results": results
             },
@@ -341,9 +556,6 @@ class AutoDockPreparationPipeline:
         if results["receptors"]["count"] == 0:
             recommendations.append("No receptors were prepared. Check input directory and file formats.")
         
-        if not results["plip_analysis"]["available"] and self.config.plip_enabled:
-            recommendations.append("PLIP analysis was not performed. Check PLIP installation.")
-        
         if results["ligands"]["count"] > 0 and results["receptors"]["count"] > 0:
             recommendations.append("Ready for AutoDock Vina docking. Use the prepared PDBQT files.")
         
@@ -362,7 +574,16 @@ def main():
     parser.add_argument("--receptors-output", help="Output directory for prepared receptors")
     parser.add_argument("--force-field", default="AMBER", help="Force field for PDB2PQR")
     parser.add_argument("--ph", type=float, default=7.4, help="pH for protonation")
-    parser.add_argument("--no-plip", action="store_true", help="Disable PLIP analysis")
+    parser.add_argument(
+        "--ligand-profile",
+        default="engine_aware_full",
+        help=(
+            "Ligand preparation profile: "
+            "openbabel_only, meeko_only, autodocktools_only, openbabel_meeko, "
+            "openbabel_meeko_autodock, openbabel_autodocktools, engine_aware_full"
+        ),
+    )
+    parser.add_argument("--selected-engines", default="", help="Comma-separated engines for engine-aware profile")
     parser.add_argument("--create-config", action="store_true", help="Create configuration file and exit")
     
     args = parser.parse_args()
@@ -385,7 +606,9 @@ def main():
         receptors_output=args.receptors_output or "./receptors_prep",
         force_field=args.force_field,
         ph=args.ph,
-        plip_enabled=not args.no_plip
+        ligand_preparation_profile=normalize_ligand_preparation_profile(args.ligand_profile),
+        ligand_preparation_backend=normalize_ligand_preparation_profile(args.ligand_profile),
+        selected_engines=[token.strip().lower() for token in str(args.selected_engines or "").split(",") if token.strip()],
     )
     
     # Initialize pipeline
@@ -407,14 +630,15 @@ def main():
     
     if success:
         # Analyze results
-        results = pipeline.analyze_preparation_results(config.receptors_output)
+        results = pipeline.analyze_preparation_results(
+            ligands_output_dir=config.ligands_output,
+            receptors_output_dir=config.receptors_output,
+        )
         pipeline.generate_preparation_report(results)
         
         print("Preparation completed successfully!")
         print(f"Ligands prepared: {results['ligands']['count']}")
         print(f"Receptors prepared: {results['receptors']['count']}")
-        if results['plip_analysis']['available']:
-            print(f"PLIP analysis reports: {len(results['plip_analysis']['reports'])}")
         
         return 0
     else:

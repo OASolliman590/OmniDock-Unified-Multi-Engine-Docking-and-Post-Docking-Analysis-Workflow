@@ -169,7 +169,8 @@ class Py3DmolVisualizer:
             view = py3Dmol.view(width=self.width, height=self.height)
             
             # Add receptor model
-            view.addModel(receptor_content, 'pdb')
+            receptor_format = 'pdbqt' if receptor_pdb.suffix.lower() == '.pdbqt' else 'pdb'
+            view.addModel(receptor_content, receptor_format)
             
             # Style protein (default: cartoon with spectrum coloring)
             if style_protein is None:
@@ -288,6 +289,10 @@ def visualize_all_complexes(
     Dict[str, Path]
         Dictionary mapping complex names to HTML file paths
     """
+    if not PY3DMOL_AVAILABLE:
+        logger.warning("py3Dmol not available - skipping 3D visualization generation")
+        return {}
+
     visualizer = Py3DmolVisualizer(width=width, height=height)
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -333,6 +338,10 @@ def visualize_ligands_by_protein(
     Dict[str, Path]
         Dictionary mapping protein names to HTML file paths
     """
+    if not PY3DMOL_AVAILABLE:
+        logger.warning("py3Dmol not available - skipping aggregated 3D visualizations")
+        return {}
+
     visualizer = Py3DmolVisualizer(width=width, height=height)
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -361,11 +370,14 @@ def visualize_ligands_by_protein(
             logger.warning(f"Receptor file not found for {protein}")
             continue
         
-        # Convert receptor PDBQT to PDB (simplified - would need OpenBabel)
-        # For now, look for receptor PDB file
+        # Prefer PDB receptor if present; fallback to original PDBQT.
         receptor_pdb = receptors_dir / f"{protein}_cleaned.pdb"
-        if not receptor_pdb.exists():
-            logger.warning(f"Receptor PDB file not found: {receptor_pdb}")
+        if receptor_pdb.exists():
+            receptor_model = receptor_pdb
+        elif receptor_file is not None and receptor_file.exists():
+            receptor_model = receptor_file
+        else:
+            logger.warning(f"Receptor structure file not found for {protein}")
             continue
         
         # Get ligand PDB files from complexes
@@ -388,7 +400,7 @@ def visualize_ligands_by_protein(
         # Create aggregated visualization
         output_html = output_dir / f"{protein}_all_ligands_3d.html"
         if visualizer.visualize_multiple_ligands_same_protein(
-            receptor_pdb,
+            receptor_model,
             ligand_pdbs,
             ligand_names,
             output_html
@@ -396,4 +408,3 @@ def visualize_ligands_by_protein(
             created_files[protein] = output_html
     
     return created_files
-

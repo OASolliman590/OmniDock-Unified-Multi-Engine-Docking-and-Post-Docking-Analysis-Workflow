@@ -19,18 +19,49 @@ import logging
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+try:
+    from .ligand_naming import resolve_ligand_display_name
+    from .protein_naming import resolve_protein_display_name, format_protein_label
+except ImportError:
+    from ligand_naming import resolve_ligand_display_name
+    from protein_naming import resolve_protein_display_name, format_protein_label
+
 logger = logging.getLogger(__name__)
 
 
 def load_pairlist(pairlist_file: str) -> pd.DataFrame:
     """Load pairlist.csv and extract protein/ligand names."""
-    df = pd.read_csv(pairlist_file)
+    pairlist_path = Path(pairlist_file)
+    df = pd.read_csv(pairlist_path)
+    pair_intent_file = pairlist_path.parent / "metadata" / "pair_intent.csv"
+    if pair_intent_file.exists():
+        try:
+            pair_intent_df = pd.read_csv(pair_intent_file)
+            required = {"receptor", "site_id", "ligand"}
+            if required.issubset(pair_intent_df.columns):
+                df = pair_intent_df
+        except Exception:
+            pass
     
-    # Extract protein name from receptor (e.g., "Caspas3_3H0E_cleaned.pdbqt" -> "Caspas3")
-    df['protein'] = df['receptor'].apply(lambda x: x.split('_')[0])
+    # Prefer persisted project metadata when available.
+    default_protein = df['receptor'].apply(lambda x: x.split('_')[0])
+    if 'protein_display_name' in df.columns:
+        df['protein'] = df['protein_display_name'].fillna('').astype(str).where(
+            df['protein_display_name'].fillna('').astype(str).str.strip() != '',
+            default_protein,
+        )
+    else:
+        df['protein'] = default_protein
     
     # Extract ligand name (remove .pdbqt extension)
     df['ligand_name'] = df['ligand'].apply(lambda x: x.replace('.pdbqt', ''))
+    if 'ligand_display_name' not in df.columns:
+        df['ligand_display_name'] = df['ligand'].apply(lambda x: resolve_ligand_display_name(str(x)))
+    else:
+        df['ligand_display_name'] = df['ligand_display_name'].fillna('').astype(str).where(
+            df['ligand_display_name'].fillna('').astype(str).str.strip() != '',
+            df['ligand'].apply(lambda x: resolve_ligand_display_name(str(x))),
+        )
     
     # Create unique tag (matches log filename pattern)
     df['tag'] = df['receptor'] + '_' + df['site_id'] + '_' + df['ligand']
@@ -65,8 +96,12 @@ def parse_scores_with_pairlist(scores_csv: str, pairlist_file: str) -> pd.DataFr
             'protein': row['protein'],
             'site_id': row['site_id'],
             'ligand': row['ligand_name'],
+            'ligand_display_name': row.get('ligand_display_name', row['ligand_name']),
             'receptor': row['receptor']
         }
+        for optional in ('is_cocrystal_benchmark', 'pair_source', 'selection_mode', 'cocrystal_ligand_name'):
+            if optional in row:
+                tag_mapping[tag_pattern][optional] = row.get(optional)
     
     # Map each score to its protein/ligand
     def map_tag(tag):
@@ -90,6 +125,7 @@ def parse_scores_with_pairlist(scores_csv: str, pairlist_file: str) -> pd.DataFr
             'protein': parts[0] if parts else 'Unknown',
             'site_id': 'Unknown',
             'ligand': parts[-1] if parts else 'Unknown',
+            'ligand_display_name': resolve_ligand_display_name(parts[-1] if parts else 'Unknown'),
             'receptor': 'Unknown'
         }
     
@@ -98,7 +134,10 @@ def parse_scores_with_pairlist(scores_csv: str, pairlist_file: str) -> pd.DataFr
     scores_df['protein'] = mapping_results.apply(lambda x: x['protein'])
     scores_df['site_id'] = mapping_results.apply(lambda x: x['site_id'])
     scores_df['ligand'] = mapping_results.apply(lambda x: x['ligand'])
+    scores_df['ligand_display_name'] = mapping_results.apply(lambda x: x.get('ligand_display_name', x['ligand']))
     scores_df['receptor'] = mapping_results.apply(lambda x: x['receptor'])
+    for optional in ('is_cocrystal_benchmark', 'pair_source', 'selection_mode', 'cocrystal_ligand_name'):
+        scores_df[optional] = mapping_results.apply(lambda x: x.get(optional))
     
     # Rename mode to pose for clarity
     if 'mode' in scores_df.columns:
@@ -118,13 +157,34 @@ class HierarchicalDockingAnalyzer:
           - Poses (typically 10 per ligand-protein pair)
     """
     
-    def __init__(self, scores_csv: str, pairlist_file: str, output_dir: str):
+    def __init__(
+        self,
+        scores_csv: str,
+        pairlist_file: str,
+        output_dir: str,
+        protein_name_map: Optional[Dict[str, Dict[str, str]]] = None
+    ):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.protein_name_map = protein_name_map or {}
         
         # Load and enrich data
         logger.info("📊 Loading docking results with pairlist mapping...")
         self.df = parse_scores_with_pairlist(scores_csv, pairlist_file)
+        self.df['protein_display'] = self.df.apply(
+            lambda row: resolve_protein_display_name(
+                str(row.get('receptor') or row.get('protein') or ""),
+                self.protein_name_map
+            ),
+            axis=1
+        )
+        self.df['protein_label'] = self.df.apply(
+            lambda row: format_protein_label(
+                str(row.get('receptor') or row.get('protein') or ""),
+                self.protein_name_map
+            ),
+            axis=1
+        )
         
         # Summary
         self.proteins = sorted(self.df['protein'].unique())
@@ -193,24 +253,29 @@ class HierarchicalDockingAnalyzer:
             top3 = best_per_ligand.head(3)
             logger.info(f"   {protein}:")
             for _, row in top3.iterrows():
-                logger.info(f"      {row['ligand']}: {row['vina_affinity']:.2f} kcal/mol")
+                logger.info(f"      {row.get('ligand_display_name', row['ligand'])}: {row['vina_affinity']:.2f} kcal/mol")
         
         return results
     
     def _analyze_cross_protein(self) -> pd.DataFrame:
         """Compare same ligands across different proteins."""
         logger.info("\n🔄 Level 3: Cross-Protein Comparison")
-        
-        # Only use Series ligands (common across all proteins)
-        series_data = self.df[self.df['site_id'] == 'Series'].copy()
-        
-        if series_data.empty:
-            logger.warning("   No Series ligands found for cross-protein comparison")
+
+        cross_data = self.df.copy()
+        if 'is_cocrystal_benchmark' in cross_data.columns:
+            cross_data = cross_data[~cross_data['is_cocrystal_benchmark'].fillna(False).astype(bool)].copy()
+
+        ligand_counts = cross_data.groupby('ligand')['protein'].nunique()
+        shared_ligands = ligand_counts[ligand_counts >= 2].index.tolist()
+        cross_data = cross_data[cross_data['ligand'].isin(shared_ligands)].copy()
+
+        if cross_data.empty:
+            logger.warning("   No shared non-reference ligands found for cross-protein comparison")
             return pd.DataFrame()
-        
+
         # Get best pose per protein-ligand pair
-        best_poses = series_data.loc[
-            series_data.groupby(['protein', 'ligand'])['vina_affinity'].idxmin()
+        best_poses = cross_data.loc[
+            cross_data.groupby(['protein', 'ligand'])['vina_affinity'].idxmin()
         ]
         
         # Pivot to create protein × ligand matrix
@@ -239,12 +304,17 @@ class HierarchicalDockingAnalyzer:
     def _analyze_comparative(self) -> pd.DataFrame:
         """Analyze comparative/redocking results."""
         logger.info("\n📊 Level 4: Comparative (Redocking) Analysis")
-        
-        # Get Comparative ligands
-        comp_data = self.df[self.df['site_id'] == 'Compartive'].copy()
+
+        comp_mask = pd.Series(False, index=self.df.index)
+        if 'is_cocrystal_benchmark' in self.df.columns:
+            comp_mask |= self.df['is_cocrystal_benchmark'].fillna(False).astype(bool)
+        comp_mask |= self.df['site_id'].astype(str).str.lower().isin(
+            {'comparative', 'compartive', 'reference', 'redocking', 'native'}
+        )
+        comp_data = self.df[comp_mask].copy()
         
         if comp_data.empty:
-            logger.warning("   No Comparative ligands found")
+            logger.warning("   No comparative/reference benchmark ligands found")
             return pd.DataFrame()
         
         # Best pose per comparative ligand
@@ -316,21 +386,52 @@ class HierarchicalDockingAnalyzer:
         self._plot_comparative_results(viz_dir)
         
         logger.info(f"   Visualizations saved to {viz_dir}")
+
+    def _protein_label_from_row(self, row: pd.Series) -> str:
+        source = str(row.get("receptor") or row.get("protein") or "")
+        return format_protein_label(source, self.protein_name_map)
     
     def _plot_affinity_by_protein(self, viz_dir: Path):
-        """Box plot of affinities by protein."""
+        """Clustered affinity distribution by protein with best-pose highlights."""
         fig, ax = plt.subplots(figsize=(12, 6))
         
         # Only best poses per ligand
         best_poses = self.df.loc[
             self.df.groupby(['protein', 'ligand'])['vina_affinity'].idxmin()
         ]
-        
-        sns.boxplot(data=best_poses, x='protein', y='vina_affinity', ax=ax)
+        best_poses = best_poses.copy()
+        best_poses['protein_label'] = best_poses.apply(self._protein_label_from_row, axis=1)
+        best_poses['ligand_plot_label'] = best_poses['ligand_display_name'].fillna(best_poses['ligand'])
+
+        sns.boxplot(data=best_poses, x='protein_label', y='vina_affinity', ax=ax, color='lightsteelblue')
+        sns.stripplot(
+            data=best_poses,
+            x='protein_label',
+            y='vina_affinity',
+            ax=ax,
+            color='black',
+            alpha=0.55,
+            jitter=0.22,
+            size=4,
+        )
+        best_rows = best_poses.loc[best_poses.groupby('protein_label')['vina_affinity'].idxmin()]
+        for _, row in best_rows.iterrows():
+            xpos = list(best_poses['protein_label'].unique()).index(row['protein_label'])
+            ax.scatter(xpos, row['vina_affinity'], s=130, marker='*', color='gold', edgecolor='black', zorder=6)
+            ax.text(
+                xpos + 0.05,
+                row['vina_affinity'] + 0.18,
+                str(row.get('ligand_display_name', row.get('ligand', ''))),
+                fontsize=8,
+                ha='left',
+                va='bottom'
+            )
+
         ax.set_xlabel('Protein Target')
         ax.set_ylabel('Vina Affinity (kcal/mol)')
-        ax.set_title('Binding Affinity Distribution by Protein')
+        ax.set_title('Binding Affinity Clusters by Protein (Best Ligand Highlighted)')
         ax.axhline(y=-7.0, color='r', linestyle='--', alpha=0.5, label='Strong binding (-7)')
+        ax.axhline(y=0.0, color='darkorange', linestyle=':', alpha=0.9, label='Unfavorable (>0)')
         ax.legend()
         plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
@@ -349,11 +450,13 @@ class HierarchicalDockingAnalyzer:
         best_poses = series_data.loc[
             series_data.groupby(['protein', 'ligand'])['vina_affinity'].idxmin()
         ]
+        best_poses = best_poses.copy()
+        best_poses['protein_label'] = best_poses.apply(self._protein_label_from_row, axis=1)
         
         # Create pivot
         pivot = best_poses.pivot_table(
-            index='ligand',
-            columns='protein',
+            index='ligand_plot_label',
+            columns='protein_label',
             values='vina_affinity',
             aggfunc='first'
         )
@@ -388,9 +491,13 @@ class HierarchicalDockingAnalyzer:
             protein_data = self.df[self.df['protein'] == protein]
             best_idx = protein_data['vina_affinity'].idxmin()
             best_row = protein_data.loc[best_idx]
+            protein_display = format_protein_label(
+                str(best_row.get('receptor') or protein),
+                self.protein_name_map
+            )
             best_per_protein.append({
-                'protein': protein,
-                'ligand': best_row['ligand'],
+                'protein': protein_display,
+                'ligand': best_row.get('ligand_display_name', best_row['ligand']),
                 'affinity': best_row['vina_affinity']
             })
         
@@ -405,8 +512,9 @@ class HierarchicalDockingAnalyzer:
             ax.text(row['affinity'] + 0.1, i, row['ligand'], va='center', fontsize=9)
         
         ax.set_xlabel('Vina Affinity (kcal/mol)')
-        ax.set_title('Best Ligand per Protein Target')
+        ax.set_title('Top Performer per Protein Target')
         ax.axvline(x=-7.0, color='r', linestyle='--', alpha=0.5, label='Strong binding')
+        ax.axvline(x=0.0, color='darkorange', linestyle=':', alpha=0.8, label='Unfavorable (>0)')
         plt.tight_layout()
         plt.savefig(viz_dir / 'best_ligand_per_protein.png', dpi=300)
         plt.close()
@@ -422,6 +530,8 @@ class HierarchicalDockingAnalyzer:
         best_poses = series_data.loc[
             series_data.groupby(['protein', 'ligand'])['vina_affinity'].idxmin()
         ]
+        best_poses = best_poses.copy()
+        best_poses['protein_label'] = best_poses.apply(self._protein_label_from_row, axis=1)
         
         # Get top 5 ligands (by mean affinity)
         ligand_means = best_poses.groupby('ligand')['vina_affinity'].mean().sort_values()
@@ -431,8 +541,8 @@ class HierarchicalDockingAnalyzer:
         
         for ligand in top_ligands:
             ligand_data = best_poses[best_poses['ligand'] == ligand]
-            ligand_data = ligand_data.sort_values('protein')
-            ax.plot(ligand_data['protein'], ligand_data['vina_affinity'], 
+            ligand_data = ligand_data.sort_values('protein_label')
+            ax.plot(ligand_data['protein_label'], ligand_data['vina_affinity'], 
                    marker='o', linewidth=2, markersize=8, label=ligand)
         
         ax.set_xlabel('Protein Target')
@@ -447,7 +557,9 @@ class HierarchicalDockingAnalyzer:
     
     def _plot_comparative_results(self, viz_dir: Path):
         """Bar chart of comparative/redocking results."""
-        comp_data = self.df[self.df['site_id'] == 'Compartive'].copy()
+        comp_data = self.df[
+            self.df['site_id'].astype(str).str.lower().isin({'comparative', 'compartive'})
+        ].copy()
         
         if comp_data.empty:
             return
@@ -456,10 +568,12 @@ class HierarchicalDockingAnalyzer:
         best_comp = comp_data.loc[
             comp_data.groupby(['protein', 'ligand'])['vina_affinity'].idxmin()
         ]
+        best_comp = best_comp.copy()
+        best_comp['protein_label'] = best_comp.apply(self._protein_label_from_row, axis=1)
         
         fig, ax = plt.subplots(figsize=(10, 6))
         
-        x_labels = best_comp['protein'] + '\n(' + best_comp['ligand'].str[:15] + ')'
+        x_labels = best_comp['protein_label'] + '\n(' + best_comp['ligand'].str[:15] + ')'
         bars = ax.bar(range(len(best_comp)), best_comp['vina_affinity'], 
                      color=sns.color_palette("husl", len(best_comp)))
         
@@ -496,8 +610,9 @@ class HierarchicalDockingAnalyzer:
             protein_data = self.df[self.df['protein'] == protein]
             best_idx = protein_data['vina_affinity'].idxmin()
             best_row = protein_data.loc[best_idx]
+            protein_display = resolve_protein_display_name(protein, self.protein_name_map)
             report_lines.append(
-                f"{protein:15} → {best_row['ligand']:15} ({best_row['vina_affinity']:.2f} kcal/mol)"
+                f"{protein_display:15} → {best_row['ligand']:15} ({best_row['vina_affinity']:.2f} kcal/mol)"
             )
         report_lines.append("")
         
@@ -516,7 +631,9 @@ class HierarchicalDockingAnalyzer:
             report_lines.append("")
         
         # Comparative results
-        comp_data = self.df[self.df['site_id'] == 'Compartive']
+        comp_data = self.df[
+            self.df['site_id'].astype(str).str.lower().isin({'comparative', 'compartive'})
+        ]
         if not comp_data.empty:
             report_lines.append("📊 COMPARATIVE (REDOCKING) RESULTS")
             report_lines.append("-" * 40)
@@ -524,8 +641,9 @@ class HierarchicalDockingAnalyzer:
                 comp_data.groupby(['protein', 'ligand'])['vina_affinity'].idxmin()
             ]
             for _, row in best_comp.iterrows():
+                protein_display = resolve_protein_display_name(row['protein'], self.protein_name_map)
                 report_lines.append(
-                    f"{row['protein']:15} : {row['ligand'][:20]:20} = {row['vina_affinity']:.2f} kcal/mol"
+                    f"{protein_display:15} : {row['ligand'][:20]:20} = {row['vina_affinity']:.2f} kcal/mol"
                 )
         
         report_lines.append("")
@@ -543,7 +661,8 @@ class HierarchicalDockingAnalyzer:
 def run_hierarchical_analysis(
     scores_csv: str,
     pairlist_file: str,
-    output_dir: str
+    output_dir: str,
+    protein_name_map: Optional[Dict[str, Dict[str, str]]] = None
 ) -> Dict:
     """
     Run complete hierarchical docking analysis.
@@ -562,7 +681,12 @@ def run_hierarchical_analysis(
     dict
         Analysis results
     """
-    analyzer = HierarchicalDockingAnalyzer(scores_csv, pairlist_file, output_dir)
+    analyzer = HierarchicalDockingAnalyzer(
+        scores_csv,
+        pairlist_file,
+        output_dir,
+        protein_name_map=protein_name_map
+    )
     results = analyzer.analyze_all()
     analyzer.create_visualizations()
     report = analyzer.generate_report()
@@ -580,4 +704,3 @@ if __name__ == "__main__":
         sys.exit(1)
     
     run_hierarchical_analysis(sys.argv[1], sys.argv[2], sys.argv[3])
-
