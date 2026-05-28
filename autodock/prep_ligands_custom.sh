@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Your specific directories
-RAW_LIG="/Users/omara.soliman/Desktop/Research/42-Omnia's compounds/1-Compounds/3-Preperation/1-Raw_Ligand"
-OUT_LIG="/Users/omara.soliman/Desktop/Research/42-Omnia's compounds/1-Compounds/3-Preperation/2-Prepared_Ligands"
+# Configurable directories (override with env vars).
+# Example:
+#   RAW_LIG=/path/to/raw_ligands OUT_LIG=/path/to/prepared_ligands ./prep_ligands_custom.sh
+RAW_LIG="${RAW_LIG:-./1-Raw_Ligand}"
+OUT_LIG="${OUT_LIG:-./2-Prepared_Ligands}"
 mkdir -p "$OUT_LIG"
 
 shopt -s nullglob
@@ -54,4 +56,3 @@ done
 
 echo -e "\n✅  Finished."
 echo "Ligands prepared: $(ls -1q $OUT_LIG/*.pdbqt 2>/dev/null | wc -l)"
-

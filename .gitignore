@@ -56,6 +56,28 @@ pipeline_output/
 temp/
 tmp/
 test_output/
+.codex/
+.workflow/
+.ligplot_tmp/
+.ligplot_tmp2/
+poseview_verification/
+LIGPLOT_PARSED_SUMMARY.json
+latest_run.txt
+preparation_report.json
+hpc_manual_transfer/
+.specify/
+AGENTS.md
+STATUS.md
+closing_thesis/run_manifest*.json
+closing_thesis/*manifest*.json
+
+# Generated staged docking project runtime/data roots
+1-Raw_Ligand/
+1-Raw_Ligand_SDF/
+2-Raw_Protien/
+3-Preparation/
+4-Docking/
+5-Post_Docking_Analysis/
 
 # AutoDock preparation logs
 autodock_prep_*.log

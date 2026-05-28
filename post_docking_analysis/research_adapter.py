@@ -4,12 +4,15 @@ Research-specific adapter for post-docking analysis pipeline.
 This module handles the specific directory structure and naming conventions
 used in the research project.
 """
+import os
 from pathlib import Path
 import re
 from typing import List, Dict
 
 # Research-specific constants
-RESEARCH_BASE_PATH = Path("/Users/omara.soliman/Desktop/Research/25- From Antiretroviral to Antibacterial Deep-Learning-Accelerated Repurposing and In Vitro Validation of Efavirenz Against Gram-Positive Bacteria -F/5-Results")
+RESEARCH_BASE_PATH = Path(
+    os.environ.get("DOCKFORGE_RESEARCH_BASE_PATH", str(Path.cwd()))
+).expanduser().resolve()
 
 def find_research_directories() -> List[Path]:
     """

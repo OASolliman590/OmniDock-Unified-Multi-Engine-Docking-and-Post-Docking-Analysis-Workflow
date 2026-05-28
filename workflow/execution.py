@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -52,8 +53,8 @@ _BLOCKED_LEGACY_STAGE_TARGETS = {
 }
 
 DEFAULT_CLEAN_INTERACTION_DATASET_ROOT = Path(
-    "/Users/omara.soliman/Desktop/Research/41-Sertaline_Pyrazole_derivatives"
-)
+    os.environ.get("DOCKFORGE_CLEAN_INTERACTION_DATASET_ROOT", str(Path.cwd()))
+).expanduser().resolve()
 _ANALYSIS_CONFIG_CANDIDATES = (
     "post_docking_analysis.yaml",
     "post_docking_analysis.yml",
