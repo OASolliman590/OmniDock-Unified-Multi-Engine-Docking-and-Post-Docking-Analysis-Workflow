@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}DAG · {{ project.name }}{% endblock %}
+{% block nav_dag %}active{% endblock %}
+
+{% block content %}
+<h1>Artifact DAG</h1>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+{% if not dag.available %}
+<div class="empty-state">
+  <p>No DAG execution report found for this project.</p>
+  <p>The report is written as <span class="mono">dag_execution_report.json</span>
+     (normally under <span class="mono">4-Working/</span>) when an analysis runs
+     through the artifact graph.</p>
+</div>
+{% else %}
+
+<div class="card">
+  <table>
+    <tbody>
+      <tr><th style="width:22%">Requested artifact</th>
+          <td class="mono">{{ dag.requested_artifact or "—" }}</td></tr>
+      <tr><th>Generated</th>
+          <td class="muted">{{ dag.generated_at[:19].replace("T", " ") if dag.generated_at else "—" }}</td></tr>
+      <tr><th>Nodes</th><td>{{ dag.node_count }}</td></tr>
+      {% if dag.wall_clock_s is not none %}
+      <tr><th>Wall clock</th><td>{{ "%.2f"|format(dag.wall_clock_s) }} s
+          {% if dag.parallel_time_saved_s %}
+          <span class="muted">({{ "%.2f"|format(dag.parallel_time_saved_s) }} s saved by parallelism)</span>
+          {% endif %}</td></tr>
+      {% endif %}
+      <tr><th>Report</th><td class="mono muted" style="font-size:12px">{{ dag.report_file }}</td></tr>
+    </tbody>
+  </table>
+
+  <div style="margin-top:12px">
+    {% for status, count in dag.status_counts.items() | sort %}
+    <span class="badge badge-{{ status }}" style="margin-right:6px">{{ status }} · {{ count }}</span>
+    {% endfor %}
+  </div>
+</div>
+
+{% for tier in dag.tiers %}
+<div class="card">
+  <h2 style="margin-top:0">
+    {% if tier.tier_index is not none %}Tier {{ tier.tier_index }}{% else %}Unscheduled{% endif %}
+    <span class="muted" style="font-weight:400; font-size:13px">
+      — {{ tier.nodes | length }} node{{ "s" if tier.nodes | length != 1 }}
+      {%- if tier.wall_clock_s is not none %}, {{ "%.2f"|format(tier.wall_clock_s) }} s{% endif %}
+    </span>
+  </h2>
+
+  <div style="display:flex; flex-wrap:wrap; gap:10px">
+    {% for node in tier.nodes %}
+    <div style="border:1px solid #d9d7cf; border-radius:8px; padding:10px 12px;
+                min-width:210px; background:#fff">
+      <div style="font-weight:500">{{ node.name }}</div>
+      <div style="margin-top:5px">
+        <span class="badge badge-{{ node.status }}">{{ node.status }}</span>
+        {% if node.cached %}
+        <span class="badge badge-cache_hit" title="Served from dag_cache.json; not recomputed">cached</span>
+        {% endif %}
+        {% if node.optional %}<span class="badge badge-pending">optional</span>{% endif %}
+        {% if not node.known_status %}
+        <span class="badge badge-failed" title="Status not in NODE_STATUSES">unrecognized</span>
+        {% endif %}
+      </div>
+      {% if node.duration_s %}
+      <div class="muted" style="font-size:12px; margin-top:4px">
+        {{ "%.2f"|format(node.duration_s) }} s</div>
+      {% endif %}
+      {% if node.blocked_by %}
+      <div class="muted" style="font-size:12px; margin-top:4px">
+        blocked by: <span class="mono">{{ node.blocked_by | join(", ") }}</span></div>
+      {% endif %}
+      {% if node.details %}
+      <div class="muted" style="font-size:12px; margin-top:4px">{{ node.details }}</div>
+      {% endif %}
+      <div style="margin-top:6px">
+        <a href="{{ url_for('page_results', pid=project.id) }}"
+           style="font-size:12px; color:#3c3489">view results →</a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endfor %}
+
+<p class="muted" style="font-size:13px">
+  Nodes are grouped into dependency tiers: everything in a tier can run in parallel,
+  and each tier waits for the ones before it. The execution report records status and
+  blocking relationships, not each node's declared inputs and outputs, so per-artifact
+  edges are not drawn.
+</p>
+{% endif %}
+{% endblock %}

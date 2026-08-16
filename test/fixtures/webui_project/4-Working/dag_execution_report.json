@@ -1,0 +1,136 @@
+{
+  "generated_at": "2026-08-16T10:00:05Z",
+  "requested_artifact": "reports",
+  "report_file": "D:\\OmniDock\\test\\fixtures\\webui_project\\4-Working\\dag_execution_report.json",
+  "cache_file": "D:\\OmniDock\\test\\fixtures\\webui_project\\4-Working\\dag_cache.json",
+  "force": false,
+  "node_count": 8,
+  "wall_clock_s": 12.5,
+  "parallel_time_saved_s": 4.25,
+  "status_counts": {
+    "blocked_by_failure": 1,
+    "cache_hit": 1,
+    "completed": 1,
+    "completed_with_warnings": 1,
+    "failed": 1,
+    "pending": 1,
+    "running": 1,
+    "skipped_optional": 1
+  },
+  "tiers": [
+    {
+      "tier_index": 0,
+      "nodes": [
+        "node_blocked_by_failure",
+        "node_cache_hit",
+        "node_completed",
+        "node_completed_with_warnings"
+      ],
+      "wall_clock_s": 5.0,
+      "parallel_time_saved_s": 2.0
+    },
+    {
+      "tier_index": 1,
+      "nodes": [
+        "node_failed",
+        "node_pending",
+        "node_running",
+        "node_skipped_optional"
+      ],
+      "wall_clock_s": 7.5,
+      "parallel_time_saved_s": 2.25
+    }
+  ],
+  "nodes": {
+    "node_blocked_by_failure": {
+      "name": "node_blocked_by_failure",
+      "status": "blocked_by_failure",
+      "started_at": "2026-08-16T10:00:00Z",
+      "ended_at": "2026-08-16T10:00:05Z",
+      "duration_s": 0.5,
+      "cache_hit": false,
+      "optional": false,
+      "blocked_by": [
+        "node_failed"
+      ],
+      "details": ""
+    },
+    "node_cache_hit": {
+      "name": "node_cache_hit",
+      "status": "cache_hit",
+      "started_at": "2026-08-16T10:00:00Z",
+      "ended_at": "2026-08-16T10:00:05Z",
+      "duration_s": 1.0,
+      "cache_hit": true,
+      "optional": false,
+      "blocked_by": [],
+      "details": ""
+    },
+    "node_completed": {
+      "name": "node_completed",
+      "status": "completed",
+      "started_at": "2026-08-16T10:00:00Z",
+      "ended_at": "2026-08-16T10:00:05Z",
+      "duration_s": 1.5,
+      "cache_hit": false,
+      "optional": false,
+      "blocked_by": [],
+      "details": ""
+    },
+    "node_completed_with_warnings": {
+      "name": "node_completed_with_warnings",
+      "status": "completed_with_warnings",
+      "started_at": "2026-08-16T10:00:00Z",
+      "ended_at": "2026-08-16T10:00:05Z",
+      "duration_s": 2.0,
+      "cache_hit": false,
+      "optional": false,
+      "blocked_by": [],
+      "details": ""
+    },
+    "node_failed": {
+      "name": "node_failed",
+      "status": "failed",
+      "started_at": "2026-08-16T10:00:00Z",
+      "ended_at": "2026-08-16T10:00:05Z",
+      "duration_s": 2.5,
+      "cache_hit": false,
+      "optional": false,
+      "blocked_by": [],
+      "details": "render crashed"
+    },
+    "node_pending": {
+      "name": "node_pending",
+      "status": "pending",
+      "started_at": "2026-08-16T10:00:00Z",
+      "ended_at": "2026-08-16T10:00:05Z",
+      "duration_s": 3.0,
+      "cache_hit": false,
+      "optional": false,
+      "blocked_by": [],
+      "details": ""
+    },
+    "node_running": {
+      "name": "node_running",
+      "status": "running",
+      "started_at": "2026-08-16T10:00:00Z",
+      "ended_at": "2026-08-16T10:00:05Z",
+      "duration_s": 3.5,
+      "cache_hit": false,
+      "optional": false,
+      "blocked_by": [],
+      "details": ""
+    },
+    "node_skipped_optional": {
+      "name": "node_skipped_optional",
+      "status": "skipped_optional",
+      "started_at": "2026-08-16T10:00:00Z",
+      "ended_at": "2026-08-16T10:00:05Z",
+      "duration_s": 4.0,
+      "cache_hit": false,
+      "optional": true,
+      "blocked_by": [],
+      "details": ""
+    }
+  }
+}

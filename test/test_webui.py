@@ -572,6 +572,111 @@ def test_results_page_renders(client, project_id):
     assert client.get(f"/project/{project_id}/results").status_code == 200
 
 
+# ------------------------------------------------------------------ dag
+
+
+def test_dag_reports_all_node_statuses(client, project_id):
+    """SC-008: every NODE_STATUSES member must survive into the view model."""
+    from post_docking_analysis.artifact_graph import NODE_STATUSES
+
+    model = client.get(f"/api/projects/{project_id}/dag").get_json()
+    assert model["available"] is True
+
+    seen = {n["status"] for tier in model["tiers"] for n in tier["nodes"]}
+    assert seen == set(NODE_STATUSES), f"missing statuses: {set(NODE_STATUSES) - seen}"
+    assert all(n["known_status"] for tier in model["tiers"] for n in tier["nodes"])
+
+
+def test_every_node_status_has_a_visually_distinct_style():
+    """SC-008: distinguishable means distinct, not merely present.
+
+    Parses app.css and asserts no two NODE_STATUSES share an identical
+    (background, color, border) triple -- cache_hit vs completed and
+    blocked_by_failure vs failed were originally rendered identically.
+    """
+    import re
+    from post_docking_analysis.artifact_graph import NODE_STATUSES
+
+    css = (REPO_ROOT / "webui" / "static" / "app.css").read_text(encoding="utf-8")
+
+    styles: dict[str, str] = {}
+    for status in NODE_STATUSES:
+        # Match the rule block whose selector list includes .badge-<status>
+        pattern = rf"(^|\n)([^{{}}]*\.badge-{re.escape(status)}\b[^{{}}]*)\{{([^}}]*)\}}"
+        match = re.search(pattern, css)
+        assert match, f"no CSS rule for .badge-{status}"
+        body = " ".join(match.group(3).split())
+        styles[status] = body
+
+    duplicates: dict[str, list[str]] = {}
+    for status, body in styles.items():
+        duplicates.setdefault(body, []).append(status)
+
+    clashes = {body: names for body, names in duplicates.items() if len(names) > 1}
+    assert not clashes, f"statuses share an identical style: {clashes}"
+
+
+def test_dag_status_vocabulary_comes_from_artifact_graph():
+    """FR-025: the status list is imported, not restated."""
+    import webui.dag as D
+    from post_docking_analysis.artifact_graph import NODE_STATUSES
+
+    model = D.to_view_model({"nodes": {}, "tiers": []})
+    assert set(model["known_statuses"]) == set(NODE_STATUSES)
+
+
+def test_dag_marks_cache_hits_distinctly(client, project_id):
+    """FR-027: a cached node must be distinguishable from a recomputed one."""
+    model = client.get(f"/api/projects/{project_id}/dag").get_json()
+    nodes = {n["name"]: n for tier in model["tiers"] for n in tier["nodes"]}
+
+    assert nodes["node_cache_hit"]["cached"] is True
+    assert nodes["node_completed"]["cached"] is False
+    # The cache key is read from dag_cache.json, proving the two files join.
+    assert nodes["node_cache_hit"]["cache_key"] == "sha256:deadbeef"
+
+
+def test_dag_exposes_blocking_edges(client, project_id):
+    model = client.get(f"/api/projects/{project_id}/dag").get_json()
+    nodes = {n["name"]: n for tier in model["tiers"] for n in tier["nodes"]}
+
+    assert nodes["node_blocked_by_failure"]["blocked_by"] == ["node_failed"]
+    assert {"from": "node_failed", "to": "node_blocked_by_failure",
+            "kind": "blocked_by"} in model["edges"]
+
+
+def test_dag_groups_nodes_into_tiers(client, project_id):
+    model = client.get(f"/api/projects/{project_id}/dag").get_json()
+    assert len(model["tiers"]) >= 2
+    assert all("tier_index" in tier for tier in model["tiers"])
+
+
+def test_dag_flags_an_unrecognized_status():
+    """A status artifact_graph gains later must be surfaced, not hidden."""
+    import webui.dag as D
+
+    model = D.to_view_model({
+        "nodes": {"weird": {"name": "weird", "status": "quantum_superposition"}},
+        "tiers": [{"tier_index": 0, "nodes": ["weird"]}],
+    })
+    node = model["tiers"][0]["nodes"][0]
+    assert node["status"] == "quantum_superposition"
+    assert node["known_status"] is False
+
+
+def test_dag_absent_report_is_not_an_error(client, tmp_path):
+    project = tmp_path / "no_dag"
+    project.mkdir()
+    pid = client.post("/api/projects", json={"path": str(project)}).get_json()["id"]
+    model = client.get(f"/api/projects/{pid}/dag").get_json()
+    assert model["available"] is False
+    assert client.get(f"/project/{pid}/dag").status_code == 200
+
+
+def test_dag_page_renders(client, project_id):
+    assert client.get(f"/project/{project_id}/dag").status_code == 200
+
+
 # ------------------------------------------------------------------ api
 
 

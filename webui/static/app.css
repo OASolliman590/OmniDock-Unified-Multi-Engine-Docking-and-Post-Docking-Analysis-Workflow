@@ -98,12 +98,35 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
   display: inline-block; font-size: 11px; border-radius: 9px;
   padding: 2px 8px; white-space: nowrap;
 }
-.badge-pending, .badge-queued { background: #e5e3dc; color: #444441; }
-.badge-running { background: #b5d4f4; color: #0c447c; }
-.badge-completed, .badge-cache_hit { background: #9fe1cb; color: #085041; }
-.badge-completed_with_warnings { background: #fac775; color: #633806; }
-.badge-failed, .badge-blocked_by_failure { background: #f7c1c1; color: #791f1f; }
-.badge-skipped_optional, .badge-cancelled { background: #d3d1c7; color: #444441; }
+/* Every artifact_graph NODE_STATUSES value gets a distinct treatment, and
+   never by colour alone -- border style is the secondary cue (SC-008). */
+.badge-pending, .badge-queued {
+  background: #f1efe8; color: #5f5e5a; border: 1px solid #d3d1c7;
+}
+.badge-running {
+  background: #b5d4f4; color: #0c447c; border: 1px solid #378add;
+}
+.badge-completed {
+  background: #9fe1cb; color: #085041; border: 1px solid #1d9e75;
+}
+.badge-cache_hit {
+  background: #e1f5ee; color: #0f6e56; border: 1px dashed #1d9e75;
+}
+.badge-completed_with_warnings {
+  background: #fac775; color: #633806; border: 1px solid #ba7517;
+}
+.badge-failed {
+  background: #f7c1c1; color: #791f1f; border: 1px solid #e24b4a;
+}
+.badge-blocked_by_failure {
+  background: #f5c4b3; color: #712b13; border: 1px dashed #d85a30;
+}
+.badge-skipped_optional {
+  background: #d3d1c7; color: #2c2c2a; border: 1px dashed #888780;
+}
+.badge-cancelled {
+  background: #e5e3dc; color: #2c2c2a; border: 1px solid #888780;
+}
 
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
 .muted { color: var(--muted); }

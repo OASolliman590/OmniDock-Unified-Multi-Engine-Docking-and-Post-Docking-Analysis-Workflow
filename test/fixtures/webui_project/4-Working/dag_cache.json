@@ -1,0 +1,9 @@
+{
+  "generated_at": "2026-08-16T10:00:05Z",
+  "cache_file": "D:\\OmniDock\\test\\fixtures\\webui_project\\4-Working\\dag_cache.json",
+  "nodes": {
+    "node_cache_hit": {
+      "cache_key": "sha256:deadbeef"
+    }
+  }
+}

@@ -142,14 +142,14 @@
 
 ## Phase 7: Artifact DAG View (US5, P2)
 
-- [ ] T081 Create `webui/dag.py` importing `NODE_STATUSES` from `post_docking_analysis.artifact_graph` (FR-025) — never hardcode the status strings.
-- [ ] T082 Implement `load_dag_report(project, run_dir)` reading the report written by `ArtifactGraph._write_report`, plus `4-Working/dag_cache.json` for cache indicators.
-- [ ] T083 Implement `to_view_model(report)` producing `{nodes: [{name, status, inputs, outputs, cached}], edges: [{from, to}]}` with edges derived from input/output relationships.
-- [ ] T084 Add `GET /api/projects/<pid>/dag?run=`.
-- [ ] T085 Create `webui/templates/dag.html` rendering nodes in dependency tiers with one distinct visual treatment per status (SC-008).
-- [ ] T086 Show cache hits distinctly from recomputed nodes (FR-027).
-- [ ] T087 Link each node's outputs into the results browser (FR-026).
-- [ ] T088 [P] Add a fixture DAG report exercising all eight statuses and a test asserting each renders distinctly.
+- [x] T081 Create `webui/dag.py` importing `NODE_STATUSES` from `post_docking_analysis.artifact_graph` (FR-025) — never hardcode the status strings.
+- [x] T082 Implement `load_dag_report(project, run_dir)` reading the report written by `ArtifactGraph._write_report`, plus `4-Working/dag_cache.json` for cache indicators.
+- [x] T083 Implement `to_view_model(report)` producing `{nodes: [{name, status, inputs, outputs, cached}], edges: [{from, to}]}` with edges derived from input/output relationships.
+- [x] T084 Add `GET /api/projects/<pid>/dag?run=`.
+- [x] T085 Create `webui/templates/dag.html` rendering nodes in dependency tiers with one distinct visual treatment per status (SC-008).
+- [x] T086 Show cache hits distinctly from recomputed nodes (FR-027).
+- [x] T087 Link each node's outputs into the results browser (FR-026).
+- [x] T088 [P] Add a fixture DAG report exercising all eight statuses and a test asserting each renders distinctly.
 
 **Verify Phase 7**: the fixture DAG shows all eight statuses; a failed required node's dependents display as `blocked_by_failure`.
 

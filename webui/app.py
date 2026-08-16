@@ -19,6 +19,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 
 from . import __version__
 from . import artifacts as artifacts_mod
+from . import dag as dag_mod
 from . import jobs as jobs_mod
 from . import logs as logs_mod
 from . import registry
@@ -366,6 +367,16 @@ def create_app() -> Flask:
         except artifacts_mod.ArtifactError as exc:
             return _err(str(exc), "INVALID_INPUT", 500)
 
+    @app.get("/api/projects/<pid>/dag")
+    def api_project_dag(pid: str):
+        project = _project_or_404(pid)
+        if not project.available:
+            return _err("Project directory is unavailable.", "PROJECT_UNAVAILABLE", 409)
+        try:
+            return jsonify(dag_mod.load_dag(project.root, request.args.get("run")))
+        except dag_mod.DagError as exc:
+            return _err(str(exc), "INVALID_INPUT", 500)
+
     # ---------- pages ----------
 
     @app.get("/")
@@ -449,12 +460,20 @@ def create_app() -> Flask:
     @app.get("/project/<pid>/dag")
     def page_dag(pid: str):
         project = _project_or_404(pid)
+        model = {"available": False, "tiers": [], "status_counts": {}}
+        error = None
+        if project.available:
+            try:
+                model = dag_mod.load_dag(project.root, request.args.get("run"))
+            except dag_mod.DagError as exc:
+                error = str(exc)
         return render_template(
-            "placeholder.html",
+            "dag.html",
             project=project,
             all_projects=registry.list_projects(),
-            section="DAG",
-            phase="Phase 7",
+            dag=model,
+            error=error,
+            runs=artifacts_mod.find_runs(project.root) if project.available else [],
         )
 
     return app
