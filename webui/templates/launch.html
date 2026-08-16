@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}Launch · {{ project.name }}{% endblock %}
+{% block nav_launch %}active{% endblock %}
+
+{% block content %}
+<h1>Launch</h1>
+
+{% if has_running %}
+<div class="alert alert-warn" id="running-warning">
+  This project already has a job running. Pipeline stages are not guaranteed to be
+  safe to run concurrently within one project — you will be asked to confirm.
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="field">
+    <label for="target-select">Target</label>
+    <select id="target-select">
+      <option value="">— choose a target —</option>
+      {% for group, items in groups.items() %}
+      <optgroup label="{{ group }}">
+        {% for t in items %}
+        <option value="{{ t.key }}">{{ t.label }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div id="routes-note" class="alert alert-info" hidden></div>
+  <form id="launch-form" hidden>
+    <div id="fields"></div>
+
+    <div class="field">
+      <label>Command preview</label>
+      <pre class="mono" id="command-preview"
+           style="background:#f1efe8; border:1px solid #d9d7cf; border-radius:6px;
+                  padding:10px; white-space:pre-wrap; margin:0">—</pre>
+      <div class="field-help">This exact command will be run. Nothing else is executed.</div>
+    </div>
+
+    <button type="submit" class="btn" id="launch-btn">Launch</button>
+    <span id="launch-status" class="muted" style="margin-left:10px"></span>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// tojson gives a properly escaped JS literal. Interpolating a raw value
+// into a JS string lets a Windows path's backslashes act as escapes.
+const PID = {{ project.id | tojson }};
+const select = document.getElementById("target-select");
+const form = document.getElementById("launch-form");
+const fieldsEl = document.getElementById("fields");
+const previewEl = document.getElementById("command-preview");
+const routesNote = document.getElementById("routes-note");
+const statusEl = document.getElementById("launch-status");
+let schema = null;
+
+select.addEventListener("change", async () => {
+  const key = select.value;
+  if (!key) { form.hidden = true; routesNote.hidden = true; return; }
+
+  const res = await fetch(`/api/targets/${encodeURIComponent(key)}/form?project_id=${PID}`);
+  schema = await res.json();
+
+  if (schema.routes_to) {
+    routesNote.textContent =
+      `This target is routed through ${schema.routes_to} by the pipeline, ` +
+      `so ProLIF and LigPlot run together rather than in isolation.`;
+    routesNote.hidden = false;
+  } else {
+    routesNote.hidden = true;
+  }
+
+  renderFields();
+  form.hidden = false;
+  updatePreview();
+});
+
+function renderFields() {
+  fieldsEl.innerHTML = "";
+  for (const f of schema.fields) {
+    const wrap = document.createElement("div");
+    wrap.className = "field";
+
+    const label = document.createElement("label");
+    label.textContent = f.label + (f.required ? " *" : "");
+    label.setAttribute("for", "f_" + f.name);
+    wrap.appendChild(label);
+
+    let input;
+    if (f.type === "select") {
+      input = document.createElement("select");
+      input.appendChild(new Option("—", ""));
+      (f.choices || []).forEach((c) => {
+        const opt = new Option(c.label, c.value);
+        if (f.default === c.value) opt.selected = true;
+        input.appendChild(opt);
+      });
+    } else if (f.type === "multiselect") {
+      input = document.createElement("select");
+      input.multiple = true;
+      input.size = Math.min(4, (f.choices || []).length);
+      (f.choices || []).forEach((c) => {
+        const opt = new Option(c.label, c.value);
+        if (Array.isArray(f.default) && f.default.includes(c.value)) opt.selected = true;
+        input.appendChild(opt);
+      });
+    } else if (f.type === "bool") {
+      input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = Boolean(f.default);
+      input.style.width = "auto";
+    } else {
+      input = document.createElement("input");
+      input.type = (f.type === "int" || f.type === "float") ? "number" : "text";
+      if (f.default !== null && f.default !== undefined) input.value = f.default;
+      if (f.type === "path") input.className = "mono";
+    }
+
+    input.id = "f_" + f.name;
+    input.dataset.field = f.name;
+    input.dataset.ftype = f.type;
+    input.addEventListener("input", updatePreview);
+    input.addEventListener("change", updatePreview);
+    wrap.appendChild(input);
+
+    if (f.help) {
+      const help = document.createElement("div");
+      help.className = "field-help";
+      help.textContent = f.help;
+      wrap.appendChild(help);
+    }
+    const err = document.createElement("div");
+    err.className = "field-error";
+    err.id = "err_" + f.name;
+    err.hidden = true;
+    wrap.appendChild(err);
+
+    fieldsEl.appendChild(wrap);
+  }
+}
+
+function collectValues() {
+  const values = {};
+  fieldsEl.querySelectorAll("[data-field]").forEach((el) => {
+    const name = el.dataset.field;
+    const type = el.dataset.ftype;
+    if (type === "bool") {
+      if (el.checked) values[name] = true;
+    } else if (type === "multiselect") {
+      const picked = Array.from(el.selectedOptions).map((o) => o.value);
+      if (picked.length) values[name] = picked;
+    } else if (el.value !== "") {
+      values[name] = el.value;
+    }
+  });
+  return values;
+}
+
+let previewTimer = null;
+
+function updatePreview() {
+  if (!schema) return;
+  // Ask the server to render it: the preview must be the same string the
+  // launcher will run, not a second implementation in JS.
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    const res = await fetch(`/api/projects/${PID}/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: schema.key, values: collectValues() }),
+    });
+    const body = await res.json();
+    previewEl.textContent = res.ok ? body.command : (body.error || "—");
+  }, 120);
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  fieldsEl.querySelectorAll(".field-error").forEach((e) => { e.hidden = true; });
+  statusEl.textContent = "launching…";
+
+  const send = async (confirmConcurrent) => fetch(`/api/projects/${PID}/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      target: schema.key, values: collectValues(),
+      confirm_concurrent: confirmConcurrent,
+    }),
+  });
+
+  let res = await send(false);
+  if (res.status === 409) {
+    const body = await res.json();
+    if (!confirm(body.error + "\n\nRun it anyway?")) {
+      statusEl.textContent = "";
+      return;
+    }
+    res = await send(true);
+  }
+
+  const body = await res.json();
+  if (res.ok) {
+    location.href = `/job/${body.job_id}`;
+    return;
+  }
+  statusEl.textContent = "";
+  if (body.fields) {
+    for (const [name, message] of Object.entries(body.fields)) {
+      const el = document.getElementById("err_" + name);
+      if (el) { el.textContent = message; el.hidden = false; }
+    }
+  } else {
+    alert(body.error || "Launch failed.");
+  }
+});
+</script>
+{% endblock %}

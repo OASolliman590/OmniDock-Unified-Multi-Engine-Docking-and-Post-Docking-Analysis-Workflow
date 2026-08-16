@@ -330,3 +330,227 @@ def test_unknown_job_returns_404(client):
     res = client.get("/api/jobs/job_does_not_exist")
     assert res.status_code == 404
     assert res.get_json()["code"] == "NOT_FOUND"
+
+
+# ------------------------------------------------------------------ targets
+
+
+def test_every_analysis_label_becomes_a_target(client):
+    """SC-002: the catalog is derived from ANALYSIS_LABELS, not hardcoded."""
+    from workflow.interactive import ANALYSIS_LABELS
+
+    keys = {t["key"] for t in client.get("/api/targets").get_json()}
+    assert set(ANALYSIS_LABELS).issubset(keys)
+
+
+def test_new_analysis_label_surfaces_without_code_change(client, monkeypatch):
+    """SC-002 the hard way: add a label at runtime, expect it in the API."""
+    from workflow import interactive
+
+    patched = dict(interactive.ANALYSIS_LABELS)
+    patched["analyze.stage.fixture_probe"] = "Fixture probe stage"
+    monkeypatch.setattr(interactive, "ANALYSIS_LABELS", patched)
+
+    keys = {t["key"] for t in client.get("/api/targets").get_json()}
+    assert "analyze.stage.fixture_probe" in keys
+
+
+def test_every_target_has_a_form_schema(client):
+    import webui.targets as T
+
+    for key in T.all_targets():
+        res = client.get(f"/api/targets/{key}/form")
+        assert res.status_code == 200, key
+        body = res.get_json()
+        assert body["key"] == key
+        assert isinstance(body["fields"], list)
+
+
+def test_generated_argv_parses_against_real_cli():
+    """Every target's argv must be accepted by workflow/cli.py's parser.
+
+    This is what catches template drift -- e.g. the stage subcommand being
+    `structure-quality` while the label key is `structure_quality`.
+    """
+    import webui.targets as T
+
+    for key, target in T.all_targets().items():
+        # Supply a plausible value for each required field so the parser
+        # sees a complete command; we are testing the template, not
+        # validation (which has its own tests).
+        values = {}
+        for f in target.fields:
+            if not f.required:
+                continue
+            if f.type == "multiselect":
+                values[f.name] = [f.choices[0]["value"]] if f.choices else ["gnina"]
+            elif f.type == "select" and f.choices:
+                values[f.name] = f.choices[0]["value"]
+            elif f.type in ("int", "float"):
+                values[f.name] = 1
+            else:
+                values[f.name] = str(FIXTURE_PROJECT)
+
+        argv = T.build_argv(key, values, str(FIXTURE_PROJECT))
+        T.assert_argv_parses(argv)  # raises TargetError on mismatch
+
+
+def test_generated_argv_parses_with_all_optional_fields_supplied():
+    """Optional flags must also match the CLI, not just the bare command."""
+    import webui.targets as T
+
+    for key, target in T.all_targets().items():
+        values = {}
+        for f in target.fields:
+            if f.type == "bool":
+                values[f.name] = True
+            elif f.type == "multiselect":
+                values[f.name] = [f.choices[0]["value"]] if f.choices else ["gnina"]
+            elif f.type == "select" and f.choices:
+                values[f.name] = f.choices[0]["value"]
+            elif f.type in ("int", "float"):
+                values[f.name] = 2
+            else:
+                values[f.name] = str(FIXTURE_PROJECT)
+
+        argv = T.build_argv(key, values, str(FIXTURE_PROJECT))
+        T.assert_argv_parses(argv)
+
+
+def test_structure_quality_maps_to_hyphenated_subcommand():
+    import webui.targets as T
+
+    argv = T.build_argv("analyze.stage.structure_quality", {}, "/tmp/p")
+    assert argv[2:5] == ["analyze", "stage", "structure-quality"]
+
+
+def test_favorite_engine_maps_to_hyphenated_subcommand():
+    import webui.targets as T
+
+    argv = T.build_argv("analyze.favorite_engine", {"favorite_engine": "gnina"}, "/tmp/p")
+    assert argv[2:4] == ["analyze", "favorite-engine"]
+
+
+def test_interaction_aliases_declare_clean_routing(client):
+    """FR-011: the UI states the reroute rather than silently substituting."""
+    for key in ["analyze.interactions.prolif", "analyze.interactions.ligplot",
+                "analyze.interactions.pandamap"]:
+        body = client.get(f"/api/targets/{key}/form").get_json()
+        assert body["routes_to"] == "analyze.interactions.clean", key
+
+
+def test_form_defaults_come_from_project_context(client):
+    pid = client.post("/api/projects", json={"path": str(FIXTURE_PROJECT)}).get_json()["id"]
+    body = client.get(
+        f"/api/targets/analyze.favorite_engine/form?project_id={pid}"
+    ).get_json()
+    fav = next(f for f in body["fields"] if f["name"] == "favorite_engine")
+    assert fav["default"] == "gnina"  # from the fixture's current_context
+
+
+def test_engine_choices_come_from_interactive_constant():
+    import webui.targets as T
+    from workflow.interactive import ENGINE_CHOICES
+
+    values = {c["value"] for c in T._engine_choices()}
+    expected = {v for v, _ in ENGINE_CHOICES if v != "all"}
+    assert values == expected
+
+
+# ------------------------------------------------------------------ launch
+
+
+def test_launch_rejects_unknown_target(client):
+    pid = client.post("/api/projects", json={"path": str(FIXTURE_PROJECT)}).get_json()["id"]
+    res = client.post(f"/api/projects/{pid}/jobs", json={"target": "nope.nope", "values": {}})
+    assert res.status_code == 400
+    assert res.get_json()["code"] == "INVALID_INPUT"
+
+
+def test_launch_rejects_missing_required_field(client):
+    pid = client.post("/api/projects", json={"path": str(FIXTURE_PROJECT)}).get_json()["id"]
+    res = client.post(f"/api/projects/{pid}/jobs",
+                      json={"target": "analyze.favorite_engine", "values": {}})
+    assert res.status_code == 400
+    assert "favorite_engine" in res.get_json()["fields"]
+
+
+def test_launch_rejects_nonexistent_path(client):
+    pid = client.post("/api/projects", json={"path": str(FIXTURE_PROJECT)}).get_json()["id"]
+    res = client.post(f"/api/projects/{pid}/jobs", json={
+        "target": "analyze.comparative",
+        "values": {"config_file": "/definitely/not/here.yaml"},
+    })
+    assert res.status_code == 400
+    assert "config_file" in res.get_json()["fields"]
+
+
+def test_launch_rejects_unknown_engine(client):
+    pid = client.post("/api/projects", json={"path": str(FIXTURE_PROJECT)}).get_json()["id"]
+    res = client.post(f"/api/projects/{pid}/jobs", json={
+        "target": "dock.run", "values": {"engines": ["gnina", "notanengine"]},
+    })
+    assert res.status_code == 400
+    assert "engines" in res.get_json()["fields"]
+
+
+def test_launch_creates_job_with_expected_command(client):
+    pid = client.post("/api/projects", json={"path": str(FIXTURE_PROJECT)}).get_json()["id"]
+    res = client.post(f"/api/projects/{pid}/jobs", json={
+        "target": "analyze.comparative", "values": {},
+    })
+    assert res.status_code == 202
+    job = res.get_json()
+    assert job["argv"][1:5] == ["main.py", "analyze", "comparative", "--project-dir"]
+    assert job["target"] == "analyze.comparative"
+    # The command shown to the user is the command that ran (FR-008)
+    assert "analyze" in job["command"] and "comparative" in job["command"]
+
+
+def test_second_concurrent_job_requires_confirmation(client, app_home):
+    """FR-018: warn before a second job against the same project."""
+    import webui.jobs as J
+
+    pid = client.post("/api/projects", json={"path": str(FIXTURE_PROJECT)}).get_json()["id"]
+    J.launch(J.create_job(pid, "t", _sleep_argv(20), str(REPO_ROOT)))
+
+    res = client.post(f"/api/projects/{pid}/jobs",
+                      json={"target": "analyze.comparative", "values": {}})
+    assert res.status_code == 409
+    assert res.get_json()["code"] == "JOB_RUNNING"
+
+    ok = client.post(f"/api/projects/{pid}/jobs", json={
+        "target": "analyze.comparative", "values": {}, "confirm_concurrent": True,
+    })
+    assert ok.status_code == 202
+
+
+def test_launch_page_renders(client):
+    pid = client.post("/api/projects", json={"path": str(FIXTURE_PROJECT)}).get_json()["id"]
+    assert client.get(f"/project/{pid}/launch").status_code == 200
+
+
+def test_preview_matches_launched_command(client):
+    """FR-008: the preview must be the command that actually runs."""
+    pid = client.post("/api/projects", json={"path": str(FIXTURE_PROJECT)}).get_json()["id"]
+    payload = {"target": "analyze.comparative", "values": {"rescoring_top_n": 5}}
+
+    preview = client.post(f"/api/projects/{pid}/preview", json=payload).get_json()
+    launched = client.post(f"/api/projects/{pid}/jobs", json=payload).get_json()
+
+    assert preview["argv"] == launched["argv"]
+    assert preview["command"] == launched["command"]
+
+
+def test_preview_preserves_windows_style_paths(client):
+    """A path with backslashes must survive into the preview intact.
+
+    Regression: embedding the path in a JS template literal let \\t and \\f
+    act as escape sequences and mangled the displayed command.
+    """
+    pid = client.post("/api/projects", json={"path": str(FIXTURE_PROJECT)}).get_json()["id"]
+    body = client.post(f"/api/projects/{pid}/preview",
+                       json={"target": "analyze.comparative", "values": {}}).get_json()
+    project_path = client.get("/api/projects").get_json()[0]["path"]
+    assert project_path in " ".join(body["argv"])
+    assert "\t" not in body["command"] and "\f" not in body["command"]

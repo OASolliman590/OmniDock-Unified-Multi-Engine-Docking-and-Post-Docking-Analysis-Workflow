@@ -304,6 +304,14 @@ def cancel(job_id: str) -> Job:
     if job.is_terminal:
         return job
 
+    # Record the cancellation *before* killing anything. The watcher thread
+    # wakes as soon as the process dies and would otherwise load a record
+    # still marked "running" and overwrite it with "failed".
+    job.status = "cancelled"
+    job.finished_at = _now()
+    job.note = "cancelled by user"
+    save_job(job)
+
     if job.pid and _process_alive(job.pid):
         try:
             if sys.platform == "win32":  # pragma: no cover - platform specific
@@ -317,13 +325,9 @@ def cancel(job_id: str) -> Job:
                 if _process_alive(job.pid):
                     os.kill(job.pid, signal.SIGKILL)
         except (OSError, subprocess.SubprocessError) as exc:
-            job.note = f"cancel signal failed: {exc}"
+            job.note = f"cancelled by user (signal failed: {exc})"
+            save_job(job)
 
-    job.status = "cancelled"
-    job.finished_at = _now()
-    if not job.note:
-        job.note = "cancelled by user"
-    save_job(job)
     return job
 
 

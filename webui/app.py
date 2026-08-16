@@ -10,6 +10,7 @@ state concurrently from other processes (FR-005).
 
 from __future__ import annotations
 
+import shlex
 import sys
 
 from flask import Flask, abort, jsonify, render_template, request
@@ -18,6 +19,7 @@ from . import __version__
 from . import jobs as jobs_mod
 from . import registry
 from . import state_adapter
+from . import targets as targets_mod
 from .config import REPO_ROOT, ensure_app_dirs
 
 
@@ -115,7 +117,93 @@ def create_app() -> Flask:
             return _err(str(exc), "INVALID_INPUT", 500)
         return jsonify(job.to_dict()), 202
 
+    # ---------- targets ----------
+
+    @app.get("/api/targets")
+    def api_targets():
+        return jsonify([
+            {"key": t.key, "label": t.label, "group": t.group, "routes_to": t.routes_to}
+            for t in targets_mod.all_targets().values()
+        ])
+
+    @app.get("/api/targets/<path:key>/form")
+    def api_target_form(key: str):
+        context: dict = {}
+        project_id = request.args.get("project_id")
+        if project_id:
+            try:
+                project = registry.get_project(project_id)
+                if project.available:
+                    context = state_adapter.project_state(project.root).get("current_context", {})
+            except (registry.RegistryError, state_adapter.StateUnreadable):
+                context = {}
+        try:
+            return jsonify(targets_mod.form_schema(key, context))
+        except targets_mod.TargetError as exc:
+            return _err(str(exc), "NOT_FOUND", 404)
+
+    @app.post("/api/projects/<pid>/preview")
+    def api_launch_preview(pid: str):
+        """Render the exact command a launch would run.
+
+        Built by the same build_argv the launcher uses, so the preview can
+        never drift from what actually executes (FR-008). Reconstructing it
+        in the browser would be a second implementation.
+        """
+        project = _project_or_404(pid)
+        body = request.get_json(silent=True) or {}
+        key = (body.get("target") or "").strip()
+        try:
+            argv = targets_mod.build_argv(key, body.get("values") or {}, project.path)
+        except targets_mod.TargetError as exc:
+            return _err(str(exc), "INVALID_INPUT", 400)
+        return jsonify({"argv": argv, "command": " ".join(shlex.quote(a) for a in argv)})
+
     # ---------- jobs ----------
+
+    @app.post("/api/projects/<pid>/jobs")
+    def api_project_launch(pid: str):
+        project = _project_or_404(pid)
+        if not project.available:
+            return _err("Project directory is unavailable.", "PROJECT_UNAVAILABLE", 409)
+
+        body = request.get_json(silent=True) or {}
+        key = (body.get("target") or "").strip()
+        values = body.get("values") or {}
+
+        try:
+            target = targets_mod.get_target(key)
+        except targets_mod.TargetError as exc:
+            return _err(str(exc), "INVALID_INPUT", 400)
+
+        errors = targets_mod.validate(key, values)
+        if errors:
+            return jsonify({
+                "ok": False, "code": "INVALID_INPUT",
+                "error": "Some fields need attention.", "fields": errors,
+            }), 400
+
+        # Pipeline stages are not guaranteed concurrency-safe within one
+        # project, so a second job needs explicit confirmation (FR-018).
+        if jobs_mod.has_running_job(pid) and not body.get("confirm_concurrent"):
+            return jsonify({
+                "ok": False, "code": "JOB_RUNNING",
+                "error": "This project already has a job running. "
+                         "Resubmit with confirm_concurrent to run both.",
+            }), 409
+
+        argv = targets_mod.build_argv(key, values, project.path)
+        try:
+            targets_mod.assert_argv_parses(argv)
+        except targets_mod.TargetError as exc:
+            return _err(str(exc), "INVALID_INPUT", 400)
+
+        job = jobs_mod.create_job(pid, target.key, argv, str(REPO_ROOT))
+        try:
+            job = jobs_mod.launch(job)
+        except jobs_mod.JobError as exc:
+            return _err(str(exc), "INVALID_INPUT", 500)
+        return jsonify(job.to_dict()), 202
 
     @app.get("/api/jobs")
     def api_jobs_list():
@@ -172,12 +260,16 @@ def create_app() -> Flask:
     @app.get("/project/<pid>/launch")
     def page_launch(pid: str):
         project = _project_or_404(pid)
+        catalog = targets_mod.all_targets().values()
+        groups: dict[str, list] = {}
+        for target in catalog:
+            groups.setdefault(target.group, []).append(target)
         return render_template(
-            "placeholder.html",
+            "launch.html",
             project=project,
             all_projects=registry.list_projects(),
-            section="Launch",
-            phase="Phase 4",
+            groups=groups,
+            has_running=jobs_mod.has_running_job(pid),
         )
 
     @app.get("/project/<pid>/results")

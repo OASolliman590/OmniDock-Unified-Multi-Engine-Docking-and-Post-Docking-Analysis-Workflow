@@ -82,21 +82,21 @@
 
 ## Phase 4: Launch Targets & Forms (US2, P1)
 
-- [ ] T042 Create `webui/targets.py` importing `ANALYSIS_LABELS` and `ENGINE_CHOICES` from `workflow.interactive` (FR-007).
-- [ ] T043 Define a `FormField` dataclass (`name`, `label`, `type` in {`text`,`path`,`select`,`multiselect`,`bool`,`int`}, `required`, `default`, `choices`) and a `LaunchTarget` dataclass (`key`, `label`, `group`, `fields`, `argv_template`).
-- [ ] T044 Build the analysis-target catalog by iterating `ANALYSIS_LABELS` — do not enumerate keys by hand (SC-002).
-- [ ] T045 Add pipeline targets not in `ANALYSIS_LABELS`: `pdb.collect`, `pdb.prepare_both`, `prep.pairlist`, `prep.project`, `dock.run`, `dock.dry-run`, mapping each to its `workflow/cli.py` subcommand.
-- [ ] T046 Implement `build_argv(target, form_values, project)` producing the full argv list (`["python", "main.py", …]`) with `--project-dir` always set to the project path.
-- [ ] T047 Implement server-side validation `validate(target, form_values)`: required fields present, paths exist, engines within `ENGINE_CHOICES`, unknown target rejected (FR-009).
-- [ ] T048 Mark the three interaction aliases (`analyze.interactions.prolif`, `.ligplot`, `.pandamap`) with a `routes_to: "analyze.interactions.clean"` note so the UI can state the routing (FR-011, spec 029 FR-002).
-- [ ] T049 Pre-fill form defaults from the project's `current_context` (favorite engine, selected engines, output dir) in the form-schema endpoint.
-- [ ] T050 Add `GET /api/targets` (catalog) and `GET /api/targets/<key>/form?project_id=` (schema with defaults applied) (FR-006).
-- [ ] T051 Add `POST /api/projects/<pid>/jobs` — validate, build argv, `create_job`, `launch`, return the job record; include the resolved command string in the response (FR-008).
-- [ ] T052 Return HTTP 409 with a warning payload when `has_running_job(project_id)` is true, unless the request sets `confirm_concurrent: true` (FR-018).
-- [ ] T053 Create `webui/templates/launch.html`: target picker grouped by `group`, dynamic form rendered from the schema, and a live **command preview** box showing the exact argv before launch.
-- [ ] T054 Show the `routes_to` note in the form when present (FR-011).
-- [ ] T055 [P] Add tests: every `ANALYSIS_LABELS` key yields a form schema; a monkeypatched extra label appears in `/api/targets` without web-side changes (SC-002).
-- [ ] T056 [P] Add a validation test matrix: missing required field, non-existent path, unknown engine, unknown target — each rejected with a field-level message and no job created.
+- [x] T042 Create `webui/targets.py` importing `ANALYSIS_LABELS` and `ENGINE_CHOICES` from `workflow.interactive` (FR-007).
+- [x] T043 Define a `FormField` dataclass (`name`, `label`, `type` in {`text`,`path`,`select`,`multiselect`,`bool`,`int`}, `required`, `default`, `choices`) and a `LaunchTarget` dataclass (`key`, `label`, `group`, `fields`, `argv_template`).
+- [x] T044 Build the analysis-target catalog by iterating `ANALYSIS_LABELS` — do not enumerate keys by hand (SC-002).
+- [x] T045 Add pipeline targets not in `ANALYSIS_LABELS`: `pdb.collect`, `pdb.prepare_both`, `prep.pairlist`, `prep.project`, `dock.run`, `dock.dry-run`, mapping each to its `workflow/cli.py` subcommand.
+- [x] T046 Implement `build_argv(target, form_values, project)` producing the full argv list (`["python", "main.py", …]`) with `--project-dir` always set to the project path.
+- [x] T047 Implement server-side validation `validate(target, form_values)`: required fields present, paths exist, engines within `ENGINE_CHOICES`, unknown target rejected (FR-009).
+- [x] T048 Mark the three interaction aliases (`analyze.interactions.prolif`, `.ligplot`, `.pandamap`) with a `routes_to: "analyze.interactions.clean"` note so the UI can state the routing (FR-011, spec 029 FR-002).
+- [x] T049 Pre-fill form defaults from the project's `current_context` (favorite engine, selected engines, output dir) in the form-schema endpoint.
+- [x] T050 Add `GET /api/targets` (catalog) and `GET /api/targets/<key>/form?project_id=` (schema with defaults applied) (FR-006).
+- [x] T051 Add `POST /api/projects/<pid>/jobs` — validate, build argv, `create_job`, `launch`, return the job record; include the resolved command string in the response (FR-008).
+- [x] T052 Return HTTP 409 with a warning payload when `has_running_job(project_id)` is true, unless the request sets `confirm_concurrent: true` (FR-018).
+- [x] T053 Create `webui/templates/launch.html`: target picker grouped by `group`, dynamic form rendered from the schema, and a live **command preview** box showing the exact argv before launch.
+- [x] T054 Show the `routes_to` note in the form when present (FR-011).
+- [x] T055 [P] Add tests: every `ANALYSIS_LABELS` key yields a form schema; a monkeypatched extra label appears in `/api/targets` without web-side changes (SC-002).
+- [x] T056 [P] Add a validation test matrix: missing required field, non-existent path, unknown engine, unknown target — each rejected with a field-level message and no job created.
 
 **Verify Phase 4**: launching `analyze.comparative` from the browser against a fixture project creates a job whose argv matches the documented CLI invocation.
 
