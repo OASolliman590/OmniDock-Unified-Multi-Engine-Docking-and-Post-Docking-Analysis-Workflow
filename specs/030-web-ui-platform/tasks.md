@@ -47,7 +47,7 @@
 - [x] T018 Make all `state_adapter` reads tolerant of a transient partial `state.json`: retry once after a short delay, then surface a typed error (Edge Case: mid-write read).
 - [x] T019 Add `GET /api/projects` and `POST /api/projects` (body `{path, name?}`) to `app.py`, delegating to `registry`.
 - [x] T020 Add `GET /api/projects/<pid>/state` and `GET /api/projects/<pid>/timeline`.
-- [ ] T021 Add `POST /api/projects/<pid>/init` that shells out to `python main.py workflow init --project-dir <path>` (FR-004).
+- [x] T021 Add `POST /api/projects/<pid>/init` that shells out to `python main.py workflow init --project-dir <path>` (FR-004).
 - [x] T022 Create `webui/templates/dashboard.html` rendering the timeline as an ordered list with per-step status badges, plus a context panel (favorite engine, selected engines, docking root, analysis output dir).
 - [x] T023 Create `webui/templates/projects.html` with a registration form and the registered-project list; mark unavailable ones visibly.
 - [x] T024 Wire routes `GET /` (projects page) and `GET /project/<pid>` (dashboard).
@@ -59,22 +59,22 @@
 
 ## Phase 3: Durable Job Runner (US3, P1) — build before launch UI
 
-- [ ] T026 Create `webui/jobs.py` with a `Job` dataclass: `job_id`, `project_id`, `target`, `argv` (list), `cwd`, `log_path`, `pid`, `proc_start_time`, `status`, `exit_code`, `created_at`, `started_at`, `finished_at`, `note`.
-- [ ] T027 Define `TERMINAL_STATUSES = {"completed", "failed", "cancelled"}` and `VALID_STATUSES` including `queued`, `running` (FR-017).
-- [ ] T028 Implement `save_job(job)` / `load_job(job_id)` / `list_jobs(project_id=None)` reading and writing `jobs/<job_id>.json` atomically.
-- [ ] T029 Implement `create_job(project, target, argv)`: persist the record with status `queued` **before** any process starts (FR-012).
-- [ ] T030 Implement `launch(job)`: open `logs/<job_id>.log` for append, `subprocess.Popen(argv, cwd=project.path, stdout=log, stderr=STDOUT, stdin=DEVNULL)`, record `pid` and `proc_start_time`, set status `running`, persist.
-- [ ] T031 In `launch()`, set a non-interactive environment: copy `os.environ`, set `OMNIDOCK_NON_INTERACTIVE=1` and `PYTHONUNBUFFERED=1`, and pass `stdin=DEVNULL` so a stray prompt fails instead of hanging (FR-019).
-- [ ] T032 Write an exit-marker file `jobs/<job_id>.exit` containing the return code when the process finishes, via a small watcher thread — so a restarted server can recover the code without the original `Popen` object.
-- [ ] T033 Implement `_process_alive(pid)` using `psutil` when importable, else an OS-level fallback (`os.kill(pid, 0)` on POSIX, `OpenProcess` query on Windows).
-- [ ] T034 Implement `_identity_matches(job)`: compare recorded `proc_start_time` against the live process's start time; return `unverifiable` (distinct from True/False) when no probe is available (FR-014).
-- [ ] T035 Implement `reconcile_all()` applying the four-case rule from `plan.md` (no pid → failed; not alive → exit marker or failed; alive+identity match → running; alive+mismatch → failed "pid recycled").
-- [ ] T036 Call `reconcile_all()` once during `create_app()` startup (FR-013).
-- [ ] T037 Implement `cancel(job_id)`: terminate the process (SIGTERM, then SIGKILL after a grace period), set status `cancelled`, never delete produced artifacts (FR-016).
-- [ ] T038 Implement `has_running_job(project_id)` used later to warn on a second concurrent job (FR-018).
-- [ ] T039 Add `GET /api/jobs?project_id=`, `GET /api/jobs/<job_id>`, `POST /api/jobs/<job_id>/cancel`.
-- [ ] T040 Add `test/test_webui.py` with a restart-durability test: launch a long fixture job, simulate a server restart by calling `reconcile_all()` in a fresh module state, assert the status stays `running`, then let it exit and assert `completed` (SC-003).
-- [ ] T041 [P] Add a reconciliation test for the recycled-PID case: fabricate a record with a live PID but a mismatched `proc_start_time`; assert `failed` (FR-014).
+- [x] T026 Create `webui/jobs.py` with a `Job` dataclass: `job_id`, `project_id`, `target`, `argv` (list), `cwd`, `log_path`, `pid`, `proc_start_time`, `status`, `exit_code`, `created_at`, `started_at`, `finished_at`, `note`.
+- [x] T027 Define `TERMINAL_STATUSES = {"completed", "failed", "cancelled"}` and `VALID_STATUSES` including `queued`, `running` (FR-017).
+- [x] T028 Implement `save_job(job)` / `load_job(job_id)` / `list_jobs(project_id=None)` reading and writing `jobs/<job_id>.json` atomically.
+- [x] T029 Implement `create_job(project, target, argv)`: persist the record with status `queued` **before** any process starts (FR-012).
+- [x] T030 Implement `launch(job)`: open `logs/<job_id>.log` for append, `subprocess.Popen(argv, cwd=project.path, stdout=log, stderr=STDOUT, stdin=DEVNULL)`, record `pid` and `proc_start_time`, set status `running`, persist.
+- [x] T031 In `launch()`, set a non-interactive environment: copy `os.environ`, set `OMNIDOCK_NON_INTERACTIVE=1` and `PYTHONUNBUFFERED=1`, and pass `stdin=DEVNULL` so a stray prompt fails instead of hanging (FR-019).
+- [x] T032 Write an exit-marker file `jobs/<job_id>.exit` containing the return code when the process finishes, via a small watcher thread — so a restarted server can recover the code without the original `Popen` object.
+- [x] T033 Implement `_process_alive(pid)` using `psutil` when importable, else an OS-level fallback (`os.kill(pid, 0)` on POSIX, `OpenProcess` query on Windows).
+- [x] T034 Implement `_identity_matches(job)`: compare recorded `proc_start_time` against the live process's start time; return `unverifiable` (distinct from True/False) when no probe is available (FR-014).
+- [x] T035 Implement `reconcile_all()` applying the four-case rule from `plan.md` (no pid → failed; not alive → exit marker or failed; alive+identity match → running; alive+mismatch → failed "pid recycled").
+- [x] T036 Call `reconcile_all()` once during `create_app()` startup (FR-013).
+- [x] T037 Implement `cancel(job_id)`: terminate the process (SIGTERM, then SIGKILL after a grace period), set status `cancelled`, never delete produced artifacts (FR-016).
+- [x] T038 Implement `has_running_job(project_id)` used later to warn on a second concurrent job (FR-018).
+- [x] T039 Add `GET /api/jobs?project_id=`, `GET /api/jobs/<job_id>`, `POST /api/jobs/<job_id>/cancel`.
+- [x] T040 Add `test/test_webui.py` with a restart-durability test: launch a long fixture job, simulate a server restart by calling `reconcile_all()` in a fresh module state, assert the status stays `running`, then let it exit and assert `completed` (SC-003).
+- [x] T041 [P] Add a reconciliation test for the recycled-PID case: fabricate a record with a live PID but a mismatched `proc_start_time`; assert `failed` (FR-014).
 
 **Verify Phase 3**: all Phase-3 tests pass; a job launched from a Python shell survives the shell exiting.
 
