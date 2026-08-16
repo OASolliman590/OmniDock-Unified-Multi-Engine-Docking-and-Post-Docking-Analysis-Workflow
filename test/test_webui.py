@@ -988,6 +988,36 @@ def test_every_job_runs_through_the_cli():
         assert argv[1] == "main.py", f"{key} does not invoke the CLI: {argv[:3]}"
 
 
+def test_cli_survives_a_legacy_console_encoding():
+    """`python main.py ...` must not die on a cp1252 console.
+
+    Regression: main.py prints a non-ASCII banner, so on a Windows console
+    every command -- including --help -- raised UnicodeEncodeError before
+    doing any work. Runs a real subprocess with a legacy encoding forced
+    and no PYTHONIOENCODING escape hatch.
+    """
+    env = dict(os.environ)
+    env.pop("PYTHONIOENCODING", None)
+    env["PYTHONLEGACYWINDOWSSTDIO"] = "1"
+
+    result = subprocess.run(
+        [sys.executable, "main.py", "webui", "--help"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120, env=env,
+    )
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert "UnicodeEncodeError" not in combined, combined[:600]
+    assert result.returncode == 0, combined[:600]
+
+
+def test_webui_launcher_script_exists():
+    """A launcher so the UI can be started without knowing the venv path."""
+    launcher = REPO_ROOT / "start_webui.bat"
+    assert launcher.is_file()
+    body = launcher.read_text(encoding="utf-8")
+    assert "main.py webui" in body
+    assert ".venv" in body
+
+
 def test_default_bind_is_localhost():
     """FR-034: the UI has no auth, so it must not default to a public bind."""
     from webui.config import HOST

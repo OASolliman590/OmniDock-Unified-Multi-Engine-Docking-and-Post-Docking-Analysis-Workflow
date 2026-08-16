@@ -36,6 +36,12 @@ still belongs to the job it launched, and will say so rather than guess.
 
 ## Run
 
+**Windows — easiest:** double-click `start_webui.bat` in the repository root, or
+run it from any shell. It uses the project's virtual environment, so nothing has
+to be on your `PATH`.
+
+Otherwise, run it with the interpreter that has the dependencies installed:
+
 ```bash
 python main.py webui
 ```
@@ -50,17 +56,23 @@ Then open <http://127.0.0.1:8770>.
 
 Options: `--host`, `--port`, `--debug`, and `--allow-remote` (see above).
 
-### Windows note
+### If `python main.py webui` does not work
 
-`main.py` prints a non-ASCII banner. On a console defaulting to cp1252 that
-raises `UnicodeEncodeError` before any work happens, so set:
+Three things commonly go wrong, in order of likelihood:
 
-```bash
-set PYTHONIOENCODING=utf-8
-```
-
-before running the CLI directly. Jobs launched *by the web UI* already set this
-in their environment, so they are unaffected.
+1. **`Python was not found`** — a bare `python` is not on your `PATH` (on
+   Windows it often resolves to a Microsoft Store stub). Use `start_webui.bat`,
+   or call the interpreter directly:
+   ```bash
+   .venv\Scripts\python.exe main.py webui
+   ```
+2. **`ModuleNotFoundError: No module named 'pandas'`** (or flask, scipy, …) —
+   you are using an interpreter without the project's dependencies. Install them
+   into that interpreter, or use the project virtual environment as above.
+3. **`UnicodeEncodeError`** — fixed: `main.py` now reconfigures stdout/stderr to
+   UTF-8 at startup, because the banner cannot be encoded by a cp1252 console.
+   If you are on an older checkout, set `PYTHONIOENCODING=utf-8` as a
+   workaround.
 
 ## Register a project
 

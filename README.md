@@ -212,6 +212,9 @@ deployment.
 python main.py webui        # then open http://127.0.0.1:8770
 ```
 
+On Windows you can also just run `start_webui.bat`, which uses the project's
+virtual environment so nothing needs to be on your `PATH`.
+
 It binds to localhost and has **no authentication** — see
 [docs/WEB_UI_GUIDE.md](docs/WEB_UI_GUIDE.md) for setup, usage, and the full
 security posture. The web layer never runs pipeline stages itself; every action
