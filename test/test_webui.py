@@ -26,7 +26,13 @@ FIXTURE_PROJECT = REPO_ROOT / "test" / "fixtures" / "webui_project"
 
 @pytest.fixture()
 def app_home(monkeypatch, tmp_path):
-    """Isolate the web UI's data directory for each test."""
+    """Isolate the web UI's data directory for each test.
+
+    Any job still running at teardown is killed. Several tests launch
+    deliberately long-lived processes; leaving them behind leaks processes
+    and, on Windows, keeps the log file open so pytest cannot remove
+    tmp_path (a PermissionError that surfaces as an unrelated test failing).
+    """
     home = tmp_path / "webui_home"
     monkeypatch.setenv("OMNIDOCK_WEBUI_HOME", str(home))
     # config reads the env var lazily, but modules cache nothing -- reimport
@@ -38,7 +44,22 @@ def app_home(monkeypatch, tmp_path):
     importlib.reload(webui.registry)
     importlib.reload(webui.jobs)
     webui.config.ensure_app_dirs()
-    return home
+
+    yield home
+
+    import webui.jobs as J
+    for job in J.list_jobs():
+        if job.is_terminal:
+            continue
+        try:
+            J.cancel(job.job_id)
+        except Exception:
+            pass
+    # Give the OS a moment to release the log file handles.
+    for _ in range(20):
+        if not any(j.pid and J._process_alive(j.pid) for j in J.list_jobs()):
+            break
+        time.sleep(0.1)
 
 
 @pytest.fixture()
