@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}HPC · {{ project.name }}{% endblock %}
+{% block nav_hpc %}active{% endblock %}
+
+{% block content %}
+<h1>HPC deployment</h1>
+
+<div class="alert alert-info">
+  Profile values are redacted before they reach this page. Accounts, SSH targets
+  and home-directory paths are never rendered here or written to a job log.
+</div>
+
+{% if not profiles %}
+<div class="empty-state">
+  <p>No HPC profiles found.</p>
+  <p>Public templates live in <span class="mono">examples/hpc_profiles/</span>;
+     real site settings belong in this project's
+     <span class="mono">.workflow/hpc_profiles/</span>.</p>
+</div>
+{% else %}
+
+<div class="card">
+  <div class="field">
+    <label for="profile-select">Profile</label>
+    <select id="profile-select">
+      {% for p in profiles %}
+      <option value="{{ p.name }}">{{ p.name }} ({{ p.source }})</option>
+      {% endfor %}
+    </select>
+    <div class="field-help" id="profile-desc"></div>
+  </div>
+
+  <div class="field">
+    <label>Action</label>
+    <select id="action-select">
+      <option value="deploy">deploy — generate Slurm assets locally</option>
+      <option value="sync">sync — copy the project to the cluster</option>
+      <option value="submit">submit — queue the synced deployment</option>
+    </select>
+  </div>
+
+  <div class="field" id="confirm-field" hidden>
+    <label for="confirm-target">Confirm remote target</label>
+    <input type="text" id="confirm-target" class="mono"
+           placeholder="user@hpc-host">
+    <div class="field-help">
+      This action contacts a remote system. Type its SSH target exactly as the
+      profile defines it to confirm.
+    </div>
+    <div class="field-error" id="confirm-error" hidden></div>
+  </div>
+
+  <button class="btn" id="run-btn">Run action</button>
+  <span class="muted" id="run-status" style="margin-left:10px"></span>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">Profile (redacted)</h2>
+  <pre class="mono" id="profile-body"
+       style="background:#f1efe8; border:1px solid #d9d7cf; border-radius:6px;
+              padding:10px; max-height:380px; overflow:auto; margin:0;
+              white-space:pre-wrap"></pre>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if profiles %}
+<script>
+const PID = {{ project.id | tojson }};
+const PROFILES = {{ profiles | tojson }};
+const profileSelect = document.getElementById("profile-select");
+const actionSelect = document.getElementById("action-select");
+const confirmField = document.getElementById("confirm-field");
+const confirmError = document.getElementById("confirm-error");
+const runBtn = document.getElementById("run-btn");
+const runStatus = document.getElementById("run-status");
+
+function currentProfile() {
+  return PROFILES.find((p) => p.name === profileSelect.value);
+}
+
+function refresh() {
+  const p = currentProfile();
+  document.getElementById("profile-desc").textContent = p ? (p.description || "") : "";
+  document.getElementById("profile-body").textContent =
+    p ? JSON.stringify(p.fields, null, 2) : "";
+  const needsConfirm = actionSelect.value !== "deploy";
+  confirmField.hidden = !needsConfirm;
+  confirmError.hidden = true;
+}
+
+profileSelect.addEventListener("change", refresh);
+actionSelect.addEventListener("change", refresh);
+
+runBtn.addEventListener("click", async () => {
+  confirmError.hidden = true;
+  const action = actionSelect.value;
+  const payload = { profile: profileSelect.value, values: {} };
+
+  if (action !== "deploy") {
+    const target = document.getElementById("confirm-target").value.trim();
+    if (!target) {
+      confirmError.textContent = "Type the profile's SSH target to confirm.";
+      confirmError.hidden = false;
+      return;
+    }
+    if (!confirm(`Run '${action}' against ${target}?`)) return;
+    payload.confirm_target = target;
+  }
+
+  runBtn.disabled = true;
+  runStatus.textContent = "starting…";
+  const res = await fetch(`/api/projects/${PID}/hpc/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json();
+  runBtn.disabled = false;
+  runStatus.textContent = "";
+
+  if (res.ok) {
+    location.href = `/job/${body.job_id}`;
+  } else if (body.code === "CONFIRM_REQUIRED") {
+    confirmError.textContent = body.error;
+    confirmError.hidden = false;
+  } else {
+    alert(body.error || "Action failed.");
+  }
+});
+
+refresh();
+</script>
+{% endif %}
+{% endblock %}

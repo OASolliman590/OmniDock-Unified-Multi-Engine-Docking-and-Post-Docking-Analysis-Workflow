@@ -203,6 +203,36 @@ def _build_pipeline_targets() -> dict[str, LaunchTarget]:
                                    {"value": "score-only", "label": "score-only"}]),
             ],
         ),
+        "dock.deploy": LaunchTarget(
+            key="dock.deploy", label="HPC: generate deployment assets", group="hpc",
+            cli_path=["dock", "deploy"],
+            fields=[
+                FormField("hpc_profile", "HPC profile", "text", required=True),
+                FormField("engines", "Engines", "multiselect", choices=engines),
+                FormField("remote_project_dir", "Remote project dir", "text"),
+            ],
+        ),
+        "dock.sync": LaunchTarget(
+            key="dock.sync", label="HPC: sync project to cluster", group="hpc",
+            cli_path=["dock", "sync"],
+            fields=[
+                FormField("hpc_profile", "HPC profile", "text", required=True),
+                FormField("remote_project_dir", "Remote project dir", "text"),
+                FormField("dry_run", "Dry run", "bool", default=False),
+            ],
+        ),
+        "dock.submit": LaunchTarget(
+            key="dock.submit", label="HPC: submit synced deployment", group="hpc",
+            cli_path=["dock", "submit"],
+            fields=[
+                FormField("hpc_profile", "HPC profile", "text", required=True),
+                FormField("engines", "Engines", "multiselect", choices=engines),
+                FormField("mode", "Mode", "select",
+                          choices=[{"value": "screen", "label": "screen"},
+                                   {"value": "exhaustive", "label": "exhaustive"}]),
+                FormField("round", "Deployment round", "text"),
+            ],
+        ),
         "workflow.init": LaunchTarget(
             key="workflow.init", label="Initialize workflow state", group="workflow",
             cli_path=["workflow", "init"],

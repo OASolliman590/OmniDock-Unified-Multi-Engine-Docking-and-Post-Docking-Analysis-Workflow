@@ -35,6 +35,8 @@
        class="{% block nav_results %}{% endblock %}">Results</a>
     <a href="{{ url_for('page_dag', pid=project.id) }}"
        class="{% block nav_dag %}{% endblock %}">DAG</a>
+    <a href="{{ url_for('page_hpc', pid=project.id) }}"
+       class="{% block nav_hpc %}{% endblock %}">HPC</a>
     <span class="subnav-path" title="{{ project.path }}">{{ project.path }}</span>
   </nav>
   {% endif %}

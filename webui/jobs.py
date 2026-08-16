@@ -408,8 +408,12 @@ def _reconcile_one(job: Job) -> Job | None:
 
     marker = _exit_marker(job.job_id)
 
-    # A finished supervisor leaves a marker even when no watcher survived.
-    if marker.exists() and job.pid is not None and not _process_alive(job.pid):
+    # The marker is authoritative and is checked before anything else: the
+    # supervisor only writes it after the job has exited. Consulting process
+    # liveness first would mean a recycled PID (a different process now
+    # holding the same number) shadows a real, recorded outcome and reports
+    # a finished job as failed.
+    if marker.exists():
         try:
             code = int(marker.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):

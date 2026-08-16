@@ -20,6 +20,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 from . import __version__
 from . import artifacts as artifacts_mod
 from . import dag as dag_mod
+from . import hpc as hpc_mod
 from . import jobs as jobs_mod
 from . import logs as logs_mod
 from . import registry
@@ -377,6 +378,70 @@ def create_app() -> Flask:
         except dag_mod.DagError as exc:
             return _err(str(exc), "INVALID_INPUT", 500)
 
+    # ---------- hpc ----------
+
+    @app.get("/api/projects/<pid>/hpc/profiles")
+    def api_hpc_profiles(pid: str):
+        project = _project_or_404(pid)
+        root = project.root if project.available else None
+        return jsonify(hpc_mod.list_profiles(root))
+
+    @app.post("/api/projects/<pid>/hpc/<action>")
+    def api_hpc_action(pid: str, action: str):
+        """Run deploy / sync / submit through the normal job runner.
+
+        sync and submit touch a remote system, so they require a
+        confirmation naming the target before anything is launched (FR-033).
+        """
+        if action not in ("deploy", "sync", "submit"):
+            return _err(f"Unknown HPC action: {action}", "INVALID_INPUT", 400)
+
+        project = _project_or_404(pid)
+        if not project.available:
+            return _err("Project directory is unavailable.", "PROJECT_UNAVAILABLE", 409)
+
+        body = request.get_json(silent=True) or {}
+        profile = (body.get("profile") or "").strip()
+        if not profile:
+            return _err("An HPC profile is required.", "INVALID_INPUT", 400)
+
+        if action in ("sync", "submit"):
+            expected = hpc_mod.profile_remote_target(project.root, profile)
+            supplied = (body.get("confirm_target") or "").strip()
+            if not supplied:
+                return jsonify({
+                    "ok": False, "code": "CONFIRM_REQUIRED",
+                    "error": f"'{action}' contacts a remote system. Re-send with "
+                             "confirm_target set to the profile's ssh target.",
+                }), 400
+            if expected and supplied != expected:
+                return jsonify({
+                    "ok": False, "code": "CONFIRM_REQUIRED",
+                    "error": "confirm_target does not match this profile's remote target.",
+                }), 400
+
+        key = f"dock.{action}"
+        values = dict(body.get("values") or {})
+        values["hpc_profile"] = profile
+
+        errors = targets_mod.validate(key, values)
+        if errors:
+            return jsonify({"ok": False, "code": "INVALID_INPUT",
+                            "error": "Some fields need attention.", "fields": errors}), 400
+
+        argv = targets_mod.build_argv(key, values, project.path)
+        try:
+            targets_mod.assert_argv_parses(argv)
+        except targets_mod.TargetError as exc:
+            return _err(str(exc), "INVALID_INPUT", 400)
+
+        job = jobs_mod.create_job(pid, key, argv, str(REPO_ROOT))
+        try:
+            job = jobs_mod.launch(job)
+        except jobs_mod.JobError as exc:
+            return _err(str(exc), "INVALID_INPUT", 500)
+        return jsonify(job.to_dict()), 202
+
     # ---------- pages ----------
 
     @app.get("/")
@@ -424,6 +489,17 @@ def create_app() -> Flask:
             all_projects=registry.list_projects(),
             groups=groups,
             has_running=jobs_mod.has_running_job(pid),
+        )
+
+    @app.get("/project/<pid>/hpc")
+    def page_hpc(pid: str):
+        project = _project_or_404(pid)
+        profiles = hpc_mod.list_profiles(project.root if project.available else None)
+        return render_template(
+            "hpc.html",
+            project=project,
+            all_projects=registry.list_projects(),
+            profiles=profiles,
         )
 
     @app.get("/job/<job_id>")

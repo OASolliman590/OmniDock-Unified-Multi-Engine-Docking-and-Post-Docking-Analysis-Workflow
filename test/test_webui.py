@@ -326,6 +326,39 @@ def test_stale_running_record_does_not_block_new_launches(app_home):
     assert J.has_running_job("projS") is False
 
 
+def test_exit_marker_wins_over_a_recycled_pid(app_home):
+    """A recorded outcome must not be shadowed by PID reuse.
+
+    Regression: liveness was checked before the marker, so once the
+    supervisor's PID was recycled by an unrelated process, a finished job
+    took the "pid recycled" branch and was reported as failed.
+    """
+    import webui.jobs as J
+
+    job = J.launch(J.create_job("projM", "t", _print_argv("done"), str(REPO_ROOT)))
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if J._exit_marker(job.job_id).exists():
+            break
+        time.sleep(0.2)
+    assert J._exit_marker(job.job_id).exists()
+
+    # Put the record back to running and point it at a live PID whose start
+    # time cannot match -- i.e. the PID was reused.
+    stale = J.load_job(job.job_id)
+    stale.status = "running"
+    stale.exit_code = None
+    stale.finished_at = None
+    stale.pid = os.getpid()
+    stale.proc_start_time = 1.0
+    J.save_job(stale)
+
+    resolved = J.refresh(job.job_id)
+    assert resolved.status == "completed", (
+        f"marker should win over liveness, got {resolved.status} ({resolved.note})")
+    assert resolved.exit_code == 0
+
+
 def test_reconcile_marks_recycled_pid_as_failed(app_home):
     """FR-014: PID liveness alone must not be trusted."""
     import webui.jobs as J
@@ -771,6 +804,127 @@ def test_dag_absent_report_is_not_an_error(client, tmp_path):
 
 def test_dag_page_renders(client, project_id):
     assert client.get(f"/project/{project_id}/dag").status_code == 200
+
+
+# ------------------------------------------------------------------ hpc
+
+SENTINELS = {
+    "ssh_target": "secretuser@secret-cluster.example.edu",
+    "account": "SENTINEL-SLURM-ACCOUNT",
+    "project_root_base": "/cluster/users/secretuser/docking",
+    "binary": "/home/secretuser/bin/gnina",
+}
+
+
+@pytest.fixture()
+def project_with_secret_profile(client, tmp_path):
+    """A project carrying an HPC profile full of known sentinel secrets."""
+    project = tmp_path / "hpc_project"
+    profiles = project / ".workflow" / "hpc_profiles"
+    profiles.mkdir(parents=True)
+    (project / ".workflow" / "state.json").write_text(json.dumps({
+        "version": 2, "project_root": str(project), "current_context": {},
+        "artifacts": {}, "steps": {}, "background_tasks": {},
+        "feature_flags": {}, "checkpoint_metadata": {},
+    }), encoding="utf-8")
+
+    (profiles / "secret-site.json").write_text(json.dumps({
+        "name": "secret-site",
+        "description": "fixture profile",
+        "remote": {
+            "ssh_target": SENTINELS["ssh_target"],
+            "project_root_base": SENTINELS["project_root_base"],
+        },
+        "engines": {
+            "gnina": {
+                "runtime": {"binary": SENTINELS["binary"]},
+                "slurm_gpu": {"account": SENTINELS["account"], "partition": "gpu"},
+            }
+        },
+    }, indent=2), encoding="utf-8")
+
+    pid = client.post("/api/projects", json={"path": str(project)}).get_json()["id"]
+    return pid, project
+
+
+def test_hpc_profiles_are_redacted(client, project_with_secret_profile):
+    """SC-009: no sentinel secret may appear in the API response."""
+    pid, _project = project_with_secret_profile
+    res = client.get(f"/api/projects/{pid}/hpc/profiles")
+    assert res.status_code == 200
+    body = res.get_data(as_text=True)
+
+    for label, secret in SENTINELS.items():
+        assert secret not in body, f"{label} leaked into the profiles response"
+    assert "secret-site" in body  # the profile is still listed, just redacted
+
+
+def test_hpc_page_does_not_render_secrets(client, project_with_secret_profile):
+    pid, _project = project_with_secret_profile
+    page = client.get(f"/project/{pid}/hpc").get_data(as_text=True)
+    for label, secret in SENTINELS.items():
+        assert secret not in page, f"{label} leaked into the rendered page"
+
+
+def test_sync_requires_confirmation(client, project_with_secret_profile):
+    """FR-033: a remote-touching action needs an explicit target confirmation."""
+    pid, _project = project_with_secret_profile
+    res = client.post(f"/api/projects/{pid}/hpc/sync", json={"profile": "secret-site"})
+    assert res.status_code == 400
+    assert res.get_json()["code"] == "CONFIRM_REQUIRED"
+
+
+def test_submit_requires_confirmation(client, project_with_secret_profile):
+    pid, _project = project_with_secret_profile
+    res = client.post(f"/api/projects/{pid}/hpc/submit", json={"profile": "secret-site"})
+    assert res.get_json()["code"] == "CONFIRM_REQUIRED"
+
+
+def test_sync_rejects_a_mismatched_confirmation(client, project_with_secret_profile):
+    pid, _project = project_with_secret_profile
+    res = client.post(f"/api/projects/{pid}/hpc/sync", json={
+        "profile": "secret-site", "confirm_target": "wrong@host",
+    })
+    assert res.status_code == 400
+    assert res.get_json()["code"] == "CONFIRM_REQUIRED"
+
+
+def test_deploy_does_not_require_confirmation(client, app_home, project_with_secret_profile):
+    """deploy only writes local assets, so it needs no remote confirmation."""
+    pid, _project = project_with_secret_profile
+    res = client.post(f"/api/projects/{pid}/hpc/deploy", json={"profile": "secret-site"})
+    assert res.status_code == 202, res.get_data(as_text=True)
+
+
+def test_hpc_unknown_action_rejected(client, project_with_secret_profile):
+    pid, _project = project_with_secret_profile
+    res = client.post(f"/api/projects/{pid}/hpc/rm-rf", json={"profile": "secret-site"})
+    assert res.status_code == 400
+
+
+def test_redact_handles_nested_and_listed_secrets():
+    import webui.hpc as H
+
+    payload = {
+        "safe": "value",
+        "remote": {"ssh_target": "me@host", "port": 22},
+        "list": [{"account": "acct-1"}, "plain", "/home/me/secret"],
+    }
+    out = H.redact(payload)
+    assert out["safe"] == "value"
+    assert out["remote"]["ssh_target"] == H.REDACTED
+    assert out["remote"]["port"] == 22
+    assert out["list"][0]["account"] == H.REDACTED
+    assert out["list"][1] == "plain"
+    assert out["list"][2] == H.REDACTED
+
+
+def test_builtin_templates_are_listed(client, project_id):
+    """The public-safe templates must be discoverable."""
+    profiles = client.get(f"/api/projects/{project_id}/hpc/profiles").get_json()
+    names = {p["name"] for p in profiles}
+    assert any("bibalex" in n for n in names)
+    assert all(p["source"] in ("builtin", "project") for p in profiles)
 
 
 # ------------------------------------------------------------------ api

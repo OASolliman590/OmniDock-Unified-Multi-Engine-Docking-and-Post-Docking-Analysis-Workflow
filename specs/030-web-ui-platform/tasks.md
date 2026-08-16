@@ -168,13 +168,13 @@
 
 ## Phase 9: HPC Panel (US7, P3)
 
-- [ ] T093 Create `webui/hpc.py` with `list_profiles(project)` reading `examples/hpc_profiles/` and `<project>/.workflow/hpc_profiles/` (FR-031).
-- [ ] T094 Implement `redact(profile)` stripping accounts, home paths, and any credential-shaped values before the profile is returned to the browser (FR-032).
-- [ ] T095 Add `GET /api/projects/<pid>/hpc/profiles` returning redacted profiles only.
-- [ ] T096 Add launch targets `dock.deploy`, `dock.sync`, `dock.submit` routed through the same `jobs` runner.
-- [ ] T097 Require a confirmation payload naming the remote target for `sync` and `submit`; reject without it (FR-033).
-- [ ] T098 Create `webui/templates/hpc.html` with profile selection, a deploy/sync/submit panel, and the confirmation step.
-- [ ] T099 [P] Add a secret-hygiene test: a fixture profile with sentinel secrets must not appear in rendered HTML or job logs (SC-009).
+- [x] T093 Create `webui/hpc.py` with `list_profiles(project)` reading `examples/hpc_profiles/` and `<project>/.workflow/hpc_profiles/` (FR-031).
+- [x] T094 Implement `redact(profile)` stripping accounts, home paths, and any credential-shaped values before the profile is returned to the browser (FR-032).
+- [x] T095 Add `GET /api/projects/<pid>/hpc/profiles` returning redacted profiles only.
+- [x] T096 Add launch targets `dock.deploy`, `dock.sync`, `dock.submit` routed through the same `jobs` runner.
+- [x] T097 Require a confirmation payload naming the remote target for `sync` and `submit`; reject without it (FR-033).
+- [x] T098 Create `webui/templates/hpc.html` with profile selection, a deploy/sync/submit panel, and the confirmation step.
+- [x] T099 [P] Add a secret-hygiene test: a fixture profile with sentinel secrets must not appear in rendered HTML or job logs (SC-009).
 
 **Verify Phase 9**: deploy with the public-safe template produces the same assets as the CLI; sentinels never leak.
 
