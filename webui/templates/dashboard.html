@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · OmniDock{% endblock %}
+{% block nav_dashboard %}active{% endblock %}
+
+{% block content %}
+<h1>{{ project.name }}</h1>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+{% if project.available and not state.has_workflow %}
+<div class="alert alert-warn">
+  This directory has no <span class="mono">.workflow/</span> yet.
+  <button class="btn" id="init-btn" style="margin-left:8px">Initialize workflow</button>
+  <div class="field-help" style="margin-top:6px">
+    Runs <span class="mono">main.py workflow init</span> against this project.
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2 style="margin-top:0">Timeline</h2>
+  <table>
+    <thead>
+      <tr><th style="width:34%">Step</th><th style="width:16%">Status</th><th style="width:22%">Updated</th><th>Note</th></tr>
+    </thead>
+    <tbody>
+      {% for step in steps %}
+      <tr>
+        <td>{{ step.label }}<div class="mono muted" style="font-size:12px">{{ step.key }}</div></td>
+        <td><span class="badge badge-{{ step.status }}">{{ step.status }}</span></td>
+        <td class="muted">{{ step.timestamp[:19].replace("T", " ") if step.timestamp else "—" }}</td>
+        <td class="muted">{{ step.note or "" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if state.has_workflow %}
+<div class="card">
+  <h2 style="margin-top:0">Context</h2>
+  {% set ctx = state.current_context %}
+  <table>
+    <tbody>
+      <tr><th style="width:30%">Favorite engine</th><td>{{ ctx.favorite_engine or "—" }}</td></tr>
+      <tr><th>Selected engines</th>
+          <td>{{ ctx.selected_engines | join(", ") if ctx.selected_engines else "—" }}</td></tr>
+      <tr><th>Pair mode</th><td>{{ ctx.pair_mode or "—" }}</td></tr>
+      <tr><th>Layout profile</th><td>{{ ctx.layout_profile or "—" }}</td></tr>
+      <tr><th>Docking root</th><td class="mono">{{ ctx.docking_root or "—" }}</td></tr>
+      <tr><th>Post-docking root</th><td class="mono">{{ ctx.post_docking_root or "—" }}</td></tr>
+      <tr><th>Analysis output dir</th><td class="mono">{{ ctx.analysis_output_dir or "—" }}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+{% if state.summary %}
+<div class="card">
+  <h2 style="margin-top:0">State summary</h2>
+  <pre class="mono muted" style="white-space:pre-wrap; margin:0">{{ state.summary | join("\n") }}</pre>
+</div>
+{% endif %}
+
+{% if state.background_tasks %}
+<div class="card">
+  <h2 style="margin-top:0">Interactive-session tasks</h2>
+  <p class="muted" style="font-size:13px">
+    Recorded by the terminal workflow shell. Jobs launched from this web UI are listed separately.
+  </p>
+  <table>
+    <thead><tr><th>Label</th><th>Target</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for task in state.background_tasks %}
+      <tr>
+        <td>{{ task.label or "—" }}</td>
+        <td class="mono">{{ task.target or "—" }}</td>
+        <td><span class="badge badge-{{ task.status }}">{{ task.status }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const initBtn = document.getElementById("init-btn");
+if (initBtn) {
+  initBtn.addEventListener("click", async () => {
+    initBtn.disabled = true;
+    initBtn.textContent = "Initializing…";
+    const res = await fetch(`/api/projects/{{ project.id }}/init`, { method: "POST" });
+    if (res.ok) {
+      const job = await res.json();
+      location.href = `/job/${job.job_id}`;
+    } else {
+      const body = await res.json().catch(() => ({}));
+      alert(body.error || "Initialization failed.");
+      initBtn.disabled = false;
+      initBtn.textContent = "Initialize workflow";
+    }
+  });
+}
+</script>
+{% endblock %}

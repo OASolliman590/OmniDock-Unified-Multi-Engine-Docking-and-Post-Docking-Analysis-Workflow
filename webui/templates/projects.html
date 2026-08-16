@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Projects · OmniDock{% endblock %}
+
+{% block content %}
+<h1>Projects</h1>
+
+<div class="card">
+  <h2 style="margin-top:0">Register a project</h2>
+  <form id="register-form">
+    <div class="field">
+      <label for="path">Project directory</label>
+      <input type="text" id="path" name="path" class="mono"
+             placeholder="D:\path\to\docking_project" required>
+      <div class="field-help">Absolute path to an OmniDock project root.</div>
+      <div class="field-error" id="path-error" hidden></div>
+    </div>
+    <div class="field">
+      <label for="name">Display name <span class="muted">(optional)</span></label>
+      <input type="text" id="name" name="name" placeholder="defaults to the folder name">
+    </div>
+    <button type="submit" class="btn">Register</button>
+  </form>
+</div>
+
+{% if projects %}
+<table>
+  <thead>
+    <tr><th>Name</th><th>Path</th><th>Workflow</th><th>Status</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for p in projects %}
+    <tr>
+      <td><a href="{{ url_for('page_dashboard', pid=p.id) }}">{{ p.name }}</a></td>
+      <td class="mono muted">{{ p.path }}</td>
+      <td>
+        {% if p.has_workflow %}
+          <span class="badge badge-completed">initialized</span>
+        {% else %}
+          <span class="badge badge-pending">not initialized</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if p.available %}
+          <span class="badge badge-completed">available</span>
+        {% else %}
+          <span class="badge badge-failed">unavailable</span>
+        {% endif %}
+      </td>
+      <td>
+        <button class="btn btn-secondary" data-unregister="{{ p.id }}">Remove</button>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="muted" style="margin-top:10px; font-size:13px;">
+  Removing a project only unregisters it here. Nothing on disk is deleted.
+</p>
+{% else %}
+<div class="empty-state">
+  <p>No projects registered yet.</p>
+  <p>Register an OmniDock project directory above to see its workflow timeline,
+     launch analyses, and browse results.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const form = document.getElementById("register-form");
+const pathError = document.getElementById("path-error");
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  pathError.hidden = true;
+  const payload = {
+    path: document.getElementById("path").value.trim(),
+    name: document.getElementById("name").value.trim() || null,
+  };
+  const res = await fetch("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json();
+  if (res.ok) {
+    location.reload();
+  } else {
+    pathError.textContent = body.error || "Registration failed.";
+    pathError.hidden = false;
+  }
+});
+
+document.querySelectorAll("[data-unregister]").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const pid = btn.getAttribute("data-unregister");
+    await fetch(`/api/projects/${pid}`, { method: "DELETE" });
+    location.reload();
+  });
+});
+</script>
+{% endblock %}

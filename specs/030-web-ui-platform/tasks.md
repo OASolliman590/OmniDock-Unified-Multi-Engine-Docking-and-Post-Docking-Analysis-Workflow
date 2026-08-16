@@ -36,22 +36,22 @@
 
 ## Phase 2: Project Registry & Dashboard (US1, P1)
 
-- [ ] T010 Create `webui/registry.py` with a `Project` dataclass (`id`, `path`, `name`, `registered_at`).
-- [ ] T011 Implement `canonicalize(path)` in `registry.py`: expand `~`, resolve to absolute, resolve symlinks, and normalize case on Windows — so one directory cannot register twice (Edge Case: duplicate spellings).
-- [ ] T012 Implement `register(path, name=None)`: validate the directory exists and is readable, generate a stable id (hash of canonical path), persist to `projects.json`; return existing entry if already registered.
-- [ ] T013 Implement `list_projects()`, `get_project(id)`, `unregister(id)` with atomic writes to `projects.json`.
-- [ ] T014 Add `available` computation to project listing: `False` when the directory no longer exists (FR-030) — never raise.
-- [ ] T015 Create `webui/state_adapter.py` importing `ensure_state`, `load_state`, `list_steps`, `summarize_state`, `list_background_tasks` from `workflow.state`.
-- [ ] T016 Implement `project_state(project)` in `state_adapter.py` returning a plain dict: `current_context`, `feature_flags`, `artifacts`, plus `has_workflow: bool` (False when `.workflow/` is absent).
-- [ ] T017 Implement `timeline(project)` in `state_adapter.py`: import `TIMELINE_STEPS` from `workflow.interactive`, join with `list_steps()`, return ordered `[{key, label, status, timestamp, note}]` (FR-003).
-- [ ] T018 Make all `state_adapter` reads tolerant of a transient partial `state.json`: retry once after a short delay, then surface a typed error (Edge Case: mid-write read).
-- [ ] T019 Add `GET /api/projects` and `POST /api/projects` (body `{path, name?}`) to `app.py`, delegating to `registry`.
-- [ ] T020 Add `GET /api/projects/<pid>/state` and `GET /api/projects/<pid>/timeline`.
+- [x] T010 Create `webui/registry.py` with a `Project` dataclass (`id`, `path`, `name`, `registered_at`).
+- [x] T011 Implement `canonicalize(path)` in `registry.py`: expand `~`, resolve to absolute, resolve symlinks, and normalize case on Windows — so one directory cannot register twice (Edge Case: duplicate spellings).
+- [x] T012 Implement `register(path, name=None)`: validate the directory exists and is readable, generate a stable id (hash of canonical path), persist to `projects.json`; return existing entry if already registered.
+- [x] T013 Implement `list_projects()`, `get_project(id)`, `unregister(id)` with atomic writes to `projects.json`.
+- [x] T014 Add `available` computation to project listing: `False` when the directory no longer exists (FR-030) — never raise.
+- [x] T015 Create `webui/state_adapter.py` importing `ensure_state`, `load_state`, `list_steps`, `summarize_state`, `list_background_tasks` from `workflow.state`.
+- [x] T016 Implement `project_state(project)` in `state_adapter.py` returning a plain dict: `current_context`, `feature_flags`, `artifacts`, plus `has_workflow: bool` (False when `.workflow/` is absent).
+- [x] T017 Implement `timeline(project)` in `state_adapter.py`: import `TIMELINE_STEPS` from `workflow.interactive`, join with `list_steps()`, return ordered `[{key, label, status, timestamp, note}]` (FR-003).
+- [x] T018 Make all `state_adapter` reads tolerant of a transient partial `state.json`: retry once after a short delay, then surface a typed error (Edge Case: mid-write read).
+- [x] T019 Add `GET /api/projects` and `POST /api/projects` (body `{path, name?}`) to `app.py`, delegating to `registry`.
+- [x] T020 Add `GET /api/projects/<pid>/state` and `GET /api/projects/<pid>/timeline`.
 - [ ] T021 Add `POST /api/projects/<pid>/init` that shells out to `python main.py workflow init --project-dir <path>` (FR-004).
-- [ ] T022 Create `webui/templates/dashboard.html` rendering the timeline as an ordered list with per-step status badges, plus a context panel (favorite engine, selected engines, docking root, analysis output dir).
-- [ ] T023 Create `webui/templates/projects.html` with a registration form and the registered-project list; mark unavailable ones visibly.
-- [ ] T024 Wire routes `GET /` (projects page) and `GET /project/<pid>` (dashboard).
-- [ ] T025 Ensure no route caches state between requests (FR-005) — read fresh on every call; add a comment stating why.
+- [x] T022 Create `webui/templates/dashboard.html` rendering the timeline as an ordered list with per-step status badges, plus a context panel (favorite engine, selected engines, docking root, analysis output dir).
+- [x] T023 Create `webui/templates/projects.html` with a registration form and the registered-project list; mark unavailable ones visibly.
+- [x] T024 Wire routes `GET /` (projects page) and `GET /project/<pid>` (dashboard).
+- [x] T025 Ensure no route caches state between requests (FR-005) — read fresh on every call; add a comment stating why.
 
 **Verify Phase 2**: register a fixture project; dashboard timeline matches `.workflow/state.json`; register the same path with a trailing slash and assert one entry; delete the directory and assert the UI shows it unavailable.
 

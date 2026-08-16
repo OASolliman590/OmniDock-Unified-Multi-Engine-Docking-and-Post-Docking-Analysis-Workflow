@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ section }} · {{ project.name }}{% endblock %}
+{% block nav_launch %}{% if section == "Launch" %}active{% endif %}{% endblock %}
+{% block nav_results %}{% if section == "Results" %}active{% endif %}{% endblock %}
+{% block nav_dag %}{% if section == "DAG" %}active{% endif %}{% endblock %}
+
+{% block content %}
+<h1>{{ section }}</h1>
+<div class="empty-state">
+  <p>This section is not built yet — it lands in <strong>{{ phase }}</strong>
+     of <span class="mono">specs/030-web-ui-platform/tasks.md</span>.</p>
+</div>
+{% endblock %}

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "omnidock-webui",
+      "runtimeExecutable": "D:\\OmniDock\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["webui_cli.py"],
+      "port": 8770
+    }
+  ]
+}
