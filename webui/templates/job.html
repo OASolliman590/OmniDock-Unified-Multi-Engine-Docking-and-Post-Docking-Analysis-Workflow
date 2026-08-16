@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}{{ job.target }} · job{% endblock %}
+
+{% block content %}
+<h1>{{ job.target }}</h1>
+
+<div class="card">
+  <table>
+    <tbody>
+      <tr>
+        <th style="width:22%">Status</th>
+        <td>
+          <span class="badge badge-{{ job.status }}" id="job-status">{{ job.status }}</span>
+          <span id="job-exit" class="muted" style="margin-left:8px">
+            {% if job.exit_code is not none %}exit {{ job.exit_code }}{% endif %}
+          </span>
+        </td>
+      </tr>
+      <tr><th>Job id</th><td class="mono">{{ job.job_id }}</td></tr>
+      {% if project %}
+      <tr><th>Project</th>
+          <td><a href="{{ url_for('page_dashboard', pid=project.id) }}">{{ project.name }}</a></td></tr>
+      {% endif %}
+      <tr><th>Started</th>
+          <td class="muted">{{ job.started_at[:19].replace("T", " ") if job.started_at else "—" }}</td></tr>
+      <tr><th>Finished</th>
+          <td class="muted" id="job-finished">
+            {{ job.finished_at[:19].replace("T", " ") if job.finished_at else "—" }}</td></tr>
+      {% if job.note %}
+      <tr><th>Note</th><td id="job-note">{{ job.note }}</td></tr>
+      {% endif %}
+      <tr><th>Command</th>
+          <td><pre class="mono" style="white-space:pre-wrap; margin:0">{{ job.command }}</pre></td></tr>
+    </tbody>
+  </table>
+
+  <div style="margin-top:12px">
+    <button class="btn btn-danger" id="cancel-btn"
+            {% if job.status not in ["queued", "running"] %}disabled{% endif %}>Cancel job</button>
+    <span class="muted" id="cancel-status" style="margin-left:8px"></span>
+  </div>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">Log</h2>
+  <pre id="log" class="mono"
+       style="background:#1c1c1c; color:#e8e6df; padding:12px; border-radius:6px;
+              height:460px; overflow:auto; white-space:pre-wrap; margin:0"></pre>
+  <div class="field-help" id="log-meta">connecting…</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const JOB_ID = {{ job.job_id | tojson }};
+const TERMINAL = ["completed", "failed", "cancelled"];
+const logEl = document.getElementById("log");
+const metaEl = document.getElementById("log-meta");
+const statusEl = document.getElementById("job-status");
+const exitEl = document.getElementById("job-exit");
+const cancelBtn = document.getElementById("cancel-btn");
+
+// Cap the in-DOM buffer: a multi-hour run can emit far more text than a
+// browser will happily hold in one node.
+const MAX_LINES = 5000;
+let offset = 0;
+let pinned = true;
+
+logEl.addEventListener("scroll", () => {
+  pinned = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+});
+
+function append(text) {
+  logEl.textContent += text;
+  const lines = logEl.textContent.split("\n");
+  if (lines.length > MAX_LINES) {
+    logEl.textContent = lines.slice(lines.length - MAX_LINES).join("\n");
+  }
+  if (pinned) logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setTerminal(status, exitCode, note) {
+  statusEl.textContent = status;
+  statusEl.className = "badge badge-" + status;
+  if (exitCode !== null && exitCode !== undefined) exitEl.textContent = "exit " + exitCode;
+  cancelBtn.disabled = true;
+  metaEl.textContent = "finished" + (note ? " — " + note : "");
+}
+
+async function bootstrap() {
+  const res = await fetch(`/api/jobs/${JOB_ID}/log`);
+  const body = await res.json();
+  append(body.text);
+  offset = body.offset;
+  if (TERMINAL.includes(body.status)) {
+    const job = await (await fetch(`/api/jobs/${JOB_ID}`)).json();
+    setTerminal(job.status, job.exit_code, job.note);
+    return;
+  }
+  startStream();
+}
+
+function startStream() {
+  let source;
+  try {
+    source = new EventSource(`/api/jobs/${JOB_ID}/stream?offset=${offset}`);
+  } catch (err) {
+    pollFallback();
+    return;
+  }
+
+  metaEl.textContent = "streaming…";
+
+  source.addEventListener("log", (event) => {
+    const data = JSON.parse(event.data);
+    append(data.text);
+    offset = data.offset;
+  });
+
+  source.addEventListener("status", (event) => {
+    const data = JSON.parse(event.data);
+    setTerminal(data.status, data.exit_code, data.note);
+    source.close();
+  });
+
+  source.onerror = () => {
+    source.close();
+    metaEl.textContent = "stream interrupted — falling back to polling";
+    pollFallback();
+  };
+}
+
+// EventSource is unavailable or blocked in some environments; polling the
+// same offset-based endpoint keeps the view working.
+function pollFallback() {
+  const timer = setInterval(async () => {
+    const body = await (await fetch(`/api/jobs/${JOB_ID}/log?offset=${offset}`)).json();
+    if (body.text) { append(body.text); offset = body.offset; }
+    if (TERMINAL.includes(body.status)) {
+      clearInterval(timer);
+      const job = await (await fetch(`/api/jobs/${JOB_ID}`)).json();
+      setTerminal(job.status, job.exit_code, job.note);
+    }
+  }, 2000);
+}
+
+cancelBtn.addEventListener("click", async () => {
+  if (!confirm("Cancel this job? Files it already produced are left in place.")) return;
+  cancelBtn.disabled = true;
+  document.getElementById("cancel-status").textContent = "cancelling…";
+  const job = await (await fetch(`/api/jobs/${JOB_ID}/cancel`, { method: "POST" })).json();
+  setTerminal(job.status, job.exit_code, job.note);
+  document.getElementById("cancel-status").textContent = "";
+});
+
+bootstrap();
+</script>
+{% endblock %}

@@ -104,15 +104,15 @@
 
 ## Phase 5: Live Log Streaming & Job UI (US3, P1)
 
-- [ ] T057 Create `webui/logs.py` with `read_from(log_path, offset, max_bytes)` returning `(text, new_offset, size)` — incremental byte-offset reads, never loading the whole file (FR-015).
-- [ ] T058 Implement `tail(log_path, max_bytes)` returning only the last N bytes for initial page load (Edge Case: very large logs).
-- [ ] T059 Add `GET /api/jobs/<job_id>/log?offset=` returning `{text, offset, size, status}`.
-- [ ] T060 Add `GET /api/jobs/<job_id>/stream` as an SSE endpoint emitting new log chunks and terminal-status events; close the stream when the job reaches a terminal status.
-- [ ] T061 Create `webui/templates/job.html`: status header (target, status badge, exit code, timestamps), the resolved command, a log pane, and a Cancel button.
-- [ ] T062 Add `webui/static/logstream.js`: connect to the SSE endpoint, append chunks, auto-scroll unless the user has scrolled up, and fall back to polling `/log?offset=` if `EventSource` errors.
-- [ ] T063 Cap the in-DOM log buffer (for example 5000 lines, dropping from the top) so long runs cannot freeze the tab.
-- [ ] T064 Add a jobs list view to the dashboard showing this project's jobs with status and start time.
-- [ ] T065 [P] Add a test asserting incremental reads: write to a log file in two steps and assert the second read returns only the new bytes.
+- [x] T057 Create `webui/logs.py` with `read_from(log_path, offset, max_bytes)` returning `(text, new_offset, size)` — incremental byte-offset reads, never loading the whole file (FR-015).
+- [x] T058 Implement `tail(log_path, max_bytes)` returning only the last N bytes for initial page load (Edge Case: very large logs).
+- [x] T059 Add `GET /api/jobs/<job_id>/log?offset=` returning `{text, offset, size, status}`.
+- [x] T060 Add `GET /api/jobs/<job_id>/stream` as an SSE endpoint emitting new log chunks and terminal-status events; close the stream when the job reaches a terminal status.
+- [x] T061 Create `webui/templates/job.html`: status header (target, status badge, exit code, timestamps), the resolved command, a log pane, and a Cancel button.
+- [x] T062 Add `webui/static/logstream.js`: connect to the SSE endpoint, append chunks, auto-scroll unless the user has scrolled up, and fall back to polling `/log?offset=` if `EventSource` errors.
+- [x] T063 Cap the in-DOM log buffer (for example 5000 lines, dropping from the top) so long runs cannot freeze the tab.
+- [x] T064 Add a jobs list view to the dashboard showing this project's jobs with status and start time.
+- [x] T065 [P] Add a test asserting incremental reads: write to a log file in two steps and assert the second read returns only the new bytes.
 
 **Verify Phase 5**: launch a job that prints steadily; log lines appear in the browser within ~2s (SC-006); Cancel transitions it to `cancelled`.
 

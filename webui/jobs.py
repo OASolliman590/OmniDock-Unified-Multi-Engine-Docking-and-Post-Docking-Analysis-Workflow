@@ -43,6 +43,28 @@ IDENTITY_UNVERIFIABLE = "unverifiable"
 
 _TERMINATE_GRACE_SECONDS = 5.0
 
+# The job is launched under this tiny supervisor rather than directly.
+#
+# The exit marker exists so a *restarted* server can learn the outcome of a
+# process it never held a handle to. A watcher thread in the launching
+# process cannot provide that: it dies with the server, and the finished job
+# would then reconcile as "process vanished" even when it succeeded. Having
+# the child write its own marker survives the parent's death.
+_SUPERVISOR_SOURCE = """
+import subprocess, sys
+marker = sys.argv[1]
+code = 1
+try:
+    code = subprocess.call(sys.argv[2:])
+finally:
+    try:
+        with open(marker, "w") as handle:
+            handle.write(str(code))
+    except OSError:
+        pass
+sys.exit(code)
+"""
+
 
 class JobError(Exception):
     """Raised when a job cannot be created, found, or controlled."""
@@ -127,8 +149,17 @@ def list_jobs(project_id: str | None = None) -> list[Job]:
 
 
 def has_running_job(project_id: str) -> bool:
-    """Whether this project already has work in flight (FR-018)."""
-    return any(not j.is_terminal for j in list_jobs(project_id))
+    """Whether this project already has work in flight (FR-018).
+
+    Reconciles first: a record left at "running" by a finished job would
+    otherwise block every future launch for that project.
+    """
+    for job in list_jobs(project_id):
+        if job.is_terminal:
+            continue
+        if not refresh(job.job_id).is_terminal:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------- process
@@ -235,15 +266,30 @@ def launch(job: Job) -> Job:
         save_job(job)
         raise JobError(job.note) from exc
 
+    supervised = [
+        sys.executable, "-c", _SUPERVISOR_SOURCE,
+        str(_exit_marker(job.job_id)),
+        *job.argv,
+    ]
+
+    # New process group/session so cancel() can signal the supervisor and
+    # the real job together rather than orphaning the child.
+    spawn_kwargs: dict = {}
+    if sys.platform == "win32":  # pragma: no cover - platform specific
+        spawn_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        spawn_kwargs["start_new_session"] = True
+
     try:
         proc = subprocess.Popen(
-            job.argv,
+            supervised,
             cwd=job.cwd,
             stdout=handle,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             env=_job_env(),
             close_fds=True,
+            **spawn_kwargs,
         )
     except OSError as exc:
         handle.close()
@@ -264,10 +310,11 @@ def launch(job: Job) -> Job:
 
 
 def _watch(job_id: str, proc: subprocess.Popen, handle) -> None:
-    """Record the exit code when the process ends.
+    """Update the record promptly while this process is alive.
 
-    The marker file is what lets a *restarted* server learn the outcome of a
-    process it never owned a handle to (T032).
+    This is an optimization, not the source of truth: the supervisor writes
+    the exit marker, so a job still resolves correctly if this thread (or
+    the whole server) goes away first.
     """
 
     def _run() -> None:
@@ -278,10 +325,6 @@ def _watch(job_id: str, proc: subprocess.Popen, handle) -> None:
                 handle.close()
             except Exception:
                 pass
-        try:
-            _exit_marker(job_id).write_text(str(code), encoding="utf-8")
-        except OSError:
-            pass
         try:
             job = load_job(job_id)
         except JobError:
@@ -315,15 +358,27 @@ def cancel(job_id: str) -> Job:
     if job.pid and _process_alive(job.pid):
         try:
             if sys.platform == "win32":  # pragma: no cover - platform specific
+                # /T kills the supervisor's whole tree, including the real job.
                 subprocess.run(["taskkill", "/PID", str(job.pid), "/T", "/F"],
                                capture_output=True, timeout=15)
             else:
-                os.kill(job.pid, signal.SIGTERM)
+                # Signal the process group so the supervised child dies too,
+                # rather than being orphaned by killing only the supervisor.
+                try:
+                    group = os.getpgid(job.pid)
+                    os.killpg(group, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError):
+                    group = None
+                    os.kill(job.pid, signal.SIGTERM)
+
                 deadline = time.time() + _TERMINATE_GRACE_SECONDS
                 while time.time() < deadline and _process_alive(job.pid):
                     time.sleep(0.2)
                 if _process_alive(job.pid):
-                    os.kill(job.pid, signal.SIGKILL)
+                    if group is not None:
+                        os.killpg(group, signal.SIGKILL)
+                    else:
+                        os.kill(job.pid, signal.SIGKILL)
         except (OSError, subprocess.SubprocessError) as exc:
             job.note = f"cancelled by user (signal failed: {exc})"
             save_job(job)
@@ -331,55 +386,80 @@ def cancel(job_id: str) -> Job:
     return job
 
 
-def reconcile_all() -> list[Job]:
-    """Bring non-terminal job records back in line with reality at startup.
+def refresh(job_id: str) -> Job:
+    """Load a job, reconciling it first if it is not terminal.
 
-    Implements the four-case rule in plan.md / data-model.md.
+    Startup reconciliation alone is not enough. A job outlives the server
+    that launched it -- that is the whole point -- so when a restarted
+    server has no watcher thread for it, the record would otherwise sit at
+    "running" forever after the process finished. Every read path checks.
+    """
+    job = load_job(job_id)
+    if job.is_terminal:
+        return job
+    changed = _reconcile_one(job)
+    return changed or job
+
+
+def _reconcile_one(job: Job) -> Job | None:
+    """Apply the reconciliation rules to one job. Returns it if changed."""
+    if job.is_terminal:
+        return None
+
+    marker = _exit_marker(job.job_id)
+
+    # A finished supervisor leaves a marker even when no watcher survived.
+    if marker.exists() and job.pid is not None and not _process_alive(job.pid):
+        try:
+            code = int(marker.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            code = None
+        if code is None:
+            job.status = "failed"
+            job.note = "process ended; exit code unreadable"
+        else:
+            job.exit_code = code
+            job.status = "completed" if code == 0 else "failed"
+            if code != 0:
+                job.note = f"exited with code {code}"
+        job.finished_at = _now()
+        save_job(job)
+        return job
+
+    if job.pid is None:
+        job.status = "failed"
+        job.note = "never started"
+        job.finished_at = _now()
+    elif not _process_alive(job.pid):
+        job.status = "failed"
+        job.note = "process vanished"
+        job.finished_at = _now()
+    else:
+        identity = _identity_matches(job)
+        if identity == IDENTITY_MISMATCH:
+            job.status = "failed"
+            job.note = "pid recycled by an unrelated process"
+            job.finished_at = _now()
+        elif identity == IDENTITY_UNVERIFIABLE:
+            job.note = "still running (identity unverifiable: psutil unavailable)"
+            save_job(job)
+            return job
+        else:
+            return None  # genuinely still running
+
+    save_job(job)
+    return job
+
+
+def reconcile_all() -> list[Job]:
+    """Bring every non-terminal job record back in line with reality.
+
+    Called once at server startup; `refresh` applies the same rules to a
+    single job on each read.
     """
     reconciled: list[Job] = []
     for job in list_jobs():
-        if job.is_terminal:
-            continue
-
-        marker = _exit_marker(job.job_id)
-
-        if job.pid is None:
-            job.status = "failed"
-            job.note = "never started"
-            job.finished_at = _now()
-
-        elif not _process_alive(job.pid):
-            if marker.exists():
-                try:
-                    code = int(marker.read_text(encoding="utf-8").strip())
-                except (OSError, ValueError):
-                    code = None
-                if code is None:
-                    job.status = "failed"
-                    job.note = "process ended; exit code unreadable"
-                else:
-                    job.exit_code = code
-                    job.status = "completed" if code == 0 else "failed"
-                    if code != 0:
-                        job.note = f"exited with code {code}"
-            else:
-                job.status = "failed"
-                job.note = "process vanished"
-            job.finished_at = _now()
-
-        else:
-            identity = _identity_matches(job)
-            if identity == IDENTITY_MISMATCH:
-                job.status = "failed"
-                job.note = "pid recycled by an unrelated process"
-                job.finished_at = _now()
-            elif identity == IDENTITY_UNVERIFIABLE:
-                # Alive but unprovable: keep it running rather than killing a
-                # real run on a guess. Record that verification was impossible.
-                job.note = "still running (identity unverifiable: psutil unavailable)"
-            else:
-                continue  # genuinely still running -- nothing to change
-
-        save_job(job)
-        reconciled.append(job)
+        changed = _reconcile_one(job)
+        if changed is not None:
+            reconciled.append(changed)
     return reconciled

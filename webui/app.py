@@ -10,13 +10,16 @@ state concurrently from other processes (FR-005).
 
 from __future__ import annotations
 
+import json
 import shlex
 import sys
+import time
 
-from flask import Flask, abort, jsonify, render_template, request
+from flask import Flask, Response, abort, jsonify, render_template, request
 
 from . import __version__
 from . import jobs as jobs_mod
+from . import logs as logs_mod
 from . import registry
 from . import state_adapter
 from . import targets as targets_mod
@@ -208,12 +211,13 @@ def create_app() -> Flask:
     @app.get("/api/jobs")
     def api_jobs_list():
         project_id = request.args.get("project_id")
-        return jsonify([j.to_dict() for j in jobs_mod.list_jobs(project_id)])
+        jobs = [jobs_mod.refresh(j.job_id) for j in jobs_mod.list_jobs(project_id)]
+        return jsonify([j.to_dict() for j in jobs])
 
     @app.get("/api/jobs/<job_id>")
     def api_job_detail(job_id: str):
         try:
-            return jsonify(jobs_mod.load_job(job_id).to_dict())
+            return jsonify(jobs_mod.refresh(job_id).to_dict())
         except jobs_mod.JobError as exc:
             return _err(str(exc), "NOT_FOUND", 404)
 
@@ -223,6 +227,72 @@ def create_app() -> Flask:
             return jsonify(jobs_mod.cancel(job_id).to_dict())
         except jobs_mod.JobError as exc:
             return _err(str(exc), "NOT_FOUND", 404)
+
+    @app.get("/api/jobs/<job_id>/log")
+    def api_job_log(job_id: str):
+        try:
+            job = jobs_mod.refresh(job_id)
+        except jobs_mod.JobError as exc:
+            return _err(str(exc), "NOT_FOUND", 404)
+
+        raw_offset = request.args.get("offset")
+        if raw_offset is None:
+            text, offset, size = logs_mod.tail(job.log_path)
+        else:
+            try:
+                start = int(raw_offset)
+            except ValueError:
+                return _err("offset must be an integer", "INVALID_INPUT", 400)
+            text, offset, size = logs_mod.read_from(job.log_path, start)
+
+        return jsonify({"text": text, "offset": offset, "size": size, "status": job.status})
+
+    @app.get("/api/jobs/<job_id>/stream")
+    def api_job_stream(job_id: str):
+        """Server-sent events: new log chunks, then a terminal status event."""
+        try:
+            job = jobs_mod.load_job(job_id)
+        except jobs_mod.JobError as exc:
+            return _err(str(exc), "NOT_FOUND", 404)
+
+        try:
+            start = int(request.args.get("offset", "0"))
+        except ValueError:
+            start = 0
+
+        def generate():
+            offset = start
+            idle = 0.0
+            while True:
+                text, offset, _size = logs_mod.read_from(job.log_path, offset)
+                if text:
+                    idle = 0.0
+                    yield f"event: log\ndata: {json.dumps({'text': text, 'offset': offset})}\n\n"
+                else:
+                    idle += 0.5
+
+                current = jobs_mod.refresh(job_id)
+                if current.is_terminal:
+                    # Drain anything written between the last read and exit.
+                    tail_text, offset, _ = logs_mod.read_from(job.log_path, offset)
+                    if tail_text:
+                        yield f"event: log\ndata: {json.dumps({'text': tail_text, 'offset': offset})}\n\n"
+                    payload = {"status": current.status, "exit_code": current.exit_code,
+                               "note": current.note}
+                    yield f"event: status\ndata: {json.dumps(payload)}\n\n"
+                    return
+
+                # Keep proxies and browsers from closing an idle stream.
+                if idle >= 15.0:
+                    idle = 0.0
+                    yield ": keepalive\n\n"
+                time.sleep(0.5)
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # ---------- pages ----------
 
@@ -252,6 +322,7 @@ def create_app() -> Flask:
             state=state,
             steps=steps,
             error=error,
+            jobs=jobs_mod.list_jobs(pid)[:15],
         )
 
     # Page endpoints for later phases are registered now so base.html's nav
@@ -270,6 +341,26 @@ def create_app() -> Flask:
             all_projects=registry.list_projects(),
             groups=groups,
             has_running=jobs_mod.has_running_job(pid),
+        )
+
+    @app.get("/job/<job_id>")
+    def page_job(job_id: str):
+        try:
+            job = jobs_mod.load_job(job_id)
+        except jobs_mod.JobError:
+            abort(404, description=f"No job with id {job_id}")
+
+        project = None
+        try:
+            project = registry.get_project(job.project_id)
+        except registry.RegistryError:
+            pass  # job for an unregistered/removed project still viewable
+
+        return render_template(
+            "job.html",
+            job=job,
+            project=project,
+            all_projects=registry.list_projects(),
         )
 
     @app.get("/project/<pid>/results")

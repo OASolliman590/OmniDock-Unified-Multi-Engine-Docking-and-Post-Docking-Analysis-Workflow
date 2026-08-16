@@ -38,6 +38,27 @@
   </table>
 </div>
 
+{% if jobs %}
+<div class="card">
+  <h2 style="margin-top:0">Jobs</h2>
+  <table>
+    <thead><tr><th>Target</th><th>Status</th><th>Started</th><th>Job</th></tr></thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td><a href="{{ url_for('page_job', job_id=job.job_id) }}">{{ job.target }}</a></td>
+        <td><span class="badge badge-{{ job.status }}">{{ job.status }}</span>
+            {% if job.exit_code is not none and job.exit_code != 0 %}
+            <span class="muted">exit {{ job.exit_code }}</span>{% endif %}</td>
+        <td class="muted">{{ job.started_at[:19].replace("T", " ") if job.started_at else "—" }}</td>
+        <td class="mono muted" style="font-size:12px">{{ job.job_id }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% if state.has_workflow %}
 <div class="card">
   <h2 style="margin-top:0">Context</h2>

@@ -210,6 +210,101 @@ def test_restart_durability(app_home):
     assert final.status == "completed", f"expected completed, got {final.status} ({final.note})"
 
 
+def test_exit_marker_written_when_launcher_is_gone(app_home, tmp_path):
+    """A job must resolve correctly even if no watcher thread survives.
+
+    Regression: the marker used to be written by a watcher thread inside the
+    launching process. That thread dies with the server -- exactly the case
+    the marker exists for -- so a finished, successful job reconciled as
+    "process vanished" / failed.
+    """
+    import webui.jobs as J
+
+    # Launch from a *separate* interpreter that exits immediately, leaving
+    # no watcher behind, then reconcile as a fresh server would.
+    script = f"""
+import sys
+sys.path.insert(0, {str(REPO_ROOT)!r})
+import os
+os.environ["OMNIDOCK_WEBUI_HOME"] = {str(app_home)!r}
+import webui.config, importlib
+importlib.reload(webui.config)
+import webui.jobs as J
+importlib.reload(J)
+job = J.create_job("projZ", "t", [sys.executable, "-c", "import time; time.sleep(2)"], {str(REPO_ROOT)!r})
+J.launch(job)
+print(job.job_id)
+"""
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    job_id = out.stdout.strip().splitlines()[-1]
+
+    # Wait for the supervised process to finish on its own.
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if J._exit_marker(job_id).exists():
+            break
+        time.sleep(0.3)
+
+    assert J._exit_marker(job_id).exists(), "supervisor must write the exit marker itself"
+
+    J.reconcile_all()
+    final = J.load_job(job_id)
+    assert final.status == "completed", f"expected completed, got {final.status} ({final.note})"
+    assert final.exit_code == 0
+
+
+def test_refresh_resolves_a_job_with_no_surviving_watcher(app_home):
+    """A job must resolve on read, not only at server startup.
+
+    A job outlives the server that launched it -- the point of the design --
+    so after a restart there is no watcher thread for it. Without on-read
+    reconciliation the record sits at "running" forever once it finishes.
+    """
+    import webui.jobs as J
+
+    job = J.launch(J.create_job("projR", "t", _sleep_argv(1), str(REPO_ROOT)))
+
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if J._exit_marker(job.job_id).exists():
+            break
+        time.sleep(0.2)
+    assert J._exit_marker(job.job_id).exists()
+
+    # Reproduce what a restarted server sees: the record still says running
+    # (the old watcher died with the previous process) but the supervisor
+    # left a marker behind.
+    stale = J.load_job(job.job_id)
+    stale.status = "running"
+    stale.exit_code = None
+    stale.finished_at = None
+    J.save_job(stale)
+
+    refreshed = J.refresh(job.job_id)
+    assert refreshed.status == "completed"
+    assert refreshed.exit_code == 0
+
+
+def test_stale_running_record_does_not_block_new_launches(app_home):
+    """has_running_job must reconcile, or one stale record blocks forever."""
+    import webui.jobs as J
+
+    job = J.launch(J.create_job("projS", "t", _sleep_argv(1), str(REPO_ROOT)))
+
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if J._exit_marker(job.job_id).exists():
+            break
+        time.sleep(0.2)
+
+    stale = J.load_job(job.job_id)
+    stale.status = "running"
+    J.save_job(stale)
+
+    assert J.has_running_job("projS") is False
+
+
 def test_reconcile_marks_recycled_pid_as_failed(app_home):
     """FR-014: PID liveness alone must not be trusted."""
     import webui.jobs as J
@@ -540,6 +635,123 @@ def test_preview_matches_launched_command(client):
 
     assert preview["argv"] == launched["argv"]
     assert preview["command"] == launched["command"]
+
+
+# ------------------------------------------------------------------ logs
+
+
+def test_read_from_is_incremental(tmp_path):
+    """FR-015: a second read returns only the new bytes."""
+    import webui.logs as L
+
+    # Binary mode, matching how jobs.py opens the log -- text mode would
+    # translate newlines on Windows and the byte offsets would not line up.
+    log = tmp_path / "job.log"
+    log.write_bytes(b"first\n")
+    text1, offset1, _ = L.read_from(log, 0)
+    assert text1 == "first\n"
+
+    with open(log, "ab") as fh:
+        fh.write(b"second\n")
+
+    text2, offset2, size = L.read_from(log, offset1)
+    assert text2 == "second\n", "second read must not repeat earlier bytes"
+    assert offset2 == size
+
+
+def test_read_from_past_eof_returns_nothing(tmp_path):
+    import webui.logs as L
+
+    log = tmp_path / "job.log"
+    log.write_text("abc", encoding="utf-8")
+    text, offset, size = L.read_from(log, 999)
+    assert text == ""
+    assert offset == size == 3
+
+
+def test_read_from_missing_file_is_safe(tmp_path):
+    import webui.logs as L
+
+    text, offset, size = L.read_from(tmp_path / "nope.log", 0)
+    assert (text, offset, size) == ("", 0, 0)
+
+
+def test_read_from_respects_max_bytes(tmp_path):
+    import webui.logs as L
+
+    log = tmp_path / "big.log"
+    log.write_bytes(b"x" * 10_000)
+    text, offset, size = L.read_from(log, 0, max_bytes=100)
+    assert len(text) == 100
+    assert offset == 100
+    assert size == 10_000
+
+
+def test_tail_reads_only_the_end_of_a_large_log(tmp_path):
+    """A multi-hour log must not be loaded whole."""
+    import webui.logs as L
+
+    log = tmp_path / "big.log"
+    log.write_bytes(b"y" * (L.DEFAULT_TAIL_BYTES * 3))
+    text, offset, size = L.tail(log)
+    assert size == L.DEFAULT_TAIL_BYTES * 3
+    assert len(text) < size
+    assert offset == size
+
+
+def test_log_endpoint_returns_offset_and_status(client, app_home):
+    import webui.jobs as J
+
+    job = J.launch(J.create_job("proj1", "t", _print_argv("log line"), str(REPO_ROOT)))
+    for _ in range(100):
+        if J.load_job(job.job_id).is_terminal:
+            break
+        time.sleep(0.1)
+
+    body = client.get(f"/api/jobs/{job.job_id}/log").get_json()
+    assert "log line" in body["text"]
+    assert body["status"] == "completed"
+    assert body["offset"] == body["size"]
+
+    # Reading from the end returns nothing new.
+    again = client.get(f"/api/jobs/{job.job_id}/log?offset={body['offset']}").get_json()
+    assert again["text"] == ""
+
+
+def test_log_endpoint_rejects_bad_offset(client, app_home):
+    import webui.jobs as J
+
+    job = J.create_job("proj1", "t", _print_argv("x"), str(REPO_ROOT))
+    res = client.get(f"/api/jobs/{job.job_id}/log?offset=abc")
+    assert res.status_code == 400
+
+
+def test_stream_emits_status_event_for_finished_job(client, app_home):
+    import webui.jobs as J
+
+    job = J.launch(J.create_job("proj1", "t", _print_argv("streamed"), str(REPO_ROOT)))
+    for _ in range(100):
+        if J.load_job(job.job_id).is_terminal:
+            break
+        time.sleep(0.1)
+
+    res = client.get(f"/api/jobs/{job.job_id}/stream")
+    assert res.status_code == 200
+    assert res.mimetype == "text/event-stream"
+    payload = res.get_data(as_text=True)
+    assert "event: status" in payload
+    assert "completed" in payload
+
+
+def test_job_page_renders(client, app_home):
+    import webui.jobs as J
+
+    job = J.create_job("proj1", "t", _print_argv("x"), str(REPO_ROOT))
+    assert client.get(f"/job/{job.job_id}").status_code == 200
+
+
+def test_job_page_404_for_unknown_job(client):
+    assert client.get("/job/job_nope").status_code == 404
 
 
 def test_preview_preserves_windows_style_paths(client):
