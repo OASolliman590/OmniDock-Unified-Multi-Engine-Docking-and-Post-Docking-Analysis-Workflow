@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}OmniDock{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('page_projects') }}">OmniDock</a>
+    <span class="brand-sub">web UI</span>
+
+    {% if project %}
+    <div class="project-switcher">
+      <label class="sr-only" for="project-select">Project</label>
+      <select id="project-select" onchange="location.href=this.value;">
+        {% for p in all_projects %}
+        <option value="{{ url_for('page_dashboard', pid=p.id) }}"
+                {% if p.id == project.id %}selected{% endif %}>
+          {{ p.name }}{% if not p.available %} (unavailable){% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+  </header>
+
+  {% if project %}
+  <nav class="subnav">
+    <a href="{{ url_for('page_dashboard', pid=project.id) }}"
+       class="{% block nav_dashboard %}{% endblock %}">Dashboard</a>
+    <a href="{{ url_for('page_launch', pid=project.id) }}"
+       class="{% block nav_launch %}{% endblock %}">Launch</a>
+    <a href="{{ url_for('page_results', pid=project.id) }}"
+       class="{% block nav_results %}{% endblock %}">Results</a>
+    <a href="{{ url_for('page_dag', pid=project.id) }}"
+       class="{% block nav_dag %}{% endblock %}">DAG</a>
+    <span class="subnav-path" title="{{ project.path }}">{{ project.path }}</span>
+  </nav>
+  {% endif %}
+
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

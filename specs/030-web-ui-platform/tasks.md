@@ -20,15 +20,15 @@
 
 ## Phase 1: Scaffold
 
-- [ ] T001 Add `flask>=3.0` to `requirements.txt`.
-- [ ] T002 Create `webui/__init__.py` with `__version__ = "0.1.0"`.
-- [ ] T003 Create `webui/config.py` exposing `APP_HOME` (default `~/.omnidock_webui`, overridable via `OMNIDOCK_WEBUI_HOME`), `PROJECTS_FILE`, `JOBS_DIR`, `LOGS_DIR`, `HOST = "127.0.0.1"`, `PORT = 8770`; add `ensure_app_dirs()` that creates them.
-- [ ] T004 Create `webui/app.py` with a `create_app()` factory returning a Flask app, calling `ensure_app_dirs()` at startup.
-- [ ] T005 Add `GET /api/health` returning `{"ok": true, "version": <webui version>}`.
-- [ ] T006 Create `webui_cli.py` at repo root that runs `create_app().run(host=HOST, port=PORT)`; support `--host`/`--port` overrides and a `--allow-remote` flag that is the *only* way to bind off-localhost (FR-034).
-- [ ] T007 Register a `webui` subcommand in `workflow/cli.py` that invokes the same entry point, so `python main.py webui` works.
-- [ ] T008 Create `webui/templates/base.html`: page shell with a header, a project switcher placeholder, a nav bar, and a `{% block content %}`.
-- [ ] T009 Create `webui/static/app.css` with a minimal readable stylesheet (no framework, no CDN).
+- [x] T001 Add `flask>=3.0` to `requirements.txt`.
+- [x] T002 Create `webui/__init__.py` with `__version__ = "0.1.0"`.
+- [x] T003 Create `webui/config.py` exposing `APP_HOME` (default `~/.omnidock_webui`, overridable via `OMNIDOCK_WEBUI_HOME`), `PROJECTS_FILE`, `JOBS_DIR`, `LOGS_DIR`, `HOST = "127.0.0.1"`, `PORT = 8770`; add `ensure_app_dirs()` that creates them.
+- [x] T004 Create `webui/app.py` with a `create_app()` factory returning a Flask app, calling `ensure_app_dirs()` at startup.
+- [x] T005 Add `GET /api/health` returning `{"ok": true, "version": <webui version>}`.
+- [x] T006 Create `webui_cli.py` at repo root that runs `create_app().run(host=HOST, port=PORT)`; support `--host`/`--port` overrides and a `--allow-remote` flag that is the *only* way to bind off-localhost (FR-034).
+- [x] T007 Register a `webui` subcommand in `workflow/cli.py` that invokes the same entry point, so `python main.py webui` works.
+- [x] T008 Create `webui/templates/base.html`: page shell with a header, a project switcher placeholder, a nav bar, and a `{% block content %}`.
+- [x] T009 Create `webui/static/app.css` with a minimal readable stylesheet (no framework, no CDN).
 
 **Verify Phase 1**: `python webui_cli.py` starts; `curl 127.0.0.1:8770/api/health` returns ok; `python main.py webui --help` works.
 

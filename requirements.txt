@@ -8,3 +8,4 @@ jupyter>=1.0.0
 openpyxl>=3.0.0
 questionary>=2.0.1
 pdb-tools>=2.5.0
+flask>=3.0

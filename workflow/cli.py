@@ -650,6 +650,16 @@ Examples:
         cmd = visuals_sub.add_parser(name, help=f"Run {name} only")
         _add_analysis_common_args(cmd)
 
+    webui = subparsers.add_parser("webui", help="Launch the local web UI in a browser")
+    webui.add_argument("--host", help="Bind address (default: 127.0.0.1)")
+    webui.add_argument("--port", type=int, help="Bind port (default: 8770)")
+    webui.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="Permit binding off localhost (the web UI has no authentication)",
+    )
+    webui.add_argument("--debug", action="store_true", help="Run Flask in debug mode")
+
     return parser
 
 
@@ -1208,6 +1218,20 @@ def _run_analysis_dispatch(args: argparse.Namespace, target: str) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.group == "webui":
+        from webui_cli import main as webui_main
+
+        webui_argv: List[str] = []
+        if args.host:
+            webui_argv += ["--host", args.host]
+        if args.port:
+            webui_argv += ["--port", str(args.port)]
+        if args.allow_remote:
+            webui_argv.append("--allow-remote")
+        if args.debug:
+            webui_argv.append("--debug")
+        return webui_main(webui_argv)
 
     if args.group == "workflow":
         if args.workflow_command == "init":
