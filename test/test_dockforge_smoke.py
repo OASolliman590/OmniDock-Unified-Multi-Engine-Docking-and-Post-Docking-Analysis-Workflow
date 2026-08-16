@@ -6231,10 +6231,69 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _smoke_webui_contract() -> None:
+    """Web UI contracts that must not silently regress (spec 030).
+
+    The full web suite lives in test/test_webui.py; this is the fast
+    invariant check: the target catalog is derived from the terminal UI's
+    vocabulary, every generated command is one the real CLI accepts, no
+    pipeline internals are imported, and the default bind stays local.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    from webui import config as webui_config
+    from webui import targets as webui_targets
+    from workflow.interactive import ANALYSIS_LABELS
+
+    catalog = webui_targets.all_targets()
+    missing = set(ANALYSIS_LABELS) - set(catalog)
+    _assert(not missing, f"web UI target catalog is missing analysis labels: {sorted(missing)}")
+
+    for key, target in catalog.items():
+        values = {}
+        for field in target.fields:
+            if not field.required:
+                continue
+            if field.type == "multiselect":
+                values[field.name] = [field.choices[0]["value"]] if field.choices else ["gnina"]
+            elif field.type == "select" and field.choices:
+                values[field.name] = field.choices[0]["value"]
+            else:
+                values[field.name] = "placeholder"
+        argv = webui_targets.build_argv(key, values, "/tmp/project")
+        _assert(argv[1] == "main.py", f"web UI target {key} does not invoke the CLI")
+        webui_targets.assert_argv_parses(argv)
+
+    allowed_post_docking = {"post_docking_analysis.artifact_graph"}
+    for path in sorted((_Path(__file__).resolve().parent.parent / "webui").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            for name in names:
+                _assert(
+                    not name.startswith("workflow.execution"),
+                    f"{path.name} imports pipeline execution internals ({name})",
+                )
+                _assert(
+                    not name.startswith("post_docking_analysis")
+                    or name in allowed_post_docking,
+                    f"{path.name} imports pipeline internals ({name})",
+                )
+
+    _assert(webui_config.HOST == "127.0.0.1", "web UI must default to a localhost bind")
+
+
 def main() -> int:
     args = parse_args()
     print("🧪 Running DockForge smoke checks")
     print("=" * 60)
+    _smoke_webui_contract()
+    print("✅ Web UI target/import/bind contract checks passed")
     _smoke_deterministic_run_id_utility()
     print("✅ Deterministic run-id utility checks passed")
     _smoke_feature_flags_and_checkpoint_scaffold()

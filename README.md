@@ -201,6 +201,22 @@ dependencies are reported as skipped stages, not hard failures.
 
 ## 🎯 Usage
 
+### Web UI
+
+A browser interface over the same workflow: register a project, see its
+timeline and context, launch runs from forms with the exact command previewed,
+watch them stream live, and browse results, the artifact DAG, and HPC
+deployment.
+
+```bash
+python main.py webui        # then open http://127.0.0.1:8770
+```
+
+It binds to localhost and has **no authentication** — see
+[docs/WEB_UI_GUIDE.md](docs/WEB_UI_GUIDE.md) for setup, usage, and the full
+security posture. The web layer never runs pipeline stages itself; every action
+is the CLI below, launched as a tracked job.
+
 ### Unified Workflow CLI
 
 `main.py` now has one grouped command surface plus backward-compatible legacy aliases.

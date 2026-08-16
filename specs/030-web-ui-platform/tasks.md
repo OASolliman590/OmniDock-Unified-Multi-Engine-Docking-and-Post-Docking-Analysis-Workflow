@@ -182,16 +182,16 @@
 
 ## Phase 10: Hardening, Tests, Docs
 
-- [ ] T100 Add a static import-discipline test walking `webui/*.py` ASTs and failing on any import from `post_docking_analysis` other than `artifact_graph`, or any import of `workflow.execution` (SC-004).
-- [ ] T101 Add a test asserting `create_app().run` defaults bind to `127.0.0.1` and that off-localhost requires `--allow-remote` (FR-034).
-- [ ] T102 Add a test that the web layer writes nothing into a project directory: snapshot a fixture project tree, exercise every read-only route, assert the tree is unchanged (FR-035).
-- [ ] T103 Add a non-interactive fail-fast test: a target that would prompt exits with a clear error rather than hanging (FR-019).
-- [ ] T104 Create `test/fixtures/webui_project/` with `.workflow/state.json`, a `run_tracking/` set (manifest + step_status + outputs_index), and a DAG report covering all statuses.
-- [ ] T105 Write `docs/WEB_UI_GUIDE.md`: install, launch, register a project, run an analysis, read results, and the explicit security posture (localhost-only, no auth).
-- [ ] T106 Update `README.md` with a Web UI section pointing to the guide.
-- [ ] T107 Update `CHANGELOG.md` with the feature entry.
-- [ ] T108 Add the web test module to the existing smoke harness registration in `test/test_dockforge_smoke.py`.
-- [ ] T109 Final pass: run `python -m py_compile` across `webui/`, run the full `pytest`, and walk every command in `docs/WEB_UI_GUIDE.md` against a fresh checkout.
+- [x] T100 Add a static import-discipline test walking `webui/*.py` ASTs and failing on any import from `post_docking_analysis` other than `artifact_graph`, or any import of `workflow.execution` (SC-004).
+- [x] T101 Add a test asserting `create_app().run` defaults bind to `127.0.0.1` and that off-localhost requires `--allow-remote` (FR-034).
+- [x] T102 Add a test that the web layer writes nothing into a project directory: snapshot a fixture project tree, exercise every read-only route, assert the tree is unchanged (FR-035).
+- [x] T103 Add a non-interactive fail-fast test: a target that would prompt exits with a clear error rather than hanging (FR-019).
+- [x] T104 Create `test/fixtures/webui_project/` with `.workflow/state.json`, a `run_tracking/` set (manifest + step_status + outputs_index), and a DAG report covering all statuses.
+- [x] T105 Write `docs/WEB_UI_GUIDE.md`: install, launch, register a project, run an analysis, read results, and the explicit security posture (localhost-only, no auth).
+- [x] T106 Update `README.md` with a Web UI section pointing to the guide.
+- [x] T107 Update `CHANGELOG.md` with the feature entry.
+- [x] T108 Add the web test module to the existing smoke harness registration in `test/test_dockforge_smoke.py`.
+- [x] T109 Final pass: run `python -m py_compile` across `webui/`, run the full `pytest`, and walk every command in `docs/WEB_UI_GUIDE.md` against a fresh checkout.
 
 **Verify Phase 10**: full suite green; docs commands all execute; SC-001 through SC-009 each have a passing verification.
 

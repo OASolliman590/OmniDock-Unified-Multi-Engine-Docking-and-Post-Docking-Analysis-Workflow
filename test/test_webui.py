@@ -946,6 +946,125 @@ def test_unknown_job_returns_404(client):
     assert res.get_json()["code"] == "NOT_FOUND"
 
 
+# ------------------------------------------------------------------ hardening
+
+
+def test_webui_does_not_import_pipeline_internals():
+    """SC-004: no pipeline stage may be reimplemented in the web layer.
+
+    Walks each module's AST. post_docking_analysis is allowed only for
+    artifact_graph (read-only status constants); workflow.execution -- where
+    the stages actually run -- is off limits entirely.
+    """
+    import ast
+
+    allowed_post_docking = {"post_docking_analysis.artifact_graph"}
+    violations: list[str] = []
+
+    for path in sorted((REPO_ROOT / "webui").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+
+            for name in names:
+                if name.startswith("workflow.execution"):
+                    violations.append(f"{path.name}: imports {name}")
+                if name.startswith("post_docking_analysis") and name not in allowed_post_docking:
+                    violations.append(f"{path.name}: imports {name}")
+
+    assert not violations, "web layer must not import pipeline internals: " + "; ".join(violations)
+
+
+def test_every_job_runs_through_the_cli():
+    """SC-004 the other way: argv is always a main.py invocation (FR-010)."""
+    import webui.targets as T
+
+    for key in T.all_targets():
+        argv = T.build_argv(key, {}, "/tmp/project")
+        assert argv[1] == "main.py", f"{key} does not invoke the CLI: {argv[:3]}"
+
+
+def test_default_bind_is_localhost():
+    """FR-034: the UI has no auth, so it must not default to a public bind."""
+    from webui.config import HOST
+
+    assert HOST == "127.0.0.1"
+
+
+def test_remote_bind_requires_explicit_flag():
+    """Binding off localhost must be refused without --allow-remote."""
+    import webui_cli
+
+    assert webui_cli.main(["--host", "0.0.0.0"]) == 2
+    assert webui_cli.main(["--host", "192.168.1.10"]) == 2
+
+
+def test_readonly_browsing_never_writes_into_a_project(client, tmp_path):
+    """FR-035: exercise every read-only route, assert the tree is unchanged."""
+    project = tmp_path / "snapshot_project"
+    (project / ".workflow").mkdir(parents=True)
+    (project / ".workflow" / "state.json").write_text(json.dumps({
+        "version": 2, "project_root": str(project), "current_context": {},
+        "artifacts": {}, "steps": {}, "background_tasks": {},
+        "feature_flags": {}, "checkpoint_metadata": {},
+    }), encoding="utf-8")
+    (project / "reports").mkdir()
+    (project / "reports" / "a.csv").write_text("x,y\n1,2\n", encoding="utf-8")
+
+    def snapshot():
+        return {
+            p.relative_to(project).as_posix(): p.stat().st_mtime_ns
+            for p in sorted(project.rglob("*")) if p.is_file()
+        }
+
+    before = snapshot()
+    pid = client.post("/api/projects", json={"path": str(project)}).get_json()["id"]
+
+    for route in [
+        f"/api/projects/{pid}/state",
+        f"/api/projects/{pid}/timeline",
+        f"/api/projects/{pid}/runs",
+        f"/api/projects/{pid}/artifacts",
+        f"/api/projects/{pid}/dag",
+        f"/api/projects/{pid}/hpc/profiles",
+        f"/api/projects/{pid}/file?path=reports/a.csv",
+        f"/api/projects/{pid}/table?path=reports/a.csv",
+        f"/project/{pid}",
+        f"/project/{pid}/launch",
+        f"/project/{pid}/results",
+        f"/project/{pid}/dag",
+        f"/project/{pid}/hpc",
+    ]:
+        client.get(route)
+
+    assert snapshot() == before, "a read-only route modified the project tree"
+
+
+def test_only_app_module_imports_flask():
+    """Adapters stay framework-free so they can be reused or ported."""
+    import ast
+
+    offenders = []
+    for path in sorted((REPO_ROOT / "webui").glob("*.py")):
+        if path.name == "app.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            if any(n.split(".")[0] == "flask" for n in names):
+                offenders.append(path.name)
+
+    assert not offenders, f"only app.py may import Flask, found in: {offenders}"
+
+
 # ------------------------------------------------------------------ targets
 
 

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-04-01
 
 ### Added
+- **Web UI Platform** (`specs/030-web-ui-platform`): Added a locally-hosted browser interface (`python main.py webui`) covering project registration, workflow state and timeline, form-driven run launching with an exact command preview, live log streaming, a results browser with run summaries and safe artifact serving, artifact-DAG visualization, multi-project switching, and an HPC deployment panel with redacted profiles and remote-target confirmation. The web layer runs no pipeline stage itself: every action is the existing CLI launched as a durable job that survives a server restart, reconciled against OS process identity rather than PID alone. Binds to localhost only and has no authentication; see `docs/WEB_UI_GUIDE.md`.
 - **Omni-DockForge Platform Upgrade**: Introduced the `Omni-DockForge` naming and migration layer with compatibility notes for legacy command surfaces.
 - **Checkpoint & Revise Workflow**: Added checkpoint lineage metadata and renamed the old "maturation" concept to `Checkpoint & Revise`.
 - **Interactive Timeline and Task State Model**: Added explicit step-state tracking (`not_started`, `in_progress`, `completed`, `validated`, `failed`, `skipped`, `needs_review`) and timeline rendering in interactive workflow flows.
