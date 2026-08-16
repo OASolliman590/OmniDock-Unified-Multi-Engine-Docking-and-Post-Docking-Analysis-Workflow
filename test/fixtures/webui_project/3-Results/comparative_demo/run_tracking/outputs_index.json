@@ -1,0 +1,17 @@
+[
+  {
+    "path": "reports/consensus_ranked.csv"
+  },
+  {
+    "path": "analysis/affinity_summary.csv"
+  },
+  {
+    "path": "reports/summary.html"
+  },
+  {
+    "path": "visualizations/plot.svg"
+  },
+  {
+    "path": "interactions/prolif/barcode_qc_rep1.csv"
+  }
+]

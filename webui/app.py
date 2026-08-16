@@ -15,9 +15,10 @@ import shlex
 import sys
 import time
 
-from flask import Flask, Response, abort, jsonify, render_template, request
+from flask import Flask, Response, abort, jsonify, render_template, request, send_file
 
 from . import __version__
+from . import artifacts as artifacts_mod
 from . import jobs as jobs_mod
 from . import logs as logs_mod
 from . import registry
@@ -294,6 +295,77 @@ def create_app() -> Flask:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # ---------- results ----------
+
+    @app.get("/api/projects/<pid>/runs")
+    def api_project_runs(pid: str):
+        project = _project_or_404(pid)
+        if not project.available:
+            return _err("Project directory is unavailable.", "PROJECT_UNAVAILABLE", 409)
+        return jsonify(artifacts_mod.find_runs(project.root))
+
+    @app.get("/api/projects/<pid>/artifacts")
+    def api_project_artifacts(pid: str):
+        project = _project_or_404(pid)
+        if not project.available:
+            return _err("Project directory is unavailable.", "PROJECT_UNAVAILABLE", 409)
+        run = request.args.get("run", ".")
+        try:
+            found = artifacts_mod.load_outputs_index(project.root, run)
+        except artifacts_mod.PathEscape as exc:
+            return _err(str(exc), "PATH_ESCAPE", 403)
+        return jsonify([a.to_dict() for a in found])
+
+    @app.get("/api/projects/<pid>/runs/<path:run>/summary")
+    def api_run_summary(pid: str, run: str):
+        project = _project_or_404(pid)
+        if not project.available:
+            return _err("Project directory is unavailable.", "PROJECT_UNAVAILABLE", 409)
+        try:
+            return jsonify(artifacts_mod.load_run_summary(project.root, run))
+        except artifacts_mod.PathEscape as exc:
+            return _err(str(exc), "PATH_ESCAPE", 403)
+        except artifacts_mod.ArtifactError as exc:
+            return _err(str(exc), "INVALID_INPUT", 500)
+
+    @app.get("/api/projects/<pid>/file")
+    def api_project_file(pid: str):
+        project = _project_or_404(pid)
+        rel = request.args.get("path", "")
+        if not rel:
+            return _err("A path is required.", "INVALID_INPUT", 400)
+        try:
+            absolute = artifacts_mod.safe_resolve(project.root, rel)
+        except artifacts_mod.PathEscape as exc:
+            return _err(str(exc), "PATH_ESCAPE", 403)
+        if not absolute.is_file():
+            return _err(f"No such file: {rel}", "NOT_FOUND", 404)
+        # as_attachment=False so images and reports render in place.
+        return send_file(absolute, as_attachment=False,
+                         download_name=absolute.name, max_age=0)
+
+    @app.get("/api/projects/<pid>/table")
+    def api_project_table(pid: str):
+        project = _project_or_404(pid)
+        rel = request.args.get("path", "")
+        if not rel:
+            return _err("A path is required.", "INVALID_INPUT", 400)
+        try:
+            absolute = artifacts_mod.safe_resolve(project.root, rel)
+        except artifacts_mod.PathEscape as exc:
+            return _err(str(exc), "PATH_ESCAPE", 403)
+        if not absolute.is_file():
+            return _err(f"No such file: {rel}", "NOT_FOUND", 404)
+        try:
+            page = int(request.args.get("page", "1"))
+            page_size = int(request.args.get("page_size", "100"))
+        except ValueError:
+            return _err("page and page_size must be integers", "INVALID_INPUT", 400)
+        try:
+            return jsonify(artifacts_mod.read_table(absolute, page, page_size))
+        except artifacts_mod.ArtifactError as exc:
+            return _err(str(exc), "INVALID_INPUT", 500)
+
     # ---------- pages ----------
 
     @app.get("/")
@@ -366,12 +438,12 @@ def create_app() -> Flask:
     @app.get("/project/<pid>/results")
     def page_results(pid: str):
         project = _project_or_404(pid)
+        runs = artifacts_mod.find_runs(project.root) if project.available else []
         return render_template(
-            "placeholder.html",
+            "results.html",
             project=project,
             all_projects=registry.list_projects(),
-            section="Results",
-            phase="Phase 6",
+            runs=runs,
         )
 
     @app.get("/project/<pid>/dag")

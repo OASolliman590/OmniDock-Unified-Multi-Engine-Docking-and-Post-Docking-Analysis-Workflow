@@ -408,6 +408,170 @@ def test_main_py_runs_under_job_env(app_home):
     assert "UnicodeEncodeError" not in log, f"job env failed to handle CLI output:\n{log[:500]}"
 
 
+# ------------------------------------------------------------------ artifacts
+
+FIXTURE_RUN = "3-Results/comparative_demo"
+
+
+@pytest.fixture()
+def project_id(client):
+    return client.post("/api/projects", json={"path": str(FIXTURE_PROJECT)}).get_json()["id"]
+
+
+@pytest.mark.parametrize("attack", [
+    "../../../etc/passwd",
+    "..\\..\\..\\Windows\\win.ini",
+    "../",
+    "subdir/../../outside.txt",
+    "%2e%2e%2fetc%2fpasswd",
+    "....//....//etc/passwd",
+    "/etc/passwd",
+    "C:\\Windows\\win.ini",
+    "\\\\server\\share\\file.txt",
+])
+def test_path_traversal_is_rejected(client, project_id, attack):
+    """SC-005: every escape attempt must be refused, none served."""
+    res = client.get(f"/api/projects/{project_id}/file?path={attack}")
+    assert res.status_code in (403, 404), f"{attack} returned {res.status_code}"
+    if res.status_code == 403:
+        assert res.get_json()["code"] == "PATH_ESCAPE"
+
+
+def test_symlink_escape_is_rejected(client, project_id, tmp_path):
+    """A link inside the project pointing outside it must not be followed."""
+    import webui.artifacts as A
+
+    secret = tmp_path / "secret.txt"
+    secret.write_text("classified", encoding="utf-8")
+    link = FIXTURE_PROJECT / "escape_link"
+    try:
+        link.symlink_to(secret)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation requires elevation on this platform")
+
+    try:
+        with pytest.raises(A.PathEscape):
+            A.safe_resolve(FIXTURE_PROJECT, "escape_link")
+    finally:
+        link.unlink(missing_ok=True)
+
+
+def test_safe_resolve_allows_paths_inside_the_project():
+    import webui.artifacts as A
+
+    resolved = A.safe_resolve(FIXTURE_PROJECT, f"{FIXTURE_RUN}/reports/consensus_ranked.csv")
+    assert resolved.is_file()
+
+
+def test_find_runs_locates_run_tracking(client, project_id):
+    runs = client.get(f"/api/projects/{project_id}/runs").get_json()
+    assert any(r["run_dir"] == FIXTURE_RUN for r in runs)
+    assert all(r["has_manifest"] for r in runs if r["run_dir"] == FIXTURE_RUN)
+
+
+def test_artifacts_include_every_outputs_index_entry(client, project_id):
+    """T080: nothing declared in outputs_index.json may be dropped."""
+    import json as _json
+
+    index = _json.loads(
+        (FIXTURE_PROJECT / FIXTURE_RUN / "run_tracking" / "outputs_index.json")
+        .read_text(encoding="utf-8"))
+    expected = {f"{FIXTURE_RUN}/{row['path']}" for row in index}
+
+    listed = {a["path"] for a in client.get(
+        f"/api/projects/{project_id}/artifacts?run={FIXTURE_RUN}").get_json()}
+    assert expected.issubset(listed)
+
+
+def test_artifacts_are_categorized_by_topology(client, project_id):
+    items = {a["path"]: a for a in client.get(
+        f"/api/projects/{project_id}/artifacts?run={FIXTURE_RUN}").get_json()}
+    assert items[f"{FIXTURE_RUN}/reports/consensus_ranked.csv"]["category"] == "reports"
+    assert items[f"{FIXTURE_RUN}/analysis/affinity_summary.csv"]["category"] == "analysis"
+    assert items[f"{FIXTURE_RUN}/visualizations/plot.svg"]["category"] == "visualizations"
+    assert items[f"{FIXTURE_RUN}/interactions/prolif/barcode_qc_rep1.csv"]["category"] \
+        == "interactions.prolif"
+
+
+def test_media_kinds_are_detected(client, project_id):
+    items = {a["path"]: a for a in client.get(
+        f"/api/projects/{project_id}/artifacts?run={FIXTURE_RUN}").get_json()}
+    assert items[f"{FIXTURE_RUN}/reports/consensus_ranked.csv"]["media_kind"] == "table"
+    assert items[f"{FIXTURE_RUN}/reports/summary.html"]["media_kind"] == "html"
+    assert items[f"{FIXTURE_RUN}/visualizations/plot.svg"]["media_kind"] == "image"
+
+
+def test_artifacts_fall_back_to_directory_walk(client, project_id, tmp_path):
+    """FR-020: a run that never wrote an index must still list files."""
+    import webui.artifacts as A
+
+    run = FIXTURE_PROJECT / "3-Results" / "no_index_run"
+    (run / "run_tracking").mkdir(parents=True, exist_ok=True)
+    (run / "reports").mkdir(parents=True, exist_ok=True)
+    (run / "reports" / "orphan.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    try:
+        found = A.load_outputs_index(FIXTURE_PROJECT, "3-Results/no_index_run")
+        assert any(a.path.endswith("orphan.csv") for a in found)
+    finally:
+        import shutil
+        shutil.rmtree(run, ignore_errors=True)
+
+
+def test_run_summary_flags_enforced_not_matching_requested(client, project_id):
+    """FR-023: an overridden stage must be visibly called out."""
+    summary = client.get(
+        f"/api/projects/{project_id}/runs/{FIXTURE_RUN}/summary").get_json()
+    assert summary["available"] is True
+    assert summary["engine"] == "gnina"
+
+    rows = {r["stage"]: r for r in summary["stage_contract"]}
+    assert rows["run_rmsd"]["requested"] is False
+    assert rows["run_rmsd"]["enforced"] is True
+    assert rows["run_rmsd"]["matches"] is False
+    assert rows["run_visualizations"]["matches"] is True
+
+
+def test_run_summary_classifies_optional_features(client, project_id):
+    """FR-024: skipped-disabled, skipped-missing-dependency and failed differ."""
+    summary = client.get(
+        f"/api/projects/{project_id}/runs/{FIXTURE_RUN}/summary").get_json()
+    features = {f["name"]: f["classification"] for f in summary["optional_features"]}
+    assert features["poseview"] == "skipped_missing_dependency"
+    assert features["pandamap"] == "skipped_disabled"
+    assert features["py3dmol"] == "completed"
+    assert features["pymol"] == "failed_error"
+
+
+def test_table_endpoint_paginates(client, project_id):
+    body = client.get(
+        f"/api/projects/{project_id}/table"
+        f"?path={FIXTURE_RUN}/reports/consensus_ranked.csv&page=1&page_size=2").get_json()
+    assert body["columns"] == ["ligand", "receptor", "score", "rank"]
+    assert body["total_rows"] == 3
+    assert len(body["rows"]) == 2
+
+    page2 = client.get(
+        f"/api/projects/{project_id}/table"
+        f"?path={FIXTURE_RUN}/reports/consensus_ranked.csv&page=2&page_size=2").get_json()
+    assert len(page2["rows"]) == 1
+
+
+def test_file_endpoint_serves_an_artifact(client, project_id):
+    res = client.get(
+        f"/api/projects/{project_id}/file?path={FIXTURE_RUN}/reports/consensus_ranked.csv")
+    assert res.status_code == 200
+    assert b"ligA" in res.data
+
+
+def test_file_endpoint_404_for_missing_file(client, project_id):
+    res = client.get(f"/api/projects/{project_id}/file?path={FIXTURE_RUN}/nope.csv")
+    assert res.status_code == 404
+
+
+def test_results_page_renders(client, project_id):
+    assert client.get(f"/project/{project_id}/results").status_code == 200
+
+
 # ------------------------------------------------------------------ api
 
 

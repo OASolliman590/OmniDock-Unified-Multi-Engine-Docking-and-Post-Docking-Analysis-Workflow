@@ -120,21 +120,21 @@
 
 ## Phase 6: Results Browser (US4, P1)
 
-- [ ] T066 Create `webui/artifacts.py` with `safe_resolve(project_root, rel_path)`: resolve the joined path, resolve symlinks, and assert the result is inside `project_root`; raise `PathEscape` otherwise (FR-022).
-- [ ] T067 Implement `load_outputs_index(project, run_dir)` reading `run_tracking/outputs_index.json`, falling back to a directory walk when absent (FR-020).
-- [ ] T068 Implement `categorize(rel_path)` mapping into the canonical topology buckets: `analysis`, `complexes`, `best_poses`, `reports`, `rmsd_analysis`, `interactions/{prolif,ligplot,pandamap,poseview}`, `3d_visualizations`, `visualizations`, `raw_data`, `other`.
-- [ ] T069 Implement `media_kind(path)` → `table` (.csv/.tsv), `image` (.png/.svg/.jpg), `html` (.html), `structure` (.pdb/.sdf/.pdbqt), `other`.
-- [ ] T070 Implement `load_run_summary(run_dir)` parsing `run_manifest.json`: engine, `stage_contract` requested-vs-enforced, per-step status, optional-feature classifications (FR-023, FR-024).
-- [ ] T071 Add `GET /api/projects/<pid>/runs` listing discovered run directories containing `run_tracking/`.
-- [ ] T072 Add `GET /api/projects/<pid>/artifacts?run=` returning categorized artifact entries.
-- [ ] T073 Add `GET /api/projects/<pid>/file?path=` serving a file through `safe_resolve`, returning 403 on escape and 404 on missing.
-- [ ] T074 Add `GET /api/projects/<pid>/table?path=` returning parsed CSV rows with pagination (`page`, `page_size`) using pandas.
-- [ ] T075 Create `webui/templates/results.html`: run selector, category accordion, and a viewer pane.
-- [ ] T076 Add `webui/static/results.js`: render tables (sortable, paginated), images inline, HTML in an iframe sandboxed to the served origin (FR-021).
-- [ ] T077 Render the run summary panel with `enforced != requested` rows visually flagged (FR-023).
-- [ ] T078 Render optional-feature classifications with distinct treatment for `skipped_disabled` vs `skipped_missing_dependency` vs `failed_error` (FR-024).
-- [ ] T079 [P] Add the path-traversal test matrix: `../`, `..\\`, URL-encoded separators, an absolute outside path, and a symlink escaping the root — all must return 403 (SC-005).
-- [ ] T080 [P] Add a test that every entry in a fixture `outputs_index.json` appears in the artifacts response.
+- [x] T066 Create `webui/artifacts.py` with `safe_resolve(project_root, rel_path)`: resolve the joined path, resolve symlinks, and assert the result is inside `project_root`; raise `PathEscape` otherwise (FR-022).
+- [x] T067 Implement `load_outputs_index(project, run_dir)` reading `run_tracking/outputs_index.json`, falling back to a directory walk when absent (FR-020).
+- [x] T068 Implement `categorize(rel_path)` mapping into the canonical topology buckets: `analysis`, `complexes`, `best_poses`, `reports`, `rmsd_analysis`, `interactions/{prolif,ligplot,pandamap,poseview}`, `3d_visualizations`, `visualizations`, `raw_data`, `other`.
+- [x] T069 Implement `media_kind(path)` → `table` (.csv/.tsv), `image` (.png/.svg/.jpg), `html` (.html), `structure` (.pdb/.sdf/.pdbqt), `other`.
+- [x] T070 Implement `load_run_summary(run_dir)` parsing `run_manifest.json`: engine, `stage_contract` requested-vs-enforced, per-step status, optional-feature classifications (FR-023, FR-024).
+- [x] T071 Add `GET /api/projects/<pid>/runs` listing discovered run directories containing `run_tracking/`.
+- [x] T072 Add `GET /api/projects/<pid>/artifacts?run=` returning categorized artifact entries.
+- [x] T073 Add `GET /api/projects/<pid>/file?path=` serving a file through `safe_resolve`, returning 403 on escape and 404 on missing.
+- [x] T074 Add `GET /api/projects/<pid>/table?path=` returning parsed CSV rows with pagination (`page`, `page_size`) using pandas.
+- [x] T075 Create `webui/templates/results.html`: run selector, category accordion, and a viewer pane.
+- [x] T076 Add `webui/static/results.js`: render tables (sortable, paginated), images inline, HTML in an iframe sandboxed to the served origin (FR-021).
+- [x] T077 Render the run summary panel with `enforced != requested` rows visually flagged (FR-023).
+- [x] T078 Render optional-feature classifications with distinct treatment for `skipped_disabled` vs `skipped_missing_dependency` vs `failed_error` (FR-024).
+- [x] T079 [P] Add the path-traversal test matrix: `../`, `..\\`, URL-encoded separators, an absolute outside path, and a symlink escaping the root — all must return 403 (SC-005).
+- [x] T080 [P] Add a test that every entry in a fixture `outputs_index.json` appears in the artifacts response.
 
 **Verify Phase 6**: a completed fixture run renders tables, images, and its report; all traversal attempts return 403.
 

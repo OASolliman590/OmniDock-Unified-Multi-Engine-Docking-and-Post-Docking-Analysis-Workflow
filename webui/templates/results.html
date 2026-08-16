@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+{% block title %}Results · {{ project.name }}{% endblock %}
+{% block nav_results %}active{% endblock %}
+
+{% block content %}
+<h1>Results</h1>
+
+{% if not runs %}
+<div class="empty-state">
+  <p>No runs found in this project.</p>
+  <p>A run is any directory containing <span class="mono">run_tracking/</span>.
+     Launch an analysis from the <a href="{{ url_for('page_launch', pid=project.id) }}">Launch</a>
+     tab to produce one.</p>
+</div>
+{% else %}
+
+<div class="card">
+  <div class="field" style="margin-bottom:0">
+    <label for="run-select">Run</label>
+    <select id="run-select">
+      {% for run in runs %}
+      <option value="{{ run.run_dir }}">
+        {{ run.run_dir }}{% if not run.has_manifest %} (no manifest){% endif %}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+<div class="card" id="summary-card" hidden>
+  <h2 style="margin-top:0">Run summary</h2>
+  <div id="summary-body"></div>
+</div>
+
+<div style="display:flex; gap:16px; align-items:flex-start">
+  <div class="card" style="flex:0 0 340px; max-height:640px; overflow:auto">
+    <h2 style="margin-top:0">Artifacts</h2>
+    <div id="artifact-list" class="muted">loading…</div>
+  </div>
+  <div class="card" style="flex:1; min-width:0">
+    <h2 style="margin-top:0" id="viewer-title">Viewer</h2>
+    <div id="viewer" class="muted">Select an artifact on the left.</div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if runs %}
+<script>
+const PID = {{ project.id | tojson }};
+const runSelect = document.getElementById("run-select");
+const listEl = document.getElementById("artifact-list");
+const viewerEl = document.getElementById("viewer");
+const viewerTitle = document.getElementById("viewer-title");
+const summaryCard = document.getElementById("summary-card");
+const summaryBody = document.getElementById("summary-body");
+
+runSelect.addEventListener("change", loadRun);
+
+async function loadRun() {
+  const run = runSelect.value;
+  listEl.textContent = "loading…";
+  viewerEl.textContent = "Select an artifact on the left.";
+  viewerTitle.textContent = "Viewer";
+  await Promise.all([loadSummary(run), loadArtifacts(run)]);
+}
+
+async function loadSummary(run) {
+  const res = await fetch(`/api/projects/${PID}/runs/${encodeURIComponent(run)}/summary`);
+  if (!res.ok) { summaryCard.hidden = true; return; }
+  const s = await res.json();
+  if (!s.available) { summaryCard.hidden = true; return; }
+
+  let html = "";
+  if (s.engine) html += `<p><strong>Engine:</strong> ${escapeHtml(s.engine)}</p>`;
+
+  if (s.stage_contract && s.stage_contract.length) {
+    const mismatched = s.stage_contract.filter((r) => !r.matches);
+    if (mismatched.length) {
+      html += `<div class="alert alert-warn">` +
+why(mismatched) + `</div>`;
+    }
+    html += `<h3 style="font-size:15px;margin:12px 0 6px">Stage contract</h3><table><thead><tr>` +
+      `<th>Stage</th><th>Requested</th><th>Enforced</th></tr></thead><tbody>`;
+    for (const row of s.stage_contract) {
+      const flag = row.matches ? "" : ' style="background:#faeeda"';
+      html += `<tr${flag}><td>${escapeHtml(row.stage)}</td>` +
+        `<td>${fmt(row.requested)}</td><td>${fmt(row.enforced)}</td></tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  if (s.optional_features && s.optional_features.length) {
+    html += `<h3 style="font-size:15px;margin:12px 0 6px">Optional features</h3><table><thead><tr>` +
+      `<th>Feature</th><th>Outcome</th><th>Detail</th></tr></thead><tbody>`;
+    for (const f of s.optional_features) {
+      html += `<tr><td>${escapeHtml(f.name)}</td>` +
+        `<td><span class="badge badge-${badgeFor(f.classification)}">` +
+        `${escapeHtml(f.classification)}</span></td>` +
+        `<td class="muted">${escapeHtml(f.detail || "")}</td></tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  if (s.steps && s.steps.length) {
+    html += `<h3 style="font-size:15px;margin:12px 0 6px">Steps</h3><table><thead><tr>` +
+      `<th>Step</th><th>Status</th></tr></thead><tbody>`;
+    for (const st of s.steps) {
+      html += `<tr><td>${escapeHtml(st.name)}</td>` +
+        `<td><span class="badge badge-${badgeFor(st.status)}">${escapeHtml(st.status)}</span></td></tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  summaryBody.innerHTML = html || '<p class="muted">Manifest present but empty.</p>';
+  summaryCard.hidden = false;
+}
+
+function why(mismatched) {
+  const names = mismatched.map((r) => escapeHtml(r.stage)).join(", ");
+  return `<strong>Enforced differs from requested</strong> for: ${names}. ` +
+         `The pipeline overrode what was asked for — these stages are mandatory.`;
+}
+
+// Map both job and manifest vocabularies onto the badge classes in app.css.
+function badgeFor(value) {
+  const v = String(value || "").toLowerCase();
+  if (["completed", "complete", "ok", "success", "true"].includes(v)) return "completed";
+  if (v.startsWith("skipped")) return "skipped_optional";
+  if (v.startsWith("failed") || v === "error") return "failed";
+  if (v === "running") return "running";
+  return "pending";
+}
+
+function fmt(value) {
+  if (value === null || value === undefined) return '<span class="muted">—</span>';
+  return escapeHtml(String(value));
+}
+
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = String(text);
+  return div.innerHTML;
+}
+
+async function loadArtifacts(run) {
+  const res = await fetch(`/api/projects/${PID}/artifacts?run=${encodeURIComponent(run)}`);
+  if (!res.ok) { listEl.textContent = "Could not load artifacts."; return; }
+  const items = await res.json();
+  if (!items.length) { listEl.textContent = "No files in this run."; return; }
+
+  const groups = {};
+  for (const item of items) (groups[item.category] ||= []).push(item);
+
+  listEl.innerHTML = "";
+  for (const category of Object.keys(groups).sort()) {
+    const details = document.createElement("details");
+    details.open = ["reports", "analysis"].includes(category);
+    const sum = document.createElement("summary");
+    sum.style.cursor = "pointer";
+    sum.style.fontWeight = "500";
+    sum.style.margin = "8px 0 4px";
+    sum.textContent = `${category} (${groups[category].length})`;
+    details.appendChild(sum);
+
+    for (const item of groups[category]) {
+      const a = document.createElement("a");
+      a.href = "#";
+      a.className = "mono";
+      a.style.cssText = "display:block; font-size:12px; padding:2px 0 2px 10px; color:#3c3489;";
+      a.textContent = item.path.split("/").pop();
+      a.title = `${item.path} — ${item.size} bytes`;
+      a.addEventListener("click", (e) => { e.preventDefault(); openArtifact(item); });
+      details.appendChild(a);
+    }
+    listEl.appendChild(details);
+  }
+}
+
+async function openArtifact(item) {
+  viewerTitle.textContent = item.path;
+  viewerEl.innerHTML = '<span class="muted">loading…</span>';
+  const fileUrl = `/api/projects/${PID}/file?path=${encodeURIComponent(item.path)}`;
+
+  if (item.media_kind === "image") {
+    viewerEl.innerHTML = `<img src="${fileUrl}" style="max-width:100%; height:auto">`;
+  } else if (item.media_kind === "html") {
+    viewerEl.innerHTML =
+      `<iframe src="${fileUrl}" style="width:100%; height:560px; border:1px solid #d9d7cf;` +
+      ` border-radius:6px; background:#fff" sandbox="allow-same-origin"></iframe>`;
+  } else if (item.media_kind === "table") {
+    await renderTable(item, 1);
+  } else {
+    const res = await fetch(fileUrl);
+    const text = await res.text();
+    viewerEl.innerHTML =
+      `<pre class="mono" style="white-space:pre-wrap; max-height:560px; overflow:auto; margin:0">` +
+      `${escapeHtml(text.slice(0, 200000))}</pre>`;
+  }
+}
+
+async function renderTable(item, page) {
+  const res = await fetch(
+    `/api/projects/${PID}/table?path=${encodeURIComponent(item.path)}&page=${page}&page_size=100`);
+  if (!res.ok) { viewerEl.textContent = "Could not read table."; return; }
+  const data = await res.json();
+
+  let html = `<div class="muted" style="font-size:13px; margin-bottom:6px">` +
+    `${data.total_rows} rows · page ${data.page}</div>` +
+    `<div style="overflow:auto; max-height:520px"><table><thead><tr>`;
+  data.columns.forEach((c, i) =>
+    html += `<th style="cursor:pointer" data-sort="${i}">${escapeHtml(c)}</th>`);
+  html += `</tr></thead><tbody>`;
+  for (const row of data.rows) {
+    html += "<tr>" + row.map((cell) =>
+      `<td${isNaN(Number(cell)) || cell === "" ? "" : ' class="num"'}>${escapeHtml(cell)}</td>`
+    ).join("") + "</tr>";
+  }
+  html += `</tbody></table></div>`;
+
+  const pages = Math.ceil(data.total_rows / data.page_size) || 1;
+  if (pages > 1) {
+    html += `<div style="margin-top:8px">`;
+    if (page > 1) html += `<button class="btn btn-secondary" data-page="${page - 1}">Previous</button> `;
+    if (page < pages) html += `<button class="btn btn-secondary" data-page="${page + 1}">Next</button>`;
+    html += ` <span class="muted" style="font-size:13px">page ${page} of ${pages}</span></div>`;
+  }
+  viewerEl.innerHTML = html;
+
+  viewerEl.querySelectorAll("[data-page]").forEach((btn) =>
+    btn.addEventListener("click", () => renderTable(item, Number(btn.dataset.page))));
+
+  // Client-side sort of the current page.
+  viewerEl.querySelectorAll("th[data-sort]").forEach((th) => {
+    th.addEventListener("click", () => {
+      const idx = Number(th.dataset.sort);
+      const tbody = viewerEl.querySelector("tbody");
+      const rows = Array.from(tbody.rows);
+      const asc = th.dataset.dir !== "asc";
+      rows.sort((a, b) => {
+        const x = a.cells[idx].textContent, y = b.cells[idx].textContent;
+        const nx = Number(x), ny = Number(y);
+        const cmp = (!isNaN(nx) && !isNaN(ny)) ? nx - ny : x.localeCompare(y);
+        return asc ? cmp : -cmp;
+      });
+      th.dataset.dir = asc ? "asc" : "desc";
+      rows.forEach((r) => tbody.appendChild(r));
+    });
+  });
+}
+
+loadRun();
+</script>
+{% endif %}
+{% endblock %}

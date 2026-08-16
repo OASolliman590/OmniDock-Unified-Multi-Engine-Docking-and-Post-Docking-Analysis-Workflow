@@ -1,0 +1,39 @@
+{
+  "engine": "gnina",
+  "stage_contract": {
+    "run_rmsd": {
+      "requested": false,
+      "enforced": true
+    },
+    "run_visualizations": {
+      "requested": true,
+      "enforced": true
+    },
+    "prolif": {
+      "requested": true,
+      "enforced": true
+    },
+    "ligplot": {
+      "requested": true,
+      "enforced": true
+    }
+  },
+  "optional_features": {
+    "poseview": {
+      "classification": "skipped_missing_dependency",
+      "detail": "binary absent"
+    },
+    "pandamap": {
+      "classification": "skipped_disabled",
+      "detail": "disabled by config"
+    },
+    "py3dmol": {
+      "classification": "completed",
+      "detail": ""
+    },
+    "pymol": {
+      "classification": "failed_error",
+      "detail": "render crashed"
+    }
+  }
+}

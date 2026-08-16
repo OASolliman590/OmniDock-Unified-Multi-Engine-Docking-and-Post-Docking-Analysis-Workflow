@@ -1,0 +1,14 @@
+[
+  {
+    "step": "affinity",
+    "status": "completed"
+  },
+  {
+    "step": "rmsd",
+    "status": "completed"
+  },
+  {
+    "step": "reports",
+    "status": "completed"
+  }
+]
