@@ -593,6 +593,81 @@ def test_results_page_renders(client, project_id):
     assert client.get(f"/project/{project_id}/results").status_code == 200
 
 
+# ------------------------------------------------------------------ multi-project
+
+
+@pytest.fixture()
+def two_projects(client, tmp_path):
+    """Two registered projects, each a real directory."""
+    ids = []
+    for name in ("alpha", "beta"):
+        directory = tmp_path / name
+        (directory / ".workflow").mkdir(parents=True)
+        (directory / ".workflow" / "state.json").write_text(
+            json.dumps({
+                "version": 2, "project_root": str(directory),
+                "current_context": {"favorite_engine": name[:1] and "gnina"},
+                "artifacts": {}, "steps": {}, "background_tasks": {},
+                "feature_flags": {}, "checkpoint_metadata": {},
+            }), encoding="utf-8")
+        ids.append(client.post("/api/projects",
+                               json={"path": str(directory), "name": name}).get_json()["id"])
+    return ids
+
+
+def test_concurrent_jobs_across_projects_stay_isolated(client, app_home, two_projects):
+    """SC-007: two projects run independently with no cross-contamination."""
+    import webui.jobs as J
+
+    pid_a, pid_b = two_projects
+    job_a = J.launch(J.create_job(pid_a, "t.a", _sleep_argv(5), str(REPO_ROOT)))
+    job_b = J.launch(J.create_job(pid_b, "t.b", _sleep_argv(5), str(REPO_ROOT)))
+
+    # Both progress; neither blocks the other.
+    assert J.load_job(job_a.job_id).status == "running"
+    assert J.load_job(job_b.job_id).status == "running"
+
+    listed_a = {j["job_id"] for j in client.get(f"/api/jobs?project_id={pid_a}").get_json()}
+    listed_b = {j["job_id"] for j in client.get(f"/api/jobs?project_id={pid_b}").get_json()}
+
+    assert job_a.job_id in listed_a and job_a.job_id not in listed_b
+    assert job_b.job_id in listed_b and job_b.job_id not in listed_a
+    assert not (listed_a & listed_b), "project job lists must not intersect"
+
+    # Separate log files.
+    assert job_a.log_path != job_b.log_path
+
+
+def test_concurrent_warning_is_scoped_per_project(client, app_home, two_projects):
+    """A running job in one project must not gate launches in another."""
+    import webui.jobs as J
+
+    pid_a, pid_b = two_projects
+    J.launch(J.create_job(pid_a, "t.a", _sleep_argv(20), str(REPO_ROOT)))
+
+    assert J.has_running_job(pid_a) is True
+    assert J.has_running_job(pid_b) is False
+
+
+def test_dashboard_shows_only_its_own_projects_jobs(client, app_home, two_projects):
+    import webui.jobs as J
+
+    pid_a, pid_b = two_projects
+    J.launch(J.create_job(pid_a, "only.in.alpha", _print_argv("a"), str(REPO_ROOT)))
+
+    page_a = client.get(f"/project/{pid_a}").get_data(as_text=True)
+    page_b = client.get(f"/project/{pid_b}").get_data(as_text=True)
+
+    assert "only.in.alpha" in page_a
+    assert "only.in.alpha" not in page_b
+
+
+def test_project_switcher_lists_all_projects(client, two_projects):
+    pid_a, _pid_b = two_projects
+    page = client.get(f"/project/{pid_a}").get_data(as_text=True)
+    assert "alpha" in page and "beta" in page
+
+
 # ------------------------------------------------------------------ dag
 
 

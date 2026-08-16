@@ -157,10 +157,10 @@
 
 ## Phase 8: Multi-Project & Concurrency (US6, P2)
 
-- [ ] T089 Add a project switcher to `base.html` populated from `/api/projects`, preserving the current page type when switching.
-- [ ] T090 Scope every project-specific route and template strictly by `project_id`; add a test that two projects' job lists never intersect (SC-007).
-- [ ] T091 Surface the concurrent-job warning from T052 in the launch UI with an explicit confirm control.
-- [ ] T092 [P] Add a concurrency test: launch a job in each of two projects and assert both progress independently.
+- [x] T089 Add a project switcher to `base.html` populated from `/api/projects`, preserving the current page type when switching.
+- [x] T090 Scope every project-specific route and template strictly by `project_id`; add a test that two projects' job lists never intersect (SC-007).
+- [x] T091 Surface the concurrent-job warning from T052 in the launch UI with an explicit confirm control.
+- [x] T092 [P] Add a concurrency test: launch a job in each of two projects and assert both progress independently.
 
 **Verify Phase 8**: two projects run jobs simultaneously with independent logs and no state bleed.
 

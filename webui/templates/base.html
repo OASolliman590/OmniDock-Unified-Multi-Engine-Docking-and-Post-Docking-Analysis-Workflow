@@ -14,10 +14,9 @@
     {% if project %}
     <div class="project-switcher">
       <label class="sr-only" for="project-select">Project</label>
-      <select id="project-select" onchange="location.href=this.value;">
+      <select id="project-select">
         {% for p in all_projects %}
-        <option value="{{ url_for('page_dashboard', pid=p.id) }}"
-                {% if p.id == project.id %}selected{% endif %}>
+        <option value="{{ p.id }}" {% if p.id == project.id %}selected{% endif %}>
           {{ p.name }}{% if not p.available %} (unavailable){% endif %}
         </option>
         {% endfor %}
@@ -43,6 +42,24 @@
   <main class="content">
     {% block content %}{% endblock %}
   </main>
+
+  {% if project %}
+  <script>
+    // Switching project keeps you on the same kind of page rather than
+    // dropping you back to the dashboard every time.
+    (function () {
+      const select = document.getElementById("project-select");
+      if (!select) return;
+      const currentId = {{ project.id | tojson }};
+      select.addEventListener("change", function () {
+        const nextId = this.value;
+        if (nextId === currentId) return;
+        const suffix = location.pathname.split("/project/" + currentId)[1] || "";
+        location.href = "/project/" + nextId + suffix;
+      });
+    })();
+  </script>
+  {% endif %}
 
   {% block scripts %}{% endblock %}
 </body>
