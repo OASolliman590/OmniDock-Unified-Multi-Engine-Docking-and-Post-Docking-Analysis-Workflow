@@ -8,3 +8,5 @@ questionary>=2.0.1
 pdb-tools>=2.5.0
 scipy>=1.7.0
 PyYAML>=6.0
+requests>=2.31.0
+scikit-learn>=1.0.0
