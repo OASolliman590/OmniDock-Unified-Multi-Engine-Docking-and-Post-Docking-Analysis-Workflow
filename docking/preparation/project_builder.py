@@ -24,6 +24,7 @@ from ..project_layout import (
     save_manifest,
 )
 from .excel_sites import load_site_catalog_from_summary
+from .asset_identity import REFERENCE_FIELDS, pair_reference_metadata
 from .ligand_quality import validate_prepared_ligand_pdbqt
 
 
@@ -131,6 +132,14 @@ class DockingProjectBuilder:
         if not rows:
             raise ValueError("No valid pairlist rows were generated")
 
+        receptor_sources = {source.name: source for source, _ in receptor_links}
+        ligand_sources = {source.name: source for source, _ in ligand_links}
+        for row in rows:
+            metadata = pair_reference_metadata(receptor_sources[row.receptor], ligand_sources[row.ligand])
+            for key, value in metadata.items():
+                if not getattr(row, key, ""):
+                    setattr(row, key, value)
+
         for source, dest_dir in receptor_links:
             self._materialize_asset(source, layout["receptors"] / source.name)
         for source, dest_dir in ligand_links:
@@ -148,7 +157,7 @@ class DockingProjectBuilder:
             if candidate.name in seen_ligands:
                 continue
             seen_ligands.add(candidate.name)
-            issues = validate_prepared_ligand_pdbqt(candidate)
+            issues = validate_prepared_ligand_pdbqt(candidate, engines)
             if issues:
                 ligand_validation_issues.extend(issue.to_dict() for issue in issues)
 
@@ -175,7 +184,7 @@ class DockingProjectBuilder:
         _write_csv(
             pairlist_file,
             [row.to_dict() for row in rows],
-            ["receptor", "site_id", "ligand", "center_x", "center_y", "center_z", "size_x", "size_y", "size_z"],
+            list(rows[0].to_dict()),
         )
 
         if self.config.excel_path:
@@ -258,38 +267,12 @@ class DockingProjectBuilder:
         }
 
     def _index_assets(self, directory: Path, allowed_suffixes: set[str]) -> Dict[str, Path]:
-        directory = Path(directory)
-        if not directory.exists():
-            raise FileNotFoundError(f"Asset directory not found: {directory}")
-
-        index: Dict[str, Path] = {}
-        for path in sorted(directory.iterdir()):
-            if not path.is_file() or path.suffix.lower() not in allowed_suffixes:
-                continue
-            for token in {path.name.lower(), path.stem.lower(), _normalize_key(path.name), _normalize_key(path.stem)}:
-                index.setdefault(token, path)
-            if "_ligand_" in path.stem.lower():
-                ligand_suffix = path.stem.lower().split("_ligand_", 1)[1]
-                index.setdefault(ligand_suffix, path)
-                index.setdefault(_normalize_key(ligand_suffix), path)
-            try:
-                index.setdefault(_extract_pdb_id(path.name).lower(), path)
-            except ValueError:
-                pass
-        if not index:
-            suffix_list = ", ".join(sorted(allowed_suffixes))
-            raise ValueError(
-                f"No usable assets found in {directory}. "
-                f"Expected at least one file with suffix: {suffix_list}."
-            )
-        return index
+        from .asset_identity import index_assets
+        return index_assets(directory, allowed_suffixes, _normalize_key)
 
     def _list_unique_assets(self, directory: Path, allowed_suffixes: set[str]) -> List[Path]:
-        directory = Path(directory)
-        return sorted(
-            path for path in directory.iterdir()
-            if path.is_file() and path.suffix.lower() in allowed_suffixes
-        )
+        from .asset_identity import active_assets
+        return active_assets(directory, allowed_suffixes)
 
     def _resolve_asset(self, raw_name: str, asset_index: Dict[str, Path], asset_type: str) -> Path:
         candidates = [
@@ -303,6 +286,8 @@ class DockingProjectBuilder:
             except ValueError:
                 pass
         for candidate in candidates:
+            if candidate in getattr(asset_index, "ambiguous", set()):
+                raise ValueError(f"Ambiguous {asset_type} alias '{raw_name}'; use an exact prepared filename")
             if candidate in asset_index:
                 return asset_index[candidate]
         raise ValueError(f"Could not match {asset_type} '{raw_name}' to a prepared file")
@@ -352,7 +337,7 @@ class DockingProjectBuilder:
                 )
 
             site_id = str(raw_row.get("site_id") or self.config.default_site_id)
-            size_value = float(raw_row.get("size_x") or self.config.default_box_size)
+            size_value = float(raw_row.get("size_x") if pd.notna(raw_row.get("size_x")) else self.config.default_box_size)
             row = PairlistRow(
                 receptor=receptor_source.name,
                 site_id=site_id,
@@ -363,6 +348,7 @@ class DockingProjectBuilder:
                 size_x=float(raw_row.get("size_x") if pd.notna(raw_row.get("size_x")) else size_value),
                 size_y=float(raw_row.get("size_y") if pd.notna(raw_row.get("size_y")) else size_value),
                 size_z=float(raw_row.get("size_z") if pd.notna(raw_row.get("size_z")) else size_value),
+                **{key: str(raw_row.get(key)) if pd.notna(raw_row.get(key)) else "" for key in REFERENCE_FIELDS},
             )
             rows.append(row)
             receptor_links.append((receptor_source, Path("receptors")))
@@ -403,6 +389,7 @@ class DockingProjectBuilder:
                     size_x=float(raw_row["size_x"]),
                     size_y=float(raw_row["size_y"]),
                     size_z=float(raw_row["size_z"]),
+                    **{key: str(raw_row.get(key)) if pd.notna(raw_row.get(key)) else "" for key in REFERENCE_FIELDS},
                 )
             )
             receptor_links.append((receptor_source, Path("receptors")))
@@ -451,9 +438,9 @@ class DockingProjectBuilder:
                     center_x=float(site_row["center_x"]),
                     center_y=float(site_row["center_y"]),
                     center_z=float(site_row["center_z"]),
-                    size_x=float(self.config.default_box_size),
-                    size_y=float(self.config.default_box_size),
-                    size_z=float(self.config.default_box_size),
+                    size_x=float(site_row.get("size_x") if pd.notna(site_row.get("size_x")) else self.config.default_box_size),
+                    size_y=float(site_row.get("size_y") if pd.notna(site_row.get("size_y")) else self.config.default_box_size),
+                    size_z=float(site_row.get("size_z") if pd.notna(site_row.get("size_z")) else self.config.default_box_size),
                 )
                 rows.append(row)
                 receptor_links.append((receptor_source, Path("receptors")))
@@ -462,16 +449,22 @@ class DockingProjectBuilder:
         return rows, receptor_links, ligand_links, warnings
 
     def _materialize_asset(self, source: Path, destination: Path) -> None:
-        if destination.exists():
-            return
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if self.config.asset_mode == "copy":
+        if destination.exists() or destination.is_symlink():
+            if destination.resolve() != source.resolve() and destination.read_bytes() != source.read_bytes():
+                raise ValueError(f"Stale materialized asset: {destination}; use a new project or explicitly replace this artifact")
+        elif self.config.asset_mode == "copy":
             shutil.copy2(source, destination)
-            return
-        try:
-            os.symlink(source, destination)
-        except OSError:
-            shutil.copy2(source, destination)
+        else:
+            try:
+                os.symlink(source, destination)
+            except OSError:
+                shutil.copy2(source, destination)
+        metadata = source.with_suffix(source.suffix + ".preparation.json")
+        if metadata.exists():
+            target_metadata = destination.with_suffix(destination.suffix + ".preparation.json")
+            if metadata.resolve() != target_metadata.resolve():
+                shutil.copy2(metadata, target_metadata)
 
     def _materialize_engine_specific_ligands(self, docking_root: Path, shared_ligands_dir: Path, engine: str) -> None:
         target_dir = docking_root / "ligands_engine_specific" / engine
@@ -479,16 +472,7 @@ class DockingProjectBuilder:
         for ligand_file in sorted(shared_ligands_dir.iterdir()):
             if not ligand_file.is_file():
                 continue
-            destination = target_dir / ligand_file.name
-            if destination.exists():
-                continue
-            if self.config.asset_mode == "copy":
-                shutil.copy2(ligand_file, destination)
-                continue
-            try:
-                os.symlink(ligand_file, destination)
-            except OSError:
-                shutil.copy2(ligand_file, destination)
+            self._materialize_asset(ligand_file, target_dir / ligand_file.name)
 
     def _materialize_engine_specific_receptors(self, docking_root: Path, shared_receptors_dir: Path, engine: str) -> None:
         target_dir = docking_root / "receptors_engine_specific" / engine
@@ -496,13 +480,4 @@ class DockingProjectBuilder:
         for receptor_file in sorted(shared_receptors_dir.iterdir()):
             if not receptor_file.is_file():
                 continue
-            destination = target_dir / receptor_file.name
-            if destination.exists():
-                continue
-            if self.config.asset_mode == "copy":
-                shutil.copy2(receptor_file, destination)
-                continue
-            try:
-                os.symlink(receptor_file, destination)
-            except OSError:
-                shutil.copy2(receptor_file, destination)
+            self._materialize_asset(receptor_file, target_dir / receptor_file.name)

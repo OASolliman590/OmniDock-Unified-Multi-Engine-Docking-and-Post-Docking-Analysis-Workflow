@@ -1,0 +1,73 @@
+{
+  "transitive_failure": {
+    "a": "failed",
+    "b": "blocked_by_failure",
+    "c": "completed"
+  },
+  "missing_output": {
+    "status": "completed",
+    "output_exists": false
+  },
+  "undeclared_raw_input": {
+    "status": "cache_hit",
+    "actual_raw_score": "-12",
+    "reported_score": "-7"
+  },
+  "concurrent_state_update": {
+    "expected_keys": [
+      "audit_worker_a",
+      "audit_worker_b"
+    ],
+    "persisted_keys": [
+      "audit_worker_a"
+    ]
+  },
+  "inventory": {
+    "python_files": 105,
+    "python_lines": 60677,
+    "largest_modules": [
+      [
+        6446,
+        "test/test_dockforge_smoke.py"
+      ],
+      [
+        5913,
+        "post_docking_analysis/multi_engine_pipeline_impl.py"
+      ],
+      [
+        5196,
+        "post_docking_analysis/simplified_pipeline_impl.py"
+      ],
+      [
+        3180,
+        "workflow/interactive.py"
+      ],
+      [
+        2820,
+        "workflow/execution.py"
+      ],
+      [
+        1968,
+        "post_docking_analysis/visualization_suite.py"
+      ],
+      [
+        1518,
+        "workflow/cli.py"
+      ],
+      [
+        1484,
+        "post_docking_analysis/pipeline.py"
+      ]
+    ],
+    "test_discovery": {
+      "test/test_dockforge_smoke.py": {
+        "pytest_test_functions": 0,
+        "custom_smoke_functions": 100
+      },
+      "test_pipeline.py": {
+        "pytest_test_functions": 0,
+        "custom_smoke_functions": 0
+      }
+    }
+  }
+}

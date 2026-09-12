@@ -86,7 +86,7 @@ def parse_vina_pdbqt(pdbqt_file: Path) -> pd.DataFrame:
         if current_affinity is None:
             return
         pose_number = current_pose or (len(results) + 1)
-        rmsd_value = current_rmsd if current_rmsd is not None else 0.0
+        rmsd_value = current_rmsd if current_rmsd is not None else float("nan")
         results.append(
             {
                 "pose": pose_number,

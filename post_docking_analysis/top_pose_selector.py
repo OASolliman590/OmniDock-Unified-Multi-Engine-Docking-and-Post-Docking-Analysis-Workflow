@@ -69,12 +69,8 @@ def _policy_sort_fields(selection_policy: str) -> Tuple[str, str, str]:
 
 
 def _consensus_score_ascending(mode: str) -> bool:
-    token = str(mode or "").strip().lower()
-    if token in _CONSENSUS_SCORE_ASCENDING_MODES:
-        return True
-    if token in {"dockbox_geometric", "favorite_guardrails"}:
-        return False
-    return True
+    # Every producer defines consensus_score as higher-is-better.
+    return False
 
 
 def _build_empty_contract() -> Dict[str, object]:
@@ -155,9 +151,22 @@ def build_top_pose_atlas(
         errors="coerce",
     )
 
-    # One deterministic identity row per tag (best affinity, then lexical engine for stable tie-breaks).
+    # Compare only within engine/target/site score distributions. Raw energies
+    # from different engines have no common calibration.
+    if best_frame["normalized_affinity_score"].isna().all():
+        from post_docking_analysis.consensus import normalize_engine_scores
+        best_frame = normalize_engine_scores(best_frame, group_keys=["engine", "protein", "site_id"])
+    multi_engine = best_frame["engine"].nunique() > 1
+    effective_primary = "normalized_affinity_score" if multi_engine and policy == "best_affinity" else primary_field
+    if effective_primary == "normalized_affinity_score":
+        primary_sort_ascending = False
+    tie_break_rule = f"{effective_primary} -> tag (raw scores never break cross-engine ties)"
     identity_sorted = best_frame.copy()
-    identity_sorted["_affinity_sort"] = pd.to_numeric(identity_sorted["affinity_kcal_mol"], errors="coerce").fillna(np.inf)
+    identity_sorted["_affinity_sort"] = -identity_sorted["normalized_affinity_score"].fillna(-np.inf)
+    if consensus_df is not None and not consensus_df.empty and "winner_engine" in consensus_df:
+        winners = consensus_df.drop_duplicates("tag").set_index("tag")["winner_engine"]
+        identity_sorted["_selected_winner"] = identity_sorted["engine"].eq(identity_sorted["tag"].map(winners))
+        identity_sorted.loc[identity_sorted["_selected_winner"], "_affinity_sort"] = -np.inf
     identity_sorted.sort_values(
         ["tag", "_affinity_sort", "engine", "pose"],
         ascending=[True, True, True, True],
@@ -217,8 +226,9 @@ def build_top_pose_atlas(
     atlas["winner_engine"] = atlas["winner_engine"].astype(str).str.lower()
     atlas["winner_engine"] = atlas["winner_engine"].where(atlas["winner_engine"].str.len() > 0, atlas["engine"])
 
-    atlas["_sort_primary"] = pd.to_numeric(atlas.get(primary_field), errors="coerce").fillna(np.inf)
-    atlas["_sort_secondary"] = pd.to_numeric(atlas.get(secondary_field), errors="coerce").fillna(np.inf)
+    atlas["_sort_primary"] = pd.to_numeric(atlas.get(effective_primary), errors="coerce").fillna(np.inf if primary_sort_ascending else -np.inf)
+    atlas["_sort_secondary"] = 0.0
+    atlas["interpretation"] = "exploratory_relative_prioritization_not_potency_or_selectivity"
     atlas["_sort_tag"] = atlas["tag"].astype(str)
 
     grouped = atlas.sort_values(
@@ -231,10 +241,10 @@ def build_top_pose_atlas(
     per_protein["global_aggregation"] = aggregation
     per_protein["tie_break_rule"] = tie_break_rule
 
-    global_sorted = per_protein.sort_values(
-        ["ligand", "_sort_primary", "_sort_secondary", "_sort_tag"],
-        ascending=[True, primary_sort_ascending, True, True],
-    )
+    # Cross-target best energy is not an affinity/selectivity measurement. Select
+    # an explicitly exploratory representative by relative within-target rank.
+    per_protein["_global_relative"] = per_protein["consensus_score"].fillna(per_protein["normalized_affinity_score"])
+    global_sorted = per_protein.sort_values(["ligand", "_global_relative", "_sort_tag"], ascending=[True, False, True])
     global_table = global_sorted.groupby("ligand", dropna=False, sort=False).head(1).copy()
     protein_counts = per_protein.groupby("ligand", dropna=False)["protein"].nunique()
     global_table["protein_count_evaluated"] = global_table["ligand"].map(protein_counts).fillna(0).astype(int)
@@ -279,7 +289,9 @@ def build_top_pose_atlas(
     summary = summary.merge(best_global_subset, on="ligand", how="left")
     summary["selection_policy"] = policy
     summary["global_aggregation"] = aggregation
-    summary.sort_values(["best_affinity_kcal_mol", "ligand"], inplace=True)
+    summary["best_affinity_kcal_mol"] = np.nan
+    summary["interpretation"] = "exploratory_relative_prioritization_not_potency_or_selectivity"
+    summary.sort_values(["ligand"], inplace=True)
 
     confidence_columns = [
         "ligand",
@@ -301,10 +313,12 @@ def build_top_pose_atlas(
     confidence = per_protein[confidence_columns].copy()
 
     for frame in (per_protein, global_table, summary, confidence):
-        frame.drop(columns=["_sort_primary", "_sort_secondary", "_sort_tag"], inplace=True, errors="ignore")
+        frame.drop(columns=["_sort_primary", "_sort_secondary", "_sort_tag", "_global_relative", "_selected_winner"], inplace=True, errors="ignore")
 
     manifest = {
         "selection_policy": policy,
+        "effective_primary": effective_primary,
+        "interpretation": "exploratory_relative_prioritization_not_potency_or_selectivity",
         "global_aggregation": aggregation,
         "tie_break_rule": tie_break_rule,
         "generated_at": str(generated_at or _utc_now_iso()),

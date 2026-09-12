@@ -1,0 +1,46 @@
+{
+  "actual_pipeline_cache": {
+    "first_status": "completed",
+    "second_status": "cache_hit",
+    "before": [
+      -7.2
+    ],
+    "after_raw_pose_changed": [
+      -7.2
+    ],
+    "forced_reparse": [
+      -11.2
+    ],
+    "registered_inputs": [
+      "C:\\Users\\salma\\AppData\\Local\\Temp\\omnidock_integrated_audit_1_ooto4f\\4-Docking\\pairlist.csv",
+      "C:\\Users\\salma\\AppData\\Local\\Temp\\omnidock_integrated_audit_1_ooto4f\\4-Working\\metadata\\engine_scope_config.json"
+    ]
+  },
+  "selected_existing_smokes": {
+    "_smoke_artifact_graph_cache_hit": {
+      "status": "passed"
+    },
+    "_smoke_artifact_graph_registration_contract": {
+      "status": "failed",
+      "error": "[WinError 1314] A required privilege is not held by the client: 'C:\\\\Users\\\\salma\\\\AppData\\\\Local\\\\Temp\\\\dockforge_artifact_registry_9mrxi38z\\\\5-Analysis' -> 'C:\\\\Users\\\\salma\\\\AppData\\\\Local\\\\Temp\\\\dockforge_artifact_registry_9mrxi38z\\\\5-Post_Docking_Analysis'"
+    },
+    "_smoke_consensus_direction_and_single_engine_qc": {
+      "status": "passed"
+    },
+    "_smoke_top_pose_consensus_direction_contracts": {
+      "status": "passed"
+    },
+    "_smoke_geometric_consensus_soft_alignment_contract": {
+      "status": "passed"
+    },
+    "_smoke_geometric_consensus_hard_mismatch_contract": {
+      "status": "passed"
+    },
+    "_smoke_redocking_multi_pose_sdf_parser_contract": {
+      "status": "passed"
+    },
+    "_smoke_redocking_validation_multi_pose_end_to_end_contract": {
+      "status": "passed"
+    }
+  }
+}

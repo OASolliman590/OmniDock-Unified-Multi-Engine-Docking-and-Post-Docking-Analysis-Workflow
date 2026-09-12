@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -34,21 +35,11 @@ def _safe_float(token: str) -> Optional[float]:
 
 
 def _parse_xyz(line: str) -> Optional[Tuple[float, float, float]]:
-    if len(line) >= 54:
-        x = _safe_float(line[30:38])
-        y = _safe_float(line[38:46])
-        z = _safe_float(line[46:54])
-        if x is not None and y is not None and z is not None:
-            return x, y, z
-    tokens = line.split()
-    float_values: List[float] = []
-    for token in tokens:
-        value = _safe_float(token)
-        if value is not None:
-            float_values.append(value)
-        if len(float_values) >= 3:
-            return float_values[0], float_values[1], float_values[2]
-    return None
+    from .structure_contract import coordinates
+    try:
+        return coordinates(line)
+    except ValueError:
+        return None
 
 
 def _infer_element(line: str) -> str:
@@ -111,6 +102,13 @@ def validate_receptor_file(
         span = 0.0
 
     issues: List[ReceptorValidationIssue] = []
+    if len(valid_coords) != atom_count:
+        issues.append(ReceptorValidationIssue(receptor=receptor_name, receptor_file=str(path), reason="invalid_coordinates", details="Every atom must have finite fixed-column XYZ coordinates."))
+    identifiers = [line[6:11] for line in atom_lines]
+    if len(identifiers) != len(set(identifiers)):
+        issues.append(ReceptorValidationIssue(receptor=receptor_name, receptor_file=str(path), reason="duplicate_atom_identifiers", details="Atom serials must be unique in a single receptor model."))
+    if sum(line.startswith("MODEL ") for line in lines) > 1:
+        issues.append(ReceptorValidationIssue(receptor=receptor_name, receptor_file=str(path), reason="multiple_models", details="Select one receptor model explicitly."))
     if atom_count == 0:
         issues.append(
             ReceptorValidationIssue(

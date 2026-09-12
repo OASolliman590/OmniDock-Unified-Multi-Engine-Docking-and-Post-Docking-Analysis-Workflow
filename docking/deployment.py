@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import re
 import shlex
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional
 
 from .engine_registry import build_runner
 from .hpc_profiles import merge_condor_with_profile, merge_slurm_with_profile
 from .models import PairlistRow
 from .project_layout import deployment_root, detect_layout_profile, ensure_project_layout
+from .runners import job_contract
 
 
 DEFAULT_SLURM = {
@@ -52,7 +53,10 @@ def _map_project_path(raw_value: object, local_root: Path, execution_root: Path)
     local_prefix = str(local_root)
     execution_prefix = str(execution_root)
     if local_prefix and local_prefix in text:
-        return text.replace(local_prefix, execution_prefix)
+        mapped = text.replace(local_prefix, execution_prefix)
+        if isinstance(execution_root, PurePosixPath) and "\\" in local_prefix:
+            mapped = mapped.replace("\\", "/")
+        return mapped
     candidate = Path(text)
     if not candidate.is_absolute():
         return text
@@ -66,6 +70,45 @@ def _map_command(command: List[str], local_root: Path, execution_root: Path) -> 
     return [_map_project_path(token, local_root, execution_root) for token in command]
 
 
+def _execution_root(local_root, remote_root):
+    if not remote_root:
+        return local_root
+    remote = PurePosixPath(str(remote_root).replace("\\", "/"))
+    if not remote.is_absolute():
+        raise ValueError("Remote project root must be an absolute Linux/POSIX path")
+    return remote
+
+
+def _mapped_path(value, local_root, execution_root):
+    mapped = _map_project_path(value, local_root, execution_root)
+    return PurePosixPath(mapped) if type(execution_root) is PurePosixPath else Path(mapped)
+
+
+def _map_job(job, local_root, execution_root):
+    payload = job.to_dict()
+    for key in ("pose_file", "log_file", "completion_file"):
+        payload[key] = _map_project_path(payload[key], local_root, execution_root)
+    payload["command"] = _map_command(payload["command"], local_root, execution_root)
+    payload["input_files"] = [{**item, "path": _map_project_path(item["path"], local_root, execution_root)} for item in payload["input_files"]]
+    payload["executables"] = [_map_project_path(value, local_root, execution_root) for value in payload["executables"]]
+    return payload
+
+
+def _write_job_executor(scripts_dir):
+    target = scripts_dir / "execute_job.py"
+    target.write_text(Path(job_contract.__file__).read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def _apply_allocated_resources(engine, runtime, settings, cpu_key):
+    allocated = int(settings[cpu_key])
+    requested = int(runtime.get("cpu") or allocated)
+    if allocated < 1 or requested < 1 or requested > allocated:
+        raise ValueError(f"{engine}: requested CPUs ({requested}) must be between 1 and scheduler allocation ({allocated})")
+    runtime["cpu"] = requested
+    if engine == "gnina":
+        runtime["use_gpu"] = int(settings.get("gpus") or 0) > 0
+
+
 def _slurm_settings_for_engine(
     engine: str,
     runtime: Dict[str, object],
@@ -77,8 +120,8 @@ def _slurm_settings_for_engine(
     merged["extra_args"] = _normalize_extra_args(merged.get("extra_args"))
     if not merged.get("cpus_per_task"):
         merged["cpus_per_task"] = int(runtime.get("cpu") or 4)
-    if engine == "gnina" and runtime.get("use_gpu", True):
-        merged["gpus"] = int(slurm_options.get("gpus") or 1)
+    if engine == "gnina" and runtime.get("use_gpu") is not False:
+        merged["gpus"] = int(slurm_options["gpus"] if slurm_options.get("gpus") is not None else (merged.get("gpus") or 1))
     else:
         merged["gpus"] = int(slurm_options.get("gpus") or 0)
     return merged
@@ -140,7 +183,7 @@ def _render_array_slurm_script(
     job_count: int,
     preamble_lines: Optional[List[str]] = None,
 ) -> str:
-    native_pair_logs = engine == "gnina"
+    native_pair_logs = True  # The portable executor captures per-engine logs.
     stdout_path = log_dir / f"{job_name}-%A_%a.out"
     stderr_path = log_dir / f"{job_name}-%A_%a.err"
     array_parallelism = int(settings.get("array_parallelism") or 0)
@@ -196,7 +239,7 @@ def _render_single_job_slurm_script(
     settings: Dict[str, object],
     preamble_lines: Optional[List[str]] = None,
 ) -> str:
-    native_pair_logs = engine == "gnina"
+    native_pair_logs = True  # The portable executor captures per-engine logs.
     stdout_path = log_dir / f"{job_name}-%j.out"
     stderr_path = log_dir / f"{job_name}-%j.err"
     lines = _render_slurm_header(job_name, stdout_path, stderr_path, settings)
@@ -268,8 +311,8 @@ def _condor_settings_for_engine(
     merged.update(merge_condor_with_profile(engine, runtime, condor_options, profile or {}))
     if not merged.get("cpus"):
         merged["cpus"] = int(runtime.get("cpu") or 8)
-    if engine == "gnina" and runtime.get("use_gpu", True):
-        merged["gpus"] = int(condor_options.get("gpus") or 1)
+    if engine == "gnina" and runtime.get("use_gpu") is not False:
+        merged["gpus"] = int(condor_options["gpus"] if condor_options.get("gpus") is not None else (merged.get("gpus") or 1))
     else:
         merged["gpus"] = int(condor_options.get("gpus") or 0)
     return merged
@@ -345,7 +388,7 @@ def _render_array_condor_script(
     execution_manifest_path: Path,
     preamble_lines: Optional[List[str]] = None,
 ) -> str:
-    native_pair_logs = engine == "gnina"
+    native_pair_logs = True  # The portable executor captures per-engine logs.
     lines = [
         "#!/bin/bash",
         "set -eo pipefail",
@@ -388,7 +431,7 @@ def _render_single_job_condor_script(
     execution_manifest_path: Path,
     preamble_lines: Optional[List[str]] = None,
 ) -> str:
-    native_pair_logs = engine == "gnina"
+    native_pair_logs = True  # The portable executor captures per-engine logs.
     lines = [
         "#!/bin/bash",
         "set -uo pipefail",
@@ -446,13 +489,11 @@ def generate_condor_deployment(
     rerun_manifest_file: str = "",
 ) -> Dict[str, object]:
     root = Path(project_root).expanduser().resolve()
-    execution_root = Path(remote_project_root).expanduser() if remote_project_root else root
-    if not execution_root.is_absolute():
-        execution_root = (root / execution_root).resolve()
+    execution_root = _execution_root(root, remote_project_root)
     profile = detect_layout_profile(root)
     ensure_project_layout(root, profile)
     stage_root = deployment_root(root, profile) / _sanitize_token(round_id) / _sanitize_token(docking_mode)
-    execution_stage_root = Path(_map_project_path(stage_root, root, execution_root))
+    execution_stage_root = _mapped_path(stage_root, root, execution_root)
     stage_root.mkdir(parents=True, exist_ok=True)
     deployment_manifest: Dict[str, object] = {
         "generation_project_root": str(root),
@@ -481,10 +522,13 @@ def generate_condor_deployment(
         runtime["docking_mode"] = docking_mode
         if rerun_manifest_file:
             runtime["rerun_manifest_file"] = _map_project_path(rerun_manifest_file, root, execution_root)
-        runner = build_runner(engine, root, runtime)
-        jobs = runner.plan_jobs(pairlist_rows, skip_completed=skip_completed)
         engine_settings = _condor_settings_for_engine(engine, runtime, condor_options or {}, profile=hpc_profile)
         _validate_condor_settings(engine, engine_settings, profile=hpc_profile)
+        _apply_allocated_resources(engine, runtime, engine_settings, "cpus")
+        runner = build_runner(engine, root, runtime)
+        jobs = runner.plan_jobs(pairlist_rows, skip_completed=skip_completed and not remote_project_root)
+        for job in jobs:
+            job.skip_completed = skip_completed
         engine_root = stage_root / engine
         execution_engine_root = execution_stage_root / engine
         scripts_dir = engine_root / "job_scripts"
@@ -492,6 +536,7 @@ def generate_condor_deployment(
         condor_logs_dir = engine_root / "condor_logs"
         execution_logs_dir = execution_engine_root / "condor_logs"
         scripts_dir.mkdir(parents=True, exist_ok=True)
+        _write_job_executor(scripts_dir)
         manifest_dir.mkdir(parents=True, exist_ok=True)
         condor_logs_dir.mkdir(parents=True, exist_ok=True)
         mapped_runtime = {
@@ -535,6 +580,7 @@ def generate_condor_deployment(
         for index, job in enumerate(jobs, start=1):
             pair_job_name = _sanitize_token(f"{engine_settings['job_name_prefix']}-{engine}-{round_id}-{index:03d}")
             mapped_command = _map_command(job.command, root, execution_root)
+            wrapper_command = [str(runtime.get("job_python") or "python3"), str(execution_engine_root / "job_scripts" / "execute_job.py"), str(execution_engine_root / "manifest" / "deployment_manifest.json"), str(index - 1)]
             mapped_pose_file = _map_project_path(job.pose_file, root, execution_root)
             mapped_log_file = _map_project_path(job.log_file, root, execution_root)
             array_index = None
@@ -545,14 +591,14 @@ def generate_condor_deployment(
                     "\t".join([
                         pair_job_name,
                         job.tag,
-                        shlex.join(mapped_command),
+                        shlex.join(wrapper_command),
                         mapped_log_file,
                     ])
                 )
             engine_payload["jobs"].append(
                 {
                     **{
-                        **job.to_dict(),
+                        **_map_job(job, root, execution_root),
                         "command": mapped_command,
                         "pose_file": mapped_pose_file,
                         "log_file": mapped_log_file,
@@ -662,13 +708,11 @@ def generate_slurm_deployment(
     rerun_manifest_file: str = "",
 ) -> Dict[str, object]:
     root = Path(project_root).expanduser().resolve()
-    execution_root = Path(remote_project_root).expanduser() if remote_project_root else root
-    if not execution_root.is_absolute():
-        execution_root = (root / execution_root).resolve()
+    execution_root = _execution_root(root, remote_project_root)
     profile = detect_layout_profile(root)
     ensure_project_layout(root, profile)
     stage_root = deployment_root(root, profile) / _sanitize_token(round_id) / _sanitize_token(docking_mode)
-    execution_stage_root = Path(_map_project_path(stage_root, root, execution_root))
+    execution_stage_root = _mapped_path(stage_root, root, execution_root)
     stage_root.mkdir(parents=True, exist_ok=True)
     deployment_manifest: Dict[str, object] = {
         "generation_project_root": str(root),
@@ -696,10 +740,13 @@ def generate_slurm_deployment(
         runtime["docking_mode"] = docking_mode
         if rerun_manifest_file:
             runtime["rerun_manifest_file"] = _map_project_path(rerun_manifest_file, root, execution_root)
-        runner = build_runner(engine, root, runtime)
-        jobs = runner.plan_jobs(pairlist_rows, skip_completed=skip_completed)
         engine_settings = _slurm_settings_for_engine(engine, runtime, slurm_options or {}, profile=hpc_profile)
         _validate_slurm_settings(engine, engine_settings, profile=hpc_profile)
+        _apply_allocated_resources(engine, runtime, engine_settings, "cpus_per_task")
+        runner = build_runner(engine, root, runtime)
+        jobs = runner.plan_jobs(pairlist_rows, skip_completed=skip_completed and not remote_project_root)
+        for job in jobs:
+            job.skip_completed = skip_completed
         engine_root = stage_root / engine
         execution_engine_root = execution_stage_root / engine
         scripts_dir = engine_root / "job_scripts"
@@ -707,6 +754,7 @@ def generate_slurm_deployment(
         slurm_logs_dir = engine_root / "slurm_logs"
         execution_logs_dir = execution_engine_root / "slurm_logs"
         scripts_dir.mkdir(parents=True, exist_ok=True)
+        _write_job_executor(scripts_dir)
         manifest_dir.mkdir(parents=True, exist_ok=True)
         slurm_logs_dir.mkdir(parents=True, exist_ok=True)
         mapped_runtime = {
@@ -748,6 +796,7 @@ def generate_slurm_deployment(
         for index, job in enumerate(jobs, start=1):
             pair_job_name = _sanitize_token(f"{engine_settings['job_name_prefix']}-{engine}-{round_id}-{index:03d}")
             mapped_command = _map_command(job.command, root, execution_root)
+            wrapper_command = [str(runtime.get("job_python") or "python3"), str(execution_engine_root / "job_scripts" / "execute_job.py"), str(execution_engine_root / "manifest" / "deployment_manifest.json"), str(index - 1)]
             mapped_pose_file = _map_project_path(job.pose_file, root, execution_root)
             mapped_log_file = _map_project_path(job.log_file, root, execution_root)
             array_index = None
@@ -759,7 +808,7 @@ def generate_slurm_deployment(
                         [
                             pair_job_name,
                             job.tag,
-                            shlex.join(mapped_command),
+                            shlex.join(wrapper_command),
                             mapped_log_file,
                         ]
                     )
@@ -767,7 +816,7 @@ def generate_slurm_deployment(
             engine_payload["jobs"].append(
                 {
                     **{
-                        **job.to_dict(),
+                        **_map_job(job, root, execution_root),
                         "command": mapped_command,
                         "pose_file": mapped_pose_file,
                         "log_file": mapped_log_file,

@@ -7,6 +7,8 @@ matplotlib>=3.4.0
 seaborn>=0.11.0
 scikit-learn>=1.0.0
 pyyaml>=6.0
+requests>=2.31.0
+rdkit>=2023.9.1  # Chemical identity, symmetry-aware receptor-frame RMSD
 
 # Optional dependencies
 openbabel>=3.1.1  # For pose extraction

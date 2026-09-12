@@ -239,7 +239,10 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
                             'active_site_center_y': coords[1], 
                             'active_site_center_z': coords[2],
                             'interacting_residues_count': residue_analysis['num_interacting_residues'],
-                            'interacting_atoms_count': residue_analysis['num_interacting_atoms']
+                            'interacting_atoms_count': residue_analysis['num_interacting_atoms'],
+                                'active_site_size_x': residue_analysis.get('size_x'),
+                                'active_site_size_y': residue_analysis.get('size_y'),
+                                'active_site_size_z': residue_analysis.get('size_z')
                         })
                         print(f"✓ Active site coordinates extracted: X={coords[0]:.2f}, Y={coords[1]:.2f}, Z={coords[2]:.2f}")
                     else:
@@ -291,8 +294,14 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
             else:
                 to_remove_list = default_strategy if isinstance(default_strategy, list) else []
         
-        # Note: Don't auto-remove selected ligand - let user decide via config
-        # If ligand is in removal list, it will be removed (creating apo receptor)
+        # Ordinary screening excludes exactly the selected reference instance.
+        remove_instances = []
+        if selected_hetatm and not preserve_full_receptor and not cleaning_config.get("retain_reference_ligand", False):
+            from docking.preparation.structure_contract import residue_key
+            source_lines = Path(pdb_file).read_text(encoding="utf-8").splitlines()
+            remove_instances = list({residue_key(line) for line in source_lines if line.startswith("HETATM") and line[17:20].strip() == selected_hetatm and line[21:22].strip() == str(chain_id).strip() and line[22:26].strip() == str(res_id)})
+            if len(remove_instances) != 1:
+                raise ValueError("Reference ligand instance is ambiguous; specify a single instance")
         keep_selected_chain = bool(cleaning_config.get("keep_selected_chain", False)) and not preserve_full_receptor
         explicit_keep_chain_id = str(cleaning_config.get("keep_chain_id", "") or "").strip()
         explicit_keep_chain_ids_raw = cleaning_config.get("keep_chain_ids", [])
@@ -328,6 +337,7 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
                 pdb_id=pdb_id,
                 keep_chain_id=keep_chain_id,
                 keep_chain_ids=keep_chain_ids,
+                remove_instances=remove_instances,
             )
         
         # Step 6: Analyze pocket properties using cleaned structure (if coordinates were extracted)

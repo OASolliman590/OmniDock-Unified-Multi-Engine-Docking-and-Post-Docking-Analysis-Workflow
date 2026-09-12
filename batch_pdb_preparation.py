@@ -251,10 +251,12 @@ class BatchPDBPreparationPipeline:
             else:
                 to_remove_list = []
             
-            # Remove selected ligand from cleaning list
-            if selected_hetatm and selected_hetatm in to_remove_list:
-                to_remove_list.remove(selected_hetatm)
-                print(f"✓ Removed {selected_hetatm} from cleaning list (selected as ligand)")
+            remove_instances = []
+            if selected_hetatm and not preserve_full_receptor:
+                from docking.preparation.structure_contract import residue_key
+                remove_instances = list({residue_key(line) for line in Path(pdb_file).read_text(encoding="utf-8").splitlines() if line.startswith("HETATM") and line[17:20].strip() == selected_hetatm and line[21:22].strip() == str(chain_id).strip() and line[22:26].strip() == str(res_id)})
+                if len(remove_instances) != 1:
+                    raise ValueError("Ambiguous reference ligand instance")
             
             keep_selected_chain = bool(self._get_pdb_setting(pdb_config, "cleaning.keep_selected_chain", False)) and not preserve_full_receptor
             explicit_keep_chain_id = str(self._get_pdb_setting(pdb_config, "cleaning.keep_chain_id", "") or "").strip()
@@ -291,6 +293,7 @@ class BatchPDBPreparationPipeline:
                     pdb_id=pdb_id,
                     keep_chain_id=keep_chain_id,
                     keep_chain_ids=keep_chain_ids,
+                    remove_instances=remove_instances,
                 )
             
             # Step 5: Extract active site coordinates and analyze
@@ -303,7 +306,7 @@ class BatchPDBPreparationPipeline:
                     
                     if use_enhanced:
                         residue_analysis = extract_residue_level_coordinates(
-                            cleaned_pdb, selected_hetatm, chain_id, res_id
+                            pdb_file, selected_hetatm, chain_id, res_id
                         )
                         if residue_analysis:
                             coords = residue_analysis['overall_center']
@@ -319,7 +322,7 @@ class BatchPDBPreparationPipeline:
                             raise ValueError("Enhanced coordinate extraction failed")
                     else:
                         coords, num_atoms = pipeline.extract_active_site_coords(
-                            cleaned_pdb, selected_hetatm, chain_id, res_id
+                            pdb_file, selected_hetatm, chain_id, res_id
                         )
                         results.update({
                             'selected_ligand': f"{selected_hetatm}_{chain_id}_{res_id}",
@@ -350,7 +353,8 @@ class BatchPDBPreparationPipeline:
             # Step 7: AutoDock preparation if requested
             prepare_as = self._get_pdb_setting(pdb_config, "autodock.prepare_as", "none")
             if prepare_as in ["ligand", "receptor", "both"]:
-                self._prepare_for_autodock(pdb_id, pdb_file, pdb_output_dir, pdb_config, prepare_as)
+                if not self._prepare_for_autodock(pdb_id, cleaned_pdb, pdb_output_dir, pdb_config, prepare_as):
+                    raise RuntimeError("Legacy batch parameterization is unsupported; use the unified workflow preparation command")
             
             print(f"✅ Successfully processed {pdb_id}")
             return True
@@ -363,74 +367,11 @@ class BatchPDBPreparationPipeline:
             }
             return False
     
-    def _prepare_for_autodock(self, pdb_id: str, pdb_file: str, pdb_output_dir: Path, 
+    def _prepare_for_autodock(self, pdb_id: str, pdb_file: str, pdb_output_dir: Path,
                              pdb_config: Dict, prepare_as: str) -> bool:
-        """
-        Prepare PDB for AutoDock Vina
-        
-        Args:
-            pdb_id: PDB identifier
-            pdb_file: Path to PDB file
-            pdb_output_dir: Output directory for this PDB
-            pdb_config: Configuration for this PDB
-            prepare_as: What to prepare as ("ligand", "receptor", "both")
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            print(f"🔄 Preparing {pdb_id} for AutoDock...")
-            
-            # Create AutoDock output directories
-            autodock_dir = pdb_output_dir / "autodock_preparation"
-            ligands_dir = autodock_dir / "ligands"
-            receptors_dir = autodock_dir / "receptors"
-            ligands_dir.mkdir(exist_ok=True)
-            receptors_dir.mkdir(exist_ok=True)
-            
-            # Get AutoDock settings
-            force_field = self._get_pdb_setting(pdb_config, "autodock.force_field", "AMBER")
-            ph = self._get_pdb_setting(pdb_config, "autodock.ph", 7.4)
-            allow_bad_res = self._get_pdb_setting(pdb_config, "autodock.allow_bad_res", True)
-            default_altloc = self._get_pdb_setting(pdb_config, "autodock.default_altloc", "A")
-            
-            # Create AutoDock configuration
-            config = PreparationConfig(
-                ligands_input=str(pdb_output_dir),
-                receptors_input=str(pdb_output_dir),
-                ligands_output=str(ligands_dir),
-                receptors_output=str(receptors_dir),
-                force_field=force_field,
-                ph=ph,
-                allow_bad_res=allow_bad_res,
-                default_altloc=default_altloc
-            )
-            
-            # Initialize AutoDock pipeline
-            autodock_pipeline = AutoDockPreparationPipeline(config)
-            
-            # Prepare based on request
-            if prepare_as in ["ligand", "both"]:
-                # For ligand preparation, we need to extract the ligand first
-                # This is already done in the main pipeline, so we can use that file
-                pass  # The ligand PDB file is already created
-                
-            if prepare_as in ["receptor", "both"]:
-                # Prepare receptor
-                # Copy the cleaned PDB to receptors input directory
-                import shutil
-                receptor_input = receptors_dir / f"{pdb_id}.pdb"
-                shutil.copy2(pdb_file, receptor_input)
-            
-            # For now, we'll just note that AutoDock preparation was requested
-            # A full implementation would integrate with the existing AutoDock preparation
-            print(f"✅ AutoDock preparation requested for {pdb_id} as {prepare_as}")
-            print(f"   Output directory: {autodock_dir}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ AutoDock preparation failed for {pdb_id}: {e}")
-            return False
+        """Do not report an unimplemented legacy parameterization request as success."""
+        print("AutoDock parameterization is not implemented by legacy batch mode. Use 'workflow pdb prepare' with authoritative ligand SDF and an explicitly cleaned receptor.")
+        return False
     
     def run_batch_processing(self) -> Dict[str, Any]:
         """

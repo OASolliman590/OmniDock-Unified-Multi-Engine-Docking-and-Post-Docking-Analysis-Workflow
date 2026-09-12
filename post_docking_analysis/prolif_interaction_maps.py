@@ -12,6 +12,8 @@ import logging
 import os
 import tempfile
 import re
+import json
+from .pose_geometry import load_pose_molecule
 
 try:
     import matplotlib.pyplot as plt
@@ -308,32 +310,31 @@ class ProLifInteractionMapper:
         """
         Load docking poses from SDF as ProLIF-compatible molecules.
         """
-        pose_iterable: List[Any] = []
-        if hasattr(plf, "sdf_supplier"):
-            supplier = plf.sdf_supplier(str(poses_sdf))
-            for pose in supplier:
-                if pose is None:
-                    continue
-                pose_iterable.append(pose)
-                if max_poses and len(pose_iterable) >= max_poses:
-                    break
-            return pose_iterable
+        from rdkit import Chem
+        supplier = Chem.SDMolSupplier(str(poses_sdf), removeHs=False, sanitize=True)
+        molecules = list(supplier)
+        if max_poses:
+            molecules = molecules[:max_poses]
+        if any(mol is None for mol in molecules):
+            raise ValueError("Invalid SDF pose: interaction denominator and pose identity must not silently change")
+        return [plf.Molecule.from_rdkit(Chem.RemoveHs(mol)) for mol in molecules]
 
-        # Fallback for environments where sdf_supplier is unavailable.
-        try:
-            from rdkit import Chem
-        except Exception as exc:
-            logger.warning(f"⚠️  RDKit not available for SDF fallback loading: {exc}")
-            return []
-
-        supplier = Chem.SDMolSupplier(str(poses_sdf), removeHs=False)
-        for mol in supplier:
-            if mol is None:
-                continue
-            pose_iterable.append(plf.Molecule.from_rdkit(mol))
-            if max_poses and len(pose_iterable) >= max_poses:
-                break
-        return pose_iterable
+    @staticmethod
+    def _load_receptor_chemistry(receptor_pdb: Path):
+        from rdkit import Chem
+        from prolif.io import MoleculeStandardizer
+        if not receptor_pdb.is_file():
+            raise ValueError("Receptor context sidecar missing")
+        supported = {"ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE", "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL", "HID", "HIE", "HIP", "CYX", "ASH", "GLH", "LYN"}
+        residues = {line[17:20].strip() for line in receptor_pdb.read_text(encoding="utf-8").splitlines() if line.startswith(("ATOM", "HETATM"))}
+        unsupported = residues - supported
+        if unsupported:
+            raise ValueError("Cofactor/water/ion chemistry needs explicit templates: " + ",".join(sorted(unsupported)))
+        molecule = Chem.MolFromPDBFile(str(receptor_pdb), removeHs=False, sanitize=False)
+        if molecule is None:
+            raise ValueError("Invalid receptor structure")
+        molecule = MoleculeStandardizer()(Chem.RemoveHs(molecule, sanitize=False))
+        return plf.Molecule.from_rdkit(molecule)
 
     def _save_interaction_frequency(self, df, output_csv: Path) -> bool:
         """
@@ -341,9 +342,11 @@ class ProLifInteractionMapper:
         """
         try:
             output_csv.parent.mkdir(parents=True, exist_ok=True)
-            freq = df.astype(float).mean(axis=0)
+            freq = df.astype(bool).astype(float).mean(axis=0)
             freq_df = freq.rename("frequency").to_frame().reset_index()
             freq_df.columns = ["ligand", "protein", "interaction", "frequency"]
+            freq_df["pose_count"] = len(df)
+            freq_df["interpretation"] = "fraction_of_supplied_docking_poses_not_binding_probability"
             freq_df.to_csv(output_csv, index=False)
             return True
         except Exception as exc:
@@ -383,7 +386,7 @@ class ProLifInteractionMapper:
                     dpi=dpi,
                     figsize=figsize,
                 )
-                return True
+                return False
 
             ligand_atoms = universe.select_atoms(f"resname {selected_resname}")
             protein_atoms = universe.select_atoms("protein")
@@ -395,14 +398,19 @@ class ProLifInteractionMapper:
                     dpi=dpi,
                     figsize=figsize,
                 )
-                return True
+                return False
 
-            ligand_mol = plf.Molecule.from_mda(ligand_atoms, NoImplicit=False)
-            protein_mol = plf.Molecule.from_mda(protein_atoms, NoImplicit=False)
-
-            fp = plf.Fingerprint()
+            # Coordinate PDBs cannot authoritatively recover ligand aromaticity/charge.
+            ligand_sdf = complex_pdb.with_suffix(".ligand.sdf")
+            receptor_pdb = complex_pdb.with_suffix(".receptor.pdb")
+            if not ligand_sdf.exists() or not receptor_pdb.exists():
+                raise ValueError("Interaction chemistry unavailable: selected ligand SDF and receptor PDB sidecars are required")
+            ligand_mol = plf.Molecule.from_rdkit(load_pose_molecule(ligand_sdf))
+            protein_mol = self._load_receptor_chemistry(receptor_pdb)
+            fp = plf.Fingerprint(implicit_hydrogens=True)
             fp.run_from_iterable([ligand_mol], protein_mol)
             interaction_df = fp.to_dataframe()
+            output_png.with_suffix(".status.json").write_text(json.dumps({"status":"completed", "has_interactions":bool(not interaction_df.empty), "hydrogen_method":"implicit", "ligand_source":str(ligand_sdf), "receptor_source":str(receptor_pdb)}), encoding="utf-8")
 
             # Static barcode PNG
             # plot_barcode() crashes with KeyError:'ligand' on an empty fingerprint.
@@ -458,6 +466,7 @@ class ProLifInteractionMapper:
             return True
 
         except Exception as exc:
+            output_png.with_suffix(".status.json").write_text(json.dumps({"status":"not_evaluable", "reason":str(exc)}), encoding="utf-8")
             logger.error(f"❌ Error creating ProLIF map for {complex_pdb.name}: {exc}", exc_info=True)
             return False
         finally:
@@ -513,9 +522,9 @@ class ProLifInteractionMapper:
                     dpi=dpi,
                     figsize=figsize,
                 )
-                return True
+                return False
 
-            protein_mol = plf.Molecule.from_mda(protein_atoms, NoImplicit=False)
+            protein_mol = self._load_receptor_chemistry(complex_pdb.with_suffix(".receptor.pdb"))
             pose_iterable = self._load_pose_iterable_from_sdf(poses_sdf, max_poses=max_poses)
             if not pose_iterable:
                 self._save_placeholder_png(
@@ -525,7 +534,7 @@ class ProLifInteractionMapper:
                     dpi=dpi,
                     figsize=figsize,
                 )
-                return True
+                return False
 
             ligand_hint = self._normalize_resname(ligand_resname)
             if ligand_hint in {"UNK", "UNX", "LIG"}:
@@ -533,9 +542,10 @@ class ProLifInteractionMapper:
                 if inferred:
                     ligand_hint = inferred
 
-            fp = plf.Fingerprint(count=bool(count_occurrences))
+            fp = plf.Fingerprint(count=bool(count_occurrences), implicit_hydrogens=True)
             fp.run_from_iterable(pose_iterable, protein_mol)
             interaction_df = fp.to_dataframe(index_col="Pose")
+            output_png.with_suffix(".status.json").write_text(json.dumps({"status":"completed", "has_interactions":bool(not interaction_df.empty), "pose_count":len(pose_iterable), "hydrogen_method":"implicit_templates", "interpretation":"supplied_docking_pose_interactions_not_binding_probability"}), encoding="utf-8")
 
             # Static barcode over docking poses.
             try:
@@ -619,6 +629,7 @@ class ProLifInteractionMapper:
             return True
 
         except Exception as exc:
+            output_png.with_suffix(".status.json").write_text(json.dumps({"status":"not_evaluable", "reason":str(exc)}), encoding="utf-8")
             logger.error(f"❌ Error creating ProLIF docking map for {complex_pdb.name}: {exc}", exc_info=True)
             return False
         finally:

@@ -2380,15 +2380,14 @@ def _refresh_latest_analysis_shortcuts(project_root: Path, session_root: Path) -
             (latest_stage_link, stage_targets),
         ):
             try:
-                if link_path.exists() or link_path.is_symlink():
-                    if link_path.is_dir() and not link_path.is_symlink():
-                        shutil.rmtree(link_path)
-                    else:
-                        link_path.unlink()
+                if link_path.is_symlink() or link_path.is_file():
+                    link_path.unlink()
                 if target.exists():
-                    link_path.symlink_to(target)
-            except Exception:
-                continue
+                    link_path.symlink_to(target, target_is_directory=True)
+                    link_path.with_suffix(".txt").unlink(missing_ok=True)
+            except OSError:
+                if target.exists():
+                    link_path.with_suffix(".txt").write_text(str(target.resolve()) + "\n", encoding="utf-8")
 
         alias_root = project_root / "5-Analysis"
         alias_root.mkdir(parents=True, exist_ok=True)
@@ -2402,11 +2401,12 @@ def _refresh_latest_analysis_shortcuts(project_root: Path, session_root: Path) -
         alias_readme.write_text("\n".join(lines) + "\n", encoding="utf-8")
         alias_latest = alias_root / "LATEST_SESSION"
         try:
-            if alias_latest.exists() or alias_latest.is_symlink():
+            if alias_latest.is_file() or alias_latest.is_symlink():
                 alias_latest.unlink()
-            alias_latest.symlink_to(session_root)
-        except Exception:
-            pass
+            alias_latest.symlink_to(session_root, target_is_directory=True)
+            alias_latest.with_suffix(".txt").unlink(missing_ok=True)
+        except OSError:
+            alias_latest.with_suffix(".txt").write_text(str(session_root.resolve()) + "\n", encoding="utf-8")
 
         # Remove only truly empty directories under the analysis root.
         # IMPORTANT: never prune active session roots/sessions container.

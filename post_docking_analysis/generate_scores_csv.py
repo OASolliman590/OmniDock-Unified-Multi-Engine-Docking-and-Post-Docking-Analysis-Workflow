@@ -11,6 +11,8 @@ import os
 import re
 import csv
 import argparse
+import json
+import logging
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -46,11 +48,11 @@ def load_pairlist_mapping(pairlist_file: Path) -> Dict[str, str]:
             
             mapping[log_pattern] = tag_name
             
-        print(f"✅ Loaded {len(mapping)} mappings from pairlist.csv")
+        logging.getLogger(__name__).info("Loaded %s mappings from pairlist.csv", len(mapping))
         return mapping
         
     except Exception as e:
-        print(f"⚠️  Warning: Could not load pairlist.csv: {e}")
+        logging.getLogger(__name__).warning("Could not load pairlist.csv: %s", e)
         return {}
 
 
@@ -94,6 +96,8 @@ def parse_gnina_log(log_file: Path, pairlist_mapping: Optional[Dict[str, str]] =
     
     # Use pairlist mapping if available
     tag_name, matched_pairlist = _resolve_tag_from_pairlist(filename, pairlist_mapping or {})
+    if log_file.name.lower().endswith(".runner.log") or (pairlist_mapping is not None and not matched_pairlist):
+        return [], False
     
     try:
         with open(log_file, 'r') as f:
@@ -178,6 +182,8 @@ def _find_log_files(*search_dirs):
         if not d.exists():
             continue
         for f in d.glob("*.log"):
+            if f.name.lower().endswith(".runner.log"):
+                continue
             found.setdefault(f.name, f)
     if not found:
         for d in search_dirs:
@@ -262,9 +268,23 @@ def generate_all_scores_csv(
     empty_logs: List[str] = []
     for log_file in log_files:
         print(f"🔍 Parsing {log_file.name}...")
-        scores, matched_pairlist = parse_gnina_log(log_file, pairlist_mapping)
+        scores, matched_pairlist = parse_gnina_log(log_file, pairlist_mapping if pairlist_file else None)
+        pose_file = gnina_out_dir / f"{log_file.stem}.sdf"
+        if not pose_file.is_file() or not pose_file.stat().st_size:
+            empty_logs.append(log_file.name + ":missing_pose_output")
+            continue
+        completion = Path(str(pose_file) + ".completion.json")
+        if completion.is_file():
+            try:
+                from post_docking_analysis.pose_geometry import content_hash
+                status = json.loads(completion.read_text(encoding="utf-8"))
+                if status.get("status") != "completed" or status.get("pose_sha256") != content_hash(pose_file):
+                    continue
+            except (ValueError, OSError):
+                continue
         if pairlist_mapping and not matched_pairlist:
             unmatched_logs.append(log_file.name)
+            continue
         if not scores:
             empty_logs.append(log_file.name)
         all_scores.extend(scores)

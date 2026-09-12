@@ -18,7 +18,10 @@ from docking.project_layout import (
     save_manifest,
 )
 from post_docking_analysis.docking_parser import parse_autodock4_dlg, parse_vina_pdbqt
-from post_docking_analysis.generate_scores_csv import parse_gnina_log
+from post_docking_analysis.generate_scores_csv import parse_gnina_log, load_pairlist_mapping
+from docking.runners.job_contract import parse_sdf_scores
+from post_docking_analysis.pose_geometry import content_hash
+from post_docking_analysis.score_import import read_explicit_score_import
 
 
 SUPPORTED_ENGINES = ("gnina", "smina", "vina", "autodock4")
@@ -78,24 +81,29 @@ def _pairlist_size(project_dir: Path) -> int:
 
 def _gnina_details(project_dir: Path) -> Dict[str, object]:
     layout = ensure_engine_layout(project_dir, "gnina")
-    pose_files = sorted(layout["poses"].glob("*.sdf"))
-    log_files = sorted(layout["logs"].glob("*.log"))
+    mapping = load_pairlist_mapping(pairlist_path(project_dir)) if pairlist_path(project_dir).is_file() else None
+    pose_files = [path for path in sorted(layout["poses"].glob("*.sdf")) if mapping is None or path.stem in mapping]
     valid_score_rows = 0
     matched_marker = ""
-    score_columns: List[str] = []
-    for log_file in log_files:
-        content = _safe_read_text(log_file)
-        lower = content.lower()
-        if not matched_marker:
-            for marker in GNINA_LOG_MARKERS:
-                if marker in lower:
-                    matched_marker = marker
-                    break
-        rows, _ = parse_gnina_log(log_file, {})
+    score_columns = []
+    for pose_file in pose_files:
+        try:
+            rows = parse_sdf_scores(pose_file)
+        except (ValueError, KeyError, OSError):
+            rows = []
         if rows:
             valid_score_rows += len(rows)
             score_columns = ["vina_affinity", "cnn_score", "cnn_affinity"]
-            break
+            matched_marker = "SDF properties"
+    if not valid_score_rows:
+        for log_file in sorted(layout["logs"].glob("*.log")):
+            if not (layout["poses"] / f"{log_file.stem}.sdf").is_file():
+                continue
+            rows, _ = parse_gnina_log(log_file, mapping)
+            valid_score_rows += len(rows)
+            if rows:
+                score_columns = ["vina_affinity", "cnn_score", "cnn_affinity"]
+                matched_marker = "GNINA score table"
     return {
         "pose_files_found": len(pose_files),
         "pose_format": "sdf",
@@ -223,7 +231,20 @@ def detect_engines(
     except Exception:
         manifest = {}
 
-    if not redetect and isinstance(manifest.get("detected_engines"), dict):
+    import hashlib
+    digest = hashlib.sha256()
+    for engine in SUPPORTED_ENGINES:
+        layout = ensure_engine_layout(root, engine)
+        for directory in (layout["poses"], layout["logs"], layout["scores"]):
+            for path in sorted(directory.glob("*")):
+                if path.is_file():
+                    digest.update(str(path).encode())
+                    digest.update(content_hash(path).encode())
+    if pairlist_path(root).is_file():
+        digest.update(content_hash(pairlist_path(root)).encode())
+    digest.update(content_hash(Path(__file__)).encode())
+    source_fingerprint = digest.hexdigest()
+    if not redetect and isinstance(manifest.get("detected_engines"), dict) and manifest["detected_engines"].get("source_fingerprint") == source_fingerprint:
         cached = dict(manifest["detected_engines"])
         cached["cache_hit"] = True
         override = str(override_engine or "").strip().lower()
@@ -250,6 +271,15 @@ def detect_engines(
             details = _autodock4_details(root)
         else:
             details = _vina_family_details(root, engine)
+        layout = ensure_engine_layout(root, engine)
+        if not details["pose_files_found"]:
+            imported = read_explicit_score_import(layout["scores"])
+            if imported is not None and not imported.empty:
+                if not imported["engine"].eq(engine).all():
+                    raise ValueError(f"Imported score engine must match folder engine {engine}")
+                details["pose_files_found"] = int(imported["tag"].nunique())
+                details["valid_score_rows"] = len(imported)
+                details["pose_format"] = "explicit_score_import_geometry_unavailable"
         coverage_base = total_pairs if total_pairs > 0 else int(details.get("pose_files_found", 0) or 0)
         pose_files_found = int(details.get("pose_files_found", 0) or 0)
         coverage_pct = 0.0 if coverage_base <= 0 else round((pose_files_found / float(coverage_base)) * 100.0, 2)
@@ -275,6 +305,7 @@ def detect_engines(
         routing_decision = "no_valid_engines"
 
     report = {
+        "source_fingerprint": source_fingerprint,
         "detection_method": detection_method,
         "detection_override": detection_override,
         "override_reason": f"--engine {override}" if detection_override else None,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import shlex
+import math
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -70,8 +72,9 @@ class AutoDock4Runner(DockingEngineRunner):
 
     @staticmethod
     def _grid_points(size: float, spacing: float) -> int:
-        points = int(round(float(size) / float(spacing)))
-        return max(2, points)
+        if not math.isfinite(float(size)) or not math.isfinite(float(spacing)) or size <= 0 or spacing <= 0:
+            raise ValueError("AutoGrid size and spacing must be finite and positive")
+        return max(2, 2 * math.ceil(float(size) / (2 * float(spacing))))
 
     @staticmethod
     def _extract_torsdof(pdbqt_file: Path) -> Optional[int]:
@@ -122,6 +125,8 @@ class AutoDock4Runner(DockingEngineRunner):
         }
 
     def _resolve_parameter_file(self) -> str:
+        if getattr(self, "_staged_parameter_file", None):
+            return self._staged_parameter_file
         return str(
             self.runtime.get("parameter_file_path")
             or self.runtime.get("parameter_file")
@@ -147,12 +152,13 @@ class AutoDock4Runner(DockingEngineRunner):
         npts = tuple(self._grid_points(size, spacing) for size in box_size)
 
         lines = [
+            f"parameter_file {self._resolve_parameter_file()}",
             f"npts {npts[0]} {npts[1]} {npts[2]}",
             f"gridfld {map_prefix}.maps.fld",
-            f"spacing {spacing:.3f}",
+            f"spacing {spacing:.12g}",
             f"receptor_types {' '.join(receptor_types)}",
             f"ligand_types {' '.join(ligand_types)}",
-            f"receptor {receptor_file}",
+            f"receptor {receptor_file.name}",
             f"gridcenter {center[0]:.3f} {center[1]:.3f} {center[2]:.3f}",
             "smooth 0.5",
         ]
@@ -205,7 +211,7 @@ class AutoDock4Runner(DockingEngineRunner):
             [
                 f"elecmap {map_prefix}.e.map",
                 f"desolvmap {map_prefix}.d.map",
-                f"move {ligand_file}",
+                f"move {ligand_file.name}",
                 f"about {about[0]:.3f} {about[1]:.3f} {about[2]:.3f}",
                 "tran0 random",
                 "quaternion0 random",
@@ -248,7 +254,23 @@ class AutoDock4Runner(DockingEngineRunner):
 
         pair_dir = self.layout["root"] / "pairs" / row.tag
         pair_dir.mkdir(parents=True, exist_ok=True)
-        map_prefix = pair_dir / "maps"
+        # Parameter formats cannot quote whitespace in filenames. Stage fixed,
+        # relative names and run inside the pair directory, also after transfer.
+        staged_receptor = pair_dir / "receptor.pdbqt"
+        staged_ligand = pair_dir / "ligand.pdbqt"
+        shutil.copy2(receptor_file, staged_receptor)
+        shutil.copy2(ligand_file, staged_ligand)
+        receptor_file, ligand_file = staged_receptor, staged_ligand
+        self._staged_parameter_file = None
+        parameter = Path(self._resolve_parameter_file()).expanduser()
+        if not parameter.is_absolute():
+            parameter = self.project_root / parameter
+        if parameter.is_file():
+            shutil.copy2(parameter, pair_dir / "parameters.dat")
+            self._staged_parameter_file = "parameters.dat"
+        elif any(char.isspace() for char in self._resolve_parameter_file()):
+            raise ValueError("AutoDock parameter file must be staged locally when its path contains whitespace")
+        map_prefix = Path("maps")
         gpf_file = pair_dir / "grid.gpf"
         glg_file = pair_dir / "grid.glg"
         dpf_file = pair_dir / "docking.dpf"
@@ -278,7 +300,9 @@ class AutoDock4Runner(DockingEngineRunner):
                     "-p",
                     shlex.quote(f"gridcenter={row.center_x:.3f},{row.center_y:.3f},{row.center_z:.3f}"),
                     "-p",
-                    shlex.quote(f"spacing={spacing:.3f}"),
+                    shlex.quote(f"spacing={spacing:.12g}"),
+                    "-p",
+                    shlex.quote(f"parameter_file={parameter_local}"),
                 ]
             )
             dpf_parts: List[str] = [
@@ -314,8 +338,6 @@ class AutoDock4Runner(DockingEngineRunner):
             shell_cmd = (
                 "set -euo pipefail; "
                 f"cd {shlex.quote(str(pair_dir))}; "
-                f"ln -sf {shlex.quote(str(receptor_file))} {shlex.quote(receptor_local)}; "
-                f"ln -sf {shlex.quote(str(ligand_file))} {shlex.quote(ligand_local)}; "
                 f"{parameter_link}"
                 f"{gpf_cmd}; "
                 f"{dpf_cmd}; "
@@ -342,15 +364,16 @@ class AutoDock4Runner(DockingEngineRunner):
             )
             shell_cmd = (
                 "set -euo pipefail; "
-                f"{shlex.quote(autogrid_binary)} -p {shlex.quote(str(gpf_file))} -l {shlex.quote(str(glg_file))}; "
-                f"{shlex.quote(autodock_binary)} -p {shlex.quote(str(dpf_file))} -l {shlex.quote(str(pose_file))}"
+                f"cd {shlex.quote(str(pair_dir))}; "
+                f"{shlex.quote(autogrid_binary)} -p {shlex.quote(gpf_file.name)} -l {shlex.quote(glg_file.name)}; "
+                f"{shlex.quote(autodock_binary)} -p {shlex.quote(dpf_file.name)} -l {shlex.quote(str(pose_file))}"
             )
         return ["bash", "-lc", shell_cmd]
 
     def collect_normalized_scores(self, pairlist_rows: List[PairlistRow]) -> pd.DataFrame:
         pair_index: Dict[str, PairlistRow] = {row.tag: row for row in pairlist_rows}
         rows = []
-        for dlg_file in sorted(self.layout["poses"].glob(f"*{self.pose_extension}")):
+        for dlg_file in self.accepted_pose_files(pairlist_rows):
             tag = dlg_file.stem
             parsed = parse_autodock4_dlg(dlg_file)
             pair = pair_index.get(tag)
@@ -376,3 +399,16 @@ class AutoDock4Runner(DockingEngineRunner):
                     }
                 )
         return pd.DataFrame(rows)
+
+    def input_files(self, row: PairlistRow) -> List[Dict[str, str]]:
+        from .job_contract import file_hash
+        inputs = super().input_files(row)
+        pair_dir = self.layout["root"] / "pairs" / row.tag
+        names = ["receptor.pdbqt", "ligand.pdbqt", "parameters.dat"]
+        if not self._resolve_adt_param_generators():
+            names.extend(["grid.gpf", "docking.dpf"])
+        for name in names:
+            path = pair_dir / name
+            if path.is_file():
+                inputs.append({"path": str(path), "sha256": file_hash(path)})
+        return inputs

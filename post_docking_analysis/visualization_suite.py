@@ -977,10 +977,10 @@ def _plot_hit_class_matrix(ctx: PlotContext, output: Path) -> None:
         .unstack(fill_value="Unclassified")
     )
     class_order = {"Unclassified": 0, "Inactive": 1, "Weak": 2, "Moderate": 3, "Strong": 4}
-    numeric = pivot.applymap(lambda value: class_order.get(_normalize_class(value), 0))
-    selectivity = (pivot.applymap(lambda value: _normalize_class(value) in {"Strong", "Moderate"}).sum(axis=1)).astype(int)
+    numeric = pivot.apply(lambda column: column.map(lambda value: class_order.get(_normalize_class(value), 0)))
+    selectivity = (pivot.apply(lambda column: column.map(lambda value: _normalize_class(value) in {"Strong", "Moderate"})).sum(axis=1)).astype(int)
     numeric = numeric.loc[selectivity.sort_values(ascending=False).index]
-    strong_counts = (pivot.applymap(lambda value: _normalize_class(value) == "Strong").sum(axis=0)).astype(int)
+    strong_counts = (pivot.apply(lambda column: column.map(lambda value: _normalize_class(value) == "Strong")).sum(axis=0)).astype(int)
     numeric = numeric[strong_counts.sort_values(ascending=False).index]
 
     fig = plt.figure(figsize=(max(9, 0.55 * numeric.shape[1]), max(6, 0.45 * numeric.shape[0] + 1.5)))
@@ -1002,7 +1002,7 @@ def _plot_hit_class_matrix(ctx: PlotContext, output: Path) -> None:
     ax_main.set_ylabel("Ligand")
 
     ax_bottom = fig.add_subplot(gs[1, 0])
-    sel_df = pd.DataFrame([selectivity.reindex(numeric.index).values], columns=numeric.index, index=["Selectivity Index"])
+    sel_df = pd.DataFrame([selectivity.reindex(numeric.index).values], columns=numeric.index, index=["Exploratory target count"])
     sns.heatmap(
         sel_df,
         cmap="Greens",
@@ -1360,28 +1360,24 @@ def _validation_joined_table(ctx: PlotContext) -> pd.DataFrame:
         return validation
     validation["redocking_rmsd_angstrom"] = pd.to_numeric(validation.get("redocking_rmsd_angstrom"), errors="coerce")
     scores = _ensure_columns(ctx.normalized_scores, ["tag", "engine", "affinity_kcal_mol"], default=np.nan)
-    scores = _best_rows(scores, ["engine", "tag"], "affinity_kcal_mol")
-    merged = validation.merge(scores[["tag", "engine", "affinity_kcal_mol"]], on=["tag", "engine"], how="left")
-    tag_only = _best_rows(scores, ["tag"], "affinity_kcal_mol")
-    merged = merged.merge(
-        tag_only[["tag", "affinity_kcal_mol"]].rename(columns={"affinity_kcal_mol": "affinity_kcal_mol_tag"}),
-        on="tag",
-        how="left",
-    )
-    merged["affinity_kcal_mol"] = pd.to_numeric(merged.get("affinity_kcal_mol"), errors="coerce")
-    merged["affinity_kcal_mol"] = merged["affinity_kcal_mol"].where(merged["affinity_kcal_mol"].notna(), pd.to_numeric(merged.get("affinity_kcal_mol_tag"), errors="coerce"))
-    merged.drop(columns=["affinity_kcal_mol_tag"], inplace=True, errors="ignore")
-    if not ctx.reference_baselines.empty:
-        refs = _ensure_columns(ctx.reference_baselines, ["protein", "reference_affinity"], default=np.nan)
-        refs["reference_affinity"] = pd.to_numeric(refs.get("reference_affinity"), errors="coerce")
-        merged = merged.merge(refs[["protein", "reference_affinity"]], on="protein", how="left", suffixes=("", "_baseline"))
-        merged["reference_affinity"] = pd.to_numeric(merged.get("reference_affinity"), errors="coerce").where(
-            pd.to_numeric(merged.get("reference_affinity"), errors="coerce").notna(),
-            pd.to_numeric(merged.get("reference_affinity_baseline"), errors="coerce"),
-        )
-        merged.drop(columns=["reference_affinity_baseline"], inplace=True, errors="ignore")
+    keys = ["tag", "engine"]
+    if "pose" in validation and "pose" in scores:
+        keys.append("pose")
+        scores = scores.drop_duplicates(keys)
     else:
-        merged["reference_affinity"] = pd.to_numeric(merged.get("reference_affinity"), errors="coerce")
+        scores = _best_rows(scores, keys, "affinity_kcal_mol")
+    merged = validation.merge(scores[keys + ["affinity_kcal_mol"]], on=keys, how="left", validate="many_to_one")
+    merged["affinity_kcal_mol"] = pd.to_numeric(merged["affinity_kcal_mol"], errors="coerce")
+    baseline_keys = ["protein", "engine", "scoring_function"]
+    if not ctx.reference_baselines.empty and all(key in ctx.reference_baselines and key in merged for key in baseline_keys):
+        refs = ctx.reference_baselines[baseline_keys + ["reference_affinity"]].copy()
+        if refs.duplicated(baseline_keys).any():
+            raise ValueError("Ambiguous engine/profile reference baselines")
+        merged = merged.merge(refs, on=baseline_keys, how="left", suffixes=("", "_baseline"), validate="many_to_one")
+        merged["reference_affinity"] = pd.to_numeric(merged["reference_affinity_baseline"], errors="coerce")
+        merged.drop(columns=["reference_affinity_baseline"], inplace=True)
+    else:
+        merged["reference_affinity"] = np.nan
     return merged
 
 

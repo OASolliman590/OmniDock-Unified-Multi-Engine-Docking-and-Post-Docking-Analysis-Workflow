@@ -1,0 +1,242 @@
+{
+  "empty_pose_status": "skipped",
+  "failed_run": {
+    "status": "failed",
+    "retained_pair_log": "OLD LOG",
+    "normalized_scores": [
+      {
+        "engine": "vina",
+        "tag": "R.pdbqt_site_1_L.pdbqt",
+        "protein": "R.pdbqt",
+        "ligand": "L.pdbqt",
+        "site_id": "site_1",
+        "pose": 1,
+        "affinity_kcal_mol": -9.0,
+        "score_name_primary": "vina_affinity",
+        "score_primary": -9.0,
+        "score_name_secondary": NaN,
+        "score_secondary": NaN,
+        "rmsd_lb": 0.0,
+        "rmsd_ub": 0.0,
+        "pose_file": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\vina\\poses\\R.pdbqt_site_1_L.pdbqt.pdbqt",
+        "log_file": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\vina\\logs\\R.pdbqt_site_1_L.pdbqt.log"
+      }
+    ]
+  },
+  "failed_cli_exit_code": 0,
+  "gnina_cpu_command": [
+    "gnina",
+    "-r",
+    "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\receptors\\R.pdbqt",
+    "-l",
+    "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\ligands\\L.pdbqt",
+    "--center_x",
+    "0",
+    "--center_y",
+    "0",
+    "--center_z",
+    "0",
+    "--size_x",
+    "20",
+    "--size_y",
+    "20",
+    "--size_z",
+    "20",
+    "--exhaustiveness",
+    "16",
+    "--num_modes",
+    "20",
+    "--cnn_scoring",
+    "rescore",
+    "--out",
+    "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\cpu.sdf",
+    "--log",
+    "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\cpu.log",
+    "--cpu",
+    "4"
+  ],
+  "gnina_gpu_command": [
+    "gnina",
+    "-r",
+    "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\receptors\\R.pdbqt",
+    "-l",
+    "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\ligands\\L.pdbqt",
+    "--center_x",
+    "0",
+    "--center_y",
+    "0",
+    "--center_z",
+    "0",
+    "--size_x",
+    "20",
+    "--size_y",
+    "20",
+    "--size_z",
+    "20",
+    "--exhaustiveness",
+    "16",
+    "--num_modes",
+    "20",
+    "--cnn_scoring",
+    "rescore",
+    "--out",
+    "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\gpu.sdf",
+    "--log",
+    "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\gpu.log",
+    "--device",
+    "0"
+  ],
+  "gnina_success_without_pose": {
+    "status": "completed",
+    "pose_exists": false,
+    "normalized_rows": [
+      {
+        "engine": "gnina",
+        "tag": "R.pdbqt_site_1_L.pdbqt",
+        "protein": "R.pdbqt",
+        "ligand": "L.pdbqt",
+        "site_id": "site_1",
+        "pose": 1,
+        "affinity_kcal_mol": -8.0,
+        "score_name_primary": "cnn_affinity",
+        "score_primary": 7.0,
+        "score_name_secondary": "cnn_score",
+        "score_secondary": 0.9,
+        "rmsd_lb": NaN,
+        "rmsd_ub": NaN,
+        "pose_file": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\gnina\\poses\\R.pdbqt_site_1_L.pdbqt.sdf",
+        "log_file": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\gnina\\logs\\R.pdbqt_site_1_L.pdbqt.log"
+      },
+      {
+        "engine": "gnina",
+        "tag": "R.pdbqt_site_1_L.pdbqt.runner",
+        "protein": NaN,
+        "ligand": NaN,
+        "site_id": NaN,
+        "pose": 1,
+        "affinity_kcal_mol": -8.0,
+        "score_name_primary": "cnn_affinity",
+        "score_primary": 7.0,
+        "score_name_secondary": "cnn_score",
+        "score_secondary": 0.9,
+        "rmsd_lb": NaN,
+        "rmsd_ub": NaN,
+        "pose_file": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\gnina\\poses\\R.pdbqt_site_1_L.pdbqt.runner.sdf",
+        "log_file": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\gnina\\logs\\R.pdbqt_site_1_L.pdbqt.runner.log"
+      }
+    ]
+  },
+  "qc_exception": {
+    "ok": true,
+    "errors": [],
+    "warnings": [
+      "Receptor QC gate could not complete: synthetic QC failure"
+    ],
+    "details": {
+      "pair_count": 1
+    },
+    "engines": [
+      "vina"
+    ],
+    "pair_count": 1,
+    "dry_run": true
+  },
+  "invalid_box_preflight": {
+    "ok": true,
+    "errors": [],
+    "warnings": [],
+    "details": {
+      "pair_count": 1
+    },
+    "engines": [
+      "vina"
+    ],
+    "pair_count": 1,
+    "dry_run": true
+  },
+  "nan_schema_validation": [
+    [],
+    []
+  ],
+  "smina_missing_rmsd": [
+    {
+      "pose": 1,
+      "vina_affinity": -8.0,
+      "rmsd_lb": 0.0,
+      "rmsd_ub": 0.0
+    }
+  ],
+  "ad4": {
+    "npts_for_20A": 53,
+    "gpf": "npts 53 53 53\ngridfld C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\autodock4\\pairs\\R.pdbqt_site_1_L.pdbqt\\maps.maps.fld\nspacing 0.375\nreceptor_types C\nligand_types C\nreceptor C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\receptors\\R.pdbqt\ngridcenter 0.000 0.000 0.000\nsmooth 0.5\nmap C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\autodock4\\pairs\\R.pdbqt_site_1_L.pdbqt\\maps.C.map\nelecmap C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\autodock4\\pairs\\R.pdbqt_site_1_L.pdbqt\\maps.e.map\ndsolvmap C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\autodock4\\pairs\\R.pdbqt_site_1_L.pdbqt\\maps.d.map\ndielectric -0.1465\n",
+    "dpf": "autodock_parameter_version 4.2\nparameter_file custom-atom-parameters.dat\nintelec\nseed pid time\nligand_types C\nfld C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\autodock4\\pairs\\R.pdbqt_site_1_L.pdbqt\\maps.maps.fld\nmap C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\autodock4\\pairs\\R.pdbqt_site_1_L.pdbqt\\maps.C.map\nelecmap C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\autodock4\\pairs\\R.pdbqt_site_1_L.pdbqt\\maps.e.map\ndesolvmap C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\autodock4\\pairs\\R.pdbqt_site_1_L.pdbqt\\maps.d.map\nmove C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\ligands\\L.pdbqt\nabout 0.000 0.000 0.000\ntran0 random\nquaternion0 random\ndihe0 random\ntorsdof 0\nrmstol 2.0\nextnrg 1000.0\ne0max 0.0 10000\nga_pop_size 150\nga_num_evals 25000000\nga_num_generations 27000\nga_elitism 1\nga_mutation_rate 0.02\nga_crossover_rate 0.8\nga_window_size 10\nga_cauchy_alpha 0.0\nga_cauchy_beta 1.0\nset_ga\nsw_max_its 300\nsw_max_succ 4\nsw_max_fail 4\nsw_rho 1.0\nsw_lb_rho 0.01\nls_search_freq 0.06\nset_psw1\nunbound_model bound\nga_run 100\nanalysis\n"
+  },
+  "ad4_deployment": {
+    "generation_project_root": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking",
+    "project_root": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\remote-docking",
+    "execution_project_root": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\remote-docking",
+    "layout_profile": "canonical",
+    "round_id": "audit_ad4",
+    "docking_mode": "screen",
+    "engines": [
+      "autodock4"
+    ],
+    "pair_count": 1,
+    "pair_source_file": "",
+    "rerun_manifest_file": "",
+    "generation_stage_root": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\deployments\\audit_ad4\\screen",
+    "stage_root": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\remote-docking\\deployments\\audit_ad4\\screen",
+    "hpc_profile": {
+      "name": "",
+      "source": ""
+    },
+    "engine_jobs": {
+      "autodock4": {
+        "planned": 1,
+        "skipped": 0,
+        "manifest": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\remote-docking\\deployments\\audit_ad4\\screen\\autodock4\\manifest\\deployment_manifest.json",
+        "submit_script": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\remote-docking\\deployments\\audit_ad4\\screen\\autodock4\\submit_all.sh",
+        "submit_mode": "slurm_array",
+        "slurm_script": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\remote-docking\\deployments\\audit_ad4\\screen\\autodock4\\job_scripts\\autodock4_array.slurm",
+        "job_manifest": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\remote-docking\\deployments\\audit_ad4\\screen\\autodock4\\manifest\\job_array.tsv",
+        "array_script": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\remote-docking\\deployments\\audit_ad4\\screen\\autodock4\\job_scripts\\autodock4_array.slurm",
+        "array_manifest": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\remote-docking\\deployments\\audit_ad4\\screen\\autodock4\\manifest\\job_array.tsv",
+        "array_parallelism": 0
+      }
+    },
+    "deployment_manifest": "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\remote-docking\\deployments\\audit_ad4\\screen\\deployment_manifest.json"
+  },
+  "ad4_config_still_has_local_paths": true,
+  "dry_run_exit_code": 0,
+  "local_parameter_command": [
+    "vina",
+    "--receptor",
+    "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\receptors\\R.pdbqt",
+    "--ligand",
+    "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\ligands\\L.pdbqt",
+    "--center_x",
+    "0.0",
+    "--center_y",
+    "0.0",
+    "--center_z",
+    "0.0",
+    "--size_x",
+    "40.0",
+    "--size_y",
+    "40.0",
+    "--size_z",
+    "40.0",
+    "--exhaustiveness",
+    "16",
+    "--num_modes",
+    "20",
+    "--out",
+    "C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\vina\\poses\\R.pdbqt_site_1_L.pdbqt.pdbqt",
+    "--seed",
+    "42"
+  ],
+  "deploy_exit_code": 0,
+  "parity_deployment_files": {
+    "deployments\\audit_parity\\screen\\vina\\manifest\\job_array.tsv": "dock-vina-audit_parity-001\tR.pdbqt_site_1_L.pdbqt\tvina --receptor 'C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\receptors\\R.pdbqt' --ligand 'C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\ligands\\L.pdbqt' --center_x 0.0 --center_y 0.0 --center_z 0.0 --size_x 20.0 --size_y 20.0 --size_z 20.0 --exhaustiveness 16 --num_modes 20 --out 'C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\vina\\poses\\R.pdbqt_site_1_L.pdbqt.pdbqt'\tC:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\audit\\probe-data\\docking\\engines\\vina\\logs\\R.pdbqt_site_1_L.pdbqt.log\n"
+  }
+}

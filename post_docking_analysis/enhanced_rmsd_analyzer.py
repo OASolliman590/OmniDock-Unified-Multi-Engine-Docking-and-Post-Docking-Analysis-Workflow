@@ -44,161 +44,34 @@ def _should_include_atom(residue, atom, ligand_only: bool) -> bool:
 
 
 def _kabsch_aligned_rmsd(coords1: np.ndarray, coords2: np.ndarray) -> float:
-    """Compute RMSD after optimal rigid-body alignment using Kabsch algorithm."""
+    """Legacy helper now preserves the supplied coordinate frame."""
     if coords1.shape != coords2.shape or coords1.size == 0:
         return np.nan
+    return float(np.sqrt(np.mean(np.sum((coords1 - coords2) ** 2, axis=1))))
 
-    c1 = coords1 - coords1.mean(axis=0)
-    c2 = coords2 - coords2.mean(axis=0)
-
-    cov = c2.T @ c1
-    v, _, wt = np.linalg.svd(cov)
-    d = np.sign(np.linalg.det(v @ wt))
-    if d < 0:
-        v[:, -1] *= -1
-    rot = v @ wt
-    c2_aligned = c2 @ rot
-
-    return float(np.sqrt(np.mean(np.sum((c1 - c2_aligned) ** 2, axis=1))))
 
 
 def calculate_rmsd_between_structures(pdb_file1: Path, pdb_file2: Path, ligand_only: bool = True) -> float:
-    """
-    Calculate RMSD between two PDB structures.
-    
-    Parameters
-    ----------
-    pdb_file1 : Path
-        Path to first PDB file
-    pdb_file2 : Path
-        Path to second PDB file
-    ligand_only : bool
-        If True, calculate RMSD only for ligand atoms (HETATM)
-        
-    Returns
-    -------
-    float
-        RMSD value in Angstroms, or np.nan if calculation fails
-    """
-    if not BIOPYTHON_AVAILABLE:
-        logger.warning("BioPython not available, using fallback RMSD calculation")
-        return _calculate_rmsd_simple(pdb_file1, pdb_file2, ligand_only)
-    
-    try:
-        parser = PDBParser(QUIET=True)
-        
-        # Parse structures
-        structure1 = parser.get_structure('struct1', str(pdb_file1))
-        structure2 = parser.get_structure('struct2', str(pdb_file2))
-        
-        # Extract coordinates
-        coords1 = []
-        coords2 = []
-        
-        for model in structure1:
-            for chain in model:
-                for residue in chain:
-                    for atom in residue:
-                        if _should_include_atom(residue, atom, ligand_only):
-                            coords1.append(atom.coord)
-        
-        for model in structure2:
-            for chain in model:
-                for residue in chain:
-                    for atom in residue:
-                        if _should_include_atom(residue, atom, ligand_only):
-                            coords2.append(atom.coord)
-        
-        if len(coords1) != len(coords2) or len(coords1) == 0:
-            return np.nan
-        
-        coords1 = np.array(coords1)
-        coords2 = np.array(coords2)
+    """Mapped same-ligand RMSD in a declared common receptor frame."""
+    return _calculate_rmsd_simple(pdb_file1, pdb_file2, ligand_only)
 
-        return _kabsch_aligned_rmsd(coords1, coords2)
-        
-    except Exception as e:
-        logger.warning(f"Error calculating RMSD between {pdb_file1.name} and {pdb_file2.name}: {e}")
-        return _calculate_rmsd_simple(pdb_file1, pdb_file2, ligand_only)
 
 
 def _calculate_rmsd_simple(pdb_file1: Path, pdb_file2: Path, ligand_only: bool = True) -> float:
-    """
-    Simple RMSD calculation without BioPython.
-    
-    Parameters
-    ----------
-    pdb_file1 : Path
-        Path to first PDB file
-    pdb_file2 : Path
-        Path to second PDB file
-    ligand_only : bool
-        If True, calculate RMSD only for ligand atoms
-        
-    Returns
-    -------
-    float
-        RMSD value in Angstroms
-    """
-    try:
-        coords1 = []
-        coords2 = []
-        
-        # Read first structure
-        with open(pdb_file1, 'r') as f:
-            for line in f:
-                if ligand_only:
-                    if line.startswith('HETATM'):
-                        parts = line.split()
-                        if len(parts) >= 6:
-                            try:
-                                x, y, z = float(parts[5]), float(parts[6]), float(parts[7])
-                                coords1.append([x, y, z])
-                            except (ValueError, IndexError):
-                                continue
-                else:
-                    if line.startswith(('ATOM', 'HETATM')):
-                        parts = line.split()
-                        if len(parts) >= 6:
-                            try:
-                                x, y, z = float(parts[5]), float(parts[6]), float(parts[7])
-                                coords1.append([x, y, z])
-                            except (ValueError, IndexError):
-                                continue
-        
-        # Read second structure
-        with open(pdb_file2, 'r') as f:
-            for line in f:
-                if ligand_only:
-                    if line.startswith('HETATM'):
-                        parts = line.split()
-                        if len(parts) >= 6:
-                            try:
-                                x, y, z = float(parts[5]), float(parts[6]), float(parts[7])
-                                coords2.append([x, y, z])
-                            except (ValueError, IndexError):
-                                continue
-                else:
-                    if line.startswith(('ATOM', 'HETATM')):
-                        parts = line.split()
-                        if len(parts) >= 6:
-                            try:
-                                x, y, z = float(parts[5]), float(parts[6]), float(parts[7])
-                                coords2.append([x, y, z])
-                            except (ValueError, IndexError):
-                                continue
-        
-        if len(coords1) != len(coords2) or len(coords1) == 0:
-            return np.nan
-        
-        coords1 = np.array(coords1)
-        coords2 = np.array(coords2)
-        
-        return _kabsch_aligned_rmsd(coords1, coords2)
-        
-    except Exception as e:
-        logger.warning(f"Error in simple RMSD calculation: {e}")
+    from .pose_geometry import pose_rmsd
+    import json
+    if not ligand_only:
         return np.nan
+    try:
+        files = [Path(pdb_file1), Path(pdb_file2)]
+        frames = [json.loads(p.with_suffix(".geometry.json").read_text())["receptor_frame_id"] for p in files]
+        if not all(frames) or frames[0] != frames[1]:
+            return np.nan
+        return pose_rmsd(files[0].with_suffix(".ligand.sdf"), files[1].with_suffix(".ligand.sdf"))
+    except Exception as exc:
+        logger.warning("RMSD not evaluable: %s", exc)
+        return np.nan
+
 
 
 def calculate_rmsd_matrix_from_pdbs(

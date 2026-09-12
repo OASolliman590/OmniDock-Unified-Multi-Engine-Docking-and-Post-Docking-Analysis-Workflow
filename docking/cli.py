@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from dataclasses import fields
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -22,6 +24,7 @@ from .parameter_schema import (
     resolve_parameter_schema,
     transform_pairlist_rows,
     validate_parameter_schema,
+    validate_pairlist_geometry,
 )
 from .preflight import run_docking_preflight
 from .preparation.ligand_quality import LIGAND_ADMET_DEFAULTS, audit_project_ligands
@@ -73,6 +76,7 @@ def _pairlist_rows_from_df(df: pd.DataFrame) -> List[PairlistRow]:
             size_x=float(row["size_x"]),
             size_y=float(row["size_y"]),
             size_z=float(row["size_z"]),
+            **{item.name: str(row[item.name]) for item in fields(PairlistRow) if item.name not in PAIRLIST_REQUIRED_COLUMNS and item.name in row and pd.notna(row[item.name])},
         )
         for _, row in df.iterrows()
     ]
@@ -152,6 +156,29 @@ def _build_runtime_by_engine(
             "docking_mode": docking_mode,
         },
     }
+
+
+def _restore_saved_protocol(args, manifest, argv):
+    """Preserve reviewed scientific settings unless the caller overrides them."""
+    supplied = {token.split("=", 1)[0] for token in (sys.argv[1:] if argv is None else argv) if token.startswith("--")}
+    schema = manifest.get("parameter_schema") or {}
+    common = schema.get("common") or {}
+    values = {"parameter_mode": schema.get("mode"), "parameter_preset": schema.get("preset"), **common}
+    for name, value in values.items():
+        if hasattr(args, name) and value is not None and "--" + name.replace("_", "-") not in supplied:
+            setattr(args, name, value)
+    if supplied & {"--exhaustiveness", "--num-modes"} and not supplied & {"--parameter-mode", "--parameter-preset"}:
+        args.parameter_mode = "advanced"
+    mappings = {
+        "gnina": {"cnn_scoring": "gnina_cnn_scoring"},
+        "smina": {"scoring": "smina_scoring"},
+        "autodock4": {key: "autodock4_" + key.replace("parameter_file_path", "parameter_file") for key in ["parameter_file", "spacing", "ga_pop_size", "ga_num_evals", "ga_num_generations", "ga_run", "ls_search_freq", "torsdof"]},
+    }
+    for engine, mapping in mappings.items():
+        saved = (manifest.get("engine_settings") or {}).get(engine) or {}
+        for key, name in mapping.items():
+            if saved.get(key) is not None and "--" + name.replace("_", "-") not in supplied:
+                setattr(args, name, saved[key])
 
 
 def _deployment_manifest_path(project_dir: Path, round_id: str, mode: str) -> Path:
@@ -490,6 +517,7 @@ def dock_main(argv=None) -> int:
     args = parser.parse_args(argv)
     project_dir = Path(args.project_dir).expanduser()
     manifest = load_manifest(project_dir)
+    _restore_saved_protocol(args, manifest, argv)
     round_id = str(manifest.get("latest_pair_round") or "round_001")
     engines = normalize_engines([args.engines]) if args.engines else normalize_engines(manifest.get("engines", []))
     rows = _load_pairlist_rows(project_dir)
@@ -615,7 +643,7 @@ def dock_main(argv=None) -> int:
     }
     manifest["latest_pair_round"] = round_id
     save_manifest(project_dir, manifest)
-    return 0
+    return 1 if any(job["status"] == "failed" for result in results.values() for job in result["jobs"]) else 0
 
 
 def deploy_main(argv=None) -> int:
@@ -658,6 +686,11 @@ def deploy_main(argv=None) -> int:
     parser.add_argument("--autodocktools-prepare-dpf4", help="Path to AutoDockTools prepare_dpf4.py script")
     parser.add_argument("--exhaustiveness", type=int, default=16, help="Shared exhaustiveness default")
     parser.add_argument("--num-modes", type=int, default=20, help="Shared num_modes default")
+    parser.add_argument("--seed", type=int, help="Shared deterministic seed")
+    parser.add_argument("--box-scale", type=float, default=1.0)
+    parser.add_argument("--box-padding", type=float, default=0.0)
+    parser.add_argument("--parameter-mode", choices=["basic", "advanced"], default="basic")
+    parser.add_argument("--parameter-preset", choices=["screening_fast", "balanced", "exhaustive"], default="balanced")
     parser.add_argument("--slurm-time", help="SBATCH --time value")
     parser.add_argument("--slurm-mem", help="SBATCH --mem value")
     parser.add_argument("--slurm-cpus-per-task", type=int, help="SBATCH --cpus-per-task value")
@@ -704,6 +737,7 @@ def deploy_main(argv=None) -> int:
     args = parser.parse_args(argv)
     project_dir = Path(args.project_dir).expanduser().resolve()
     manifest = load_manifest(project_dir)
+    _restore_saved_protocol(args, manifest, argv)
     rerun_manifest_file = Path(args.from_rerun_manifest).expanduser().resolve() if args.from_rerun_manifest else None
     if rerun_manifest_file and not rerun_manifest_file.exists():
         parser.error(f"Rerun manifest not found: {rerun_manifest_file}")
@@ -759,6 +793,21 @@ def deploy_main(argv=None) -> int:
         _build_runtime_by_engine(args, docking_mode=args.mode, round_id=round_id),
         hpc_profile,
     )
+    parameter_schema = resolve_parameter_schema(
+        mode=args.parameter_mode, preset=args.parameter_preset,
+        exhaustiveness=args.exhaustiveness, num_modes=args.num_modes,
+        seed=args.seed, box_scale=args.box_scale, box_padding=args.box_padding,
+        runtime_by_engine=runtime_by_engine,
+    )
+    schema_errors, schema_warnings = validate_parameter_schema(parameter_schema, engines)
+    rows = transform_pairlist_rows(rows, parameter_schema)
+    schema_errors.extend(validate_pairlist_geometry(rows))
+    if schema_errors:
+        for issue in schema_errors:
+            print(f"❌ {issue}")
+        return 1
+    runtime_by_engine = apply_schema_to_runtime(parameter_schema, runtime_by_engine)
+    manifest["parameter_schema"] = parameter_schema.to_dict()
     slurm_options = {
         "time": args.slurm_time,
         "mem": args.slurm_mem,

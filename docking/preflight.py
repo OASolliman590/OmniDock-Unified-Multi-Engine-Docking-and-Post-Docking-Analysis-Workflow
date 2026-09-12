@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from .models import PairlistRow
+from .parameter_schema import validate_pairlist_geometry
 from .project_layout import shared_ligands_dir, shared_receptors_dir
 from .preparation.ligand_quality import audit_project_ligands
 from .preparation.receptor_quality import audit_project_receptors
@@ -63,6 +64,7 @@ def run_docking_preflight(
     errors: List[str] = []
     warnings: List[str] = []
     details: Dict[str, object] = {}
+    errors.extend(validate_pairlist_geometry(pairlist_rows))
 
     if not pairlist_rows:
         errors.append("No pairlist rows were found; docking cannot start.")
@@ -109,7 +111,7 @@ def run_docking_preflight(
         receptor_ok = (shared_receptors / receptor_name).exists()
         ligand_ok = (shared_ligands / ligand_name).exists()
 
-        if "autodock4" in engines:
+        if engines == ["autodock4"]:
             receptor_ok = receptor_ok or any((candidate / receptor_name).exists() for candidate in ad4_receptor_dir_candidates)
             ligand_ok = ligand_ok or any((candidate / ligand_name).exists() for candidate in ad4_ligand_dir_candidates)
 
@@ -162,7 +164,7 @@ def run_docking_preflight(
                     f"Ligand QC gate failed with {int(ligand_report.get('issue_count', 0) or 0)} issue(s){hint}"
                 )
         except Exception as exc:
-            warnings.append(f"Ligand QC gate could not complete: {exc}")
+            errors.append(f"Required ligand QC gate could not complete: {exc}")
 
     if enable_receptor_qc and pairlist_rows:
         try:
@@ -183,7 +185,7 @@ def run_docking_preflight(
                     f"Receptor QC gate failed with {int(receptor_report.get('issue_count', 0) or 0)} issue(s){hint}"
                 )
         except Exception as exc:
-            warnings.append(f"Receptor QC gate could not complete: {exc}")
+            errors.append(f"Required receptor QC gate could not complete: {exc}")
 
     if not dry_run:
         for engine in engines:

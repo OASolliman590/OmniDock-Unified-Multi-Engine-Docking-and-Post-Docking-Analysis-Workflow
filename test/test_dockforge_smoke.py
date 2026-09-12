@@ -8,6 +8,7 @@ import builtins
 import contextlib
 import io
 import inspect
+import hashlib
 import json
 import logging
 import os
@@ -354,6 +355,7 @@ def _smoke_artifact_graph_executor() -> None:
             ArtifactNode(
                 name="report",
                 inputs=[str(branch_ok), str(branch_optional)],
+                optional_inputs=[str(branch_optional)],
                 outputs=[str(report_out)],
                 compute=_write_report,
             )
@@ -835,8 +837,8 @@ def _smoke_artifact_graph_parameter_invalidation_contract() -> None:
         report = second.dag_execution_report
         node_rows = report.get("nodes") or {}
         _assert(
-            str((node_rows.get("raw_scores") or {}).get("status") or "") == "cache_hit",
-            "changing normalization should preserve raw_scores cache hit",
+            str((node_rows.get("raw_scores") or {}).get("status") or "") in {"completed", "completed_with_warnings"},
+            "changed analysis parameters must invalidate the conservatively scoped raw-score cache",
         )
         for node_name in (
             "normalized_scores",
@@ -1192,6 +1194,17 @@ def _smoke_manifest_completeness_and_deterministic_paths() -> None:
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def _mark_score_import(layout) -> None:
+    """These score-only fixtures are deliberate imports, not engine executions."""
+    for path in layout["poses"].iterdir():
+        if path.is_file() and path.read_text(encoding="utf-8") in {"$$$$\n", "REMARK\n"}:
+            path.unlink()
+    scores = layout["scores"] / "normalized_scores.csv"
+    scores.with_suffix(".import.json").write_text(json.dumps({
+        "kind": "imported_scores", "sha256": hashlib.sha256(scores.read_bytes()).hexdigest(),
+    }), encoding="utf-8")
+
+
 def _build_minimal_multi_engine_project(root: Path) -> Tuple[Path, Path]:
     bootstrap_project_layout(
         root,
@@ -1254,6 +1267,7 @@ def _build_minimal_multi_engine_project(root: Path) -> Tuple[Path, Path]:
             layout["scores"] / "normalized_scores.csv",
             index=False,
         )
+        _mark_score_import(layout)
     output_dir = root / "analysis" / "sessions" / "sqlite_smoke"
     return root, output_dir
 
@@ -1439,6 +1453,7 @@ def _smoke_run_analysis_target_unified_delegation() -> None:
                 }
             ]
         ).to_csv(layout["scores"] / "normalized_scores.csv", index=False)
+        _mark_score_import(layout)
 
         output_dir = temp_root / "analysis" / "sessions" / "delegation_smoke"
         result = run_analysis_target(
@@ -1982,6 +1997,7 @@ def _smoke_non_gnina_rmsd_enforcement_contract() -> None:
             prompt_ligand_names=False,
             complex_query=None,
             rmsd_scopes="per_complex",
+            analysis_config={},
             resume_rmsd=True,
             force_global_rmsd=False,
             global_rmsd_defer_threshold=150,
@@ -2294,7 +2310,7 @@ def _smoke_interactive_favorite_flow_clean_followup_contract() -> None:
     )
     clean_output = str(followup_call.get("output_dir", ""))
     _assert(
-        clean_output.endswith("favorite_engine/clean_interactions"),
+        Path(clean_output).parts[-2:] == ("favorite_engine", "clean_interactions"),
         f"favorite-flow clean follow-up should use favorite_engine/clean_interactions output suffix, got: {clean_output}",
     )
     _assert(
@@ -2806,8 +2822,8 @@ def _smoke_top_pose_selector_determinism() -> None:
     )
     hybrid_row = hybrid_payload["top_pose_per_ligand_per_protein"].iloc[0]
     _assert(
-        str(hybrid_row.get("tag")) == "P1_site_1_L1_A",
-        "Hybrid policy should deterministically select lexical tag on consensus/affinity ties",
+        str(hybrid_row.get("tag")) == "P1_site_1_L1_C",
+        "Hybrid policy should select the highest consensus score",
     )
 
     affinity_payload = build_top_pose_atlas(
@@ -2817,8 +2833,8 @@ def _smoke_top_pose_selector_determinism() -> None:
     )
     affinity_row = affinity_payload["top_pose_per_ligand_per_protein"].iloc[0]
     _assert(
-        str(affinity_row.get("tag")) == "P1_site_1_L1_C",
-        "best_affinity policy should select the strongest affinity tag",
+        str(affinity_row.get("tag")) == "P1_site_1_L1_A",
+        "uncalibrated single-candidate engine scores must tie deterministically without raw-energy comparison",
     )
 
 
@@ -2872,8 +2888,8 @@ def _smoke_top_pose_consensus_direction_contracts() -> None:
     )
     hybrid_row = hybrid_payload["top_pose_per_ligand_per_protein"].iloc[0]
     _assert(
-        str(hybrid_row.get("tag")) == "P1_site_1_L1_B",
-        "weighted_hybrid best_consensus should treat lower consensus_score as better",
+        str(hybrid_row.get("tag")) == "P1_site_1_L1_A",
+        "weighted_hybrid best_consensus should treat higher consensus_score as better",
     )
 
 
@@ -2936,6 +2952,8 @@ def _smoke_consensus_direction_and_single_engine_qc() -> None:
                 {
                     "protein": "P1",
                     "reference_affinity": -9.0,
+                    "engine": "gnina",
+                    "scoring_function": "gnina",
                     "reference_tag": "P1_ref",
                     "redocking_classification": "pass",
                 }
@@ -2985,6 +3003,8 @@ def _smoke_dag_reference_baselines_wiring_contract() -> None:
                     "site_id": "site_1",
                     "consensus_score": 0.05,
                     "best_affinity_kcal_mol": -10.0,
+                    "winner_engine": "gnina",
+                    "winner_scoring_function": "gnina",
                     "agreement_count": 2,
                     "single_engine": False,
                 }
@@ -2995,12 +3015,16 @@ def _smoke_dag_reference_baselines_wiring_contract() -> None:
                 {
                     "protein": "P1",
                     "reference_affinity": -9.0,
+                    "engine": "gnina",
+                    "scoring_function": "gnina",
                     "reference_tag": "P1_ref",
                     "redocking_classification": "pass",
                 }
             ]
         ).to_csv(paths["reference_baselines"], index=False)
 
+        paths["validation_gate"].parent.mkdir(parents=True, exist_ok=True)
+        paths["validation_gate"].write_text(json.dumps({"allow_reference_anchor": True}), encoding="utf-8")
         node_result = pipeline._dag_compute_classified_hits_node(paths)
         _assert("classified_rows=1" in str(node_result.get("details", "")), "classified-hits node should process test row")
         classified = pd.read_csv(paths["classified_hits"])
@@ -3038,13 +3062,13 @@ def _smoke_geometric_consensus_soft_alignment_contract() -> None:
         )
         _assert(len(geometric) == 1, "geometric consensus should produce one row for one tag")
         row = geometric.iloc[0]
-        _assert(bool(row.get("geometric_agreement", False)) is True, "soft-aligned count mismatch should preserve agreement")
+        _assert(bool(row.get("geometric_agreement", False)) is False, "atom-count mismatch must not produce geometric agreement")
         pair_rows = json.loads(str(row.get("geometric_pairwise_rmsd_json", "[]")))
         _assert(bool(pair_rows), "pairwise geometric JSON should include one engine-pair row")
-        _assert(bool(pair_rows[0].get("soft_alignment_used", False)) is True, "soft alignment should be recorded for 44 vs 43")
+        _assert(bool(pair_rows[0].get("soft_alignment_used", False)) is False, "atom truncation must never repair a mismatch")
         _assert(
-            pair_rows[0].get("soft_alignment_rmsd") is not None,
-            "soft alignment RMSD value should be written for auditable output",
+            pair_rows[0].get("rmsd") is None,
+            "unsupported atom mapping must not have a fabricated RMSD",
         )
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
@@ -3096,10 +3120,10 @@ def _smoke_redocking_multi_pose_sdf_parser_contract() -> None:
             declared_atom_counts=[88, 44],
         )
         coords, elements, error = _parse_pdb_like_heavy_atoms(sdf_file, pose_index=1)
-        _assert(error == "", f"pose parser should recover valid first-pose heavy atoms, got: {error}")
-        _assert(int(coords.shape[0]) == 44, f"first-pose heavy atom count should be 44, got {coords.shape[0]}")
-        _assert(len(elements) == 44, "element sequence length should match parsed heavy atom count")
-        _assert(int(coords.shape[0]) != 88, "parser must not collapse two SDF poses into one 88-atom parse")
+        _assert(bool(error), "malformed counts must fail, never borrow atoms from another record")
+        coords, elements, error = _parse_pdb_like_heavy_atoms(sdf_file, pose_index=2)
+        _assert(error == "", f"the valid second record remains independently readable: {error}")
+        _assert(int(coords.shape[0]) == 44, "only the selected record's atoms should be parsed")
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -3108,15 +3132,15 @@ def _smoke_redocking_validation_multi_pose_end_to_end_contract() -> None:
     temp_root = Path(tempfile.mkdtemp(prefix="dockforge_redock_e2e_"))
     try:
         docked_sdf = temp_root / "gnina_best_pose.sdf"
-        reference_pose = temp_root / "reference_pose.pdbqt"
+        reference_pose = temp_root / "reference_pose.sdf"
         coords_pose_1 = _compact_test_coords(44, offset=0.0)
         coords_pose_2 = _compact_test_coords(44, offset=0.20)
         _write_test_sdf(
             docked_sdf,
             [coords_pose_1, coords_pose_2],
-            declared_atom_counts=[88, 44],
+            declared_atom_counts=[44, 44],
         )
-        _write_test_pdbqt_pose(reference_pose, coords_pose_1)
+        _write_test_sdf(reference_pose, [coords_pose_1])
 
         best_by_engine = pd.DataFrame(
             [
@@ -3130,6 +3154,10 @@ def _smoke_redocking_validation_multi_pose_end_to_end_contract() -> None:
                     "is_cocrystal_benchmark": True,
                     "pair_source": "reference",
                     "reference_pose_file": str(reference_pose),
+                    "reference_source": "experimental:1ABC",
+                    "reference_frame_id": "native-1ABC",
+                    "receptor_frame_id": "native-1ABC",
+                    "reference_pdb_id": "1ABC",
                 }
             ]
         )
@@ -3254,6 +3282,10 @@ def _smoke_pairlist_directional_matching_contract() -> None:
         )
         (logs_dir / "3KK6_site_1_CEL.log").write_text(log_payload, encoding="utf-8")
         (logs_dir / "3KK6_site_1_CEL_A_701.log").write_text(log_payload, encoding="utf-8")
+        # Legacy score tables require a corresponding pose; a log alone is not
+        # evidence of a completed docking result.
+        for stem in ("3KK6_site_1_CEL", "3KK6_site_1_CEL_A_701"):
+            _write_test_sdf(logs_dir / f"{stem}.sdf", [[(0.0, 0.0, 0.0)]])
 
         success = generate_all_scores_csv(
             gnina_out_dir=logs_dir,
@@ -3264,8 +3296,8 @@ def _smoke_pairlist_directional_matching_contract() -> None:
         _assert(success is True, "generate_all_scores_csv should complete with strict pairlist matching")
         scores = pd.read_csv(out_file)
         _assert(
-            "3KK6_site_1_CEL_A_701" in set(scores["tag"].astype(str)),
-            "extended filename should remain unmapped when no exact pairlist key exists",
+            "3KK6_site_1_CEL_A_701" not in set(scores["tag"].astype(str)),
+            "unmatched log files must be reported but excluded from scored candidates",
         )
 
         unmatched_file = temp_root / "unmatched_log_files.txt"
@@ -3553,7 +3585,7 @@ def _smoke_consensus_mode_isolation_contract() -> None:
     original_geometric = consensus_module.compute_geometric_consensus
     call_counter = {"count": 0}
 
-    def _fake_geometric(_frame: pd.DataFrame, rmsd_cutoff: float = 2.0) -> pd.DataFrame:
+    def _fake_geometric(_frame: pd.DataFrame, rmsd_cutoff: float = 2.0, **_kwargs) -> pd.DataFrame:
         call_counter["count"] += 1
         return pd.DataFrame(
             [
@@ -4194,9 +4226,7 @@ def _smoke_post_docking_allscore_contracts() -> None:
         normalized_df = pd.DataFrame(rows)
         for engine in ["gnina", "vina"]:
             layout = ensure_engine_layout(temp_root, engine, layout_profile="canonical")
-            # Ensure source mtimes exist so cached normalized_scores.csv is treated as valid.
-            # _load_or_build_scores() currently requires at least one file in poses/logs
-            # to consider cached normalized scores fresh.
+            # Explicit score-only imports; placeholder poses are removed below.
             for _, row in normalized_df[normalized_df["engine"] == engine].iterrows():
                 tag = str(row["tag"])
                 if engine == "gnina":
@@ -4208,6 +4238,7 @@ def _smoke_post_docking_allscore_contracts() -> None:
                 layout["scores"] / "normalized_scores.csv",
                 index=False,
             )
+            _mark_score_import(layout)
 
         biology_file = temp_root / "biology_annotations.csv"
         pd.DataFrame(
@@ -4467,6 +4498,7 @@ def _smoke_biology_unresolved_mapping_reporting() -> None:
                 layout["scores"] / "normalized_scores.csv",
                 index=False,
             )
+            _mark_score_import(layout)
 
         biology_file = temp_root / "biology_annotations_unresolved.csv"
         pd.DataFrame(
@@ -4628,8 +4660,12 @@ def _smoke_unified_output_topology_contract() -> None:
         _assert("7-Reports" in contents, "analysis index should mention consolidated reports path")
 
         latest_link = analysis_root / "LATEST_SESSION"
-        _assert(latest_link.is_symlink(), "LATEST_SESSION should be a symlink")
-        _assert(latest_link.resolve() == session_root.resolve(), "LATEST_SESSION should resolve to current session")
+        if latest_link.is_symlink():
+            _assert(latest_link.resolve() == session_root.resolve(), "LATEST_SESSION should resolve to current session")
+        else:
+            pointer = latest_link.with_suffix(".txt")
+            _assert(pointer.exists(), "LATEST_SESSION should provide a pointer when symlinks are unavailable")
+            _assert(Path(pointer.read_text(encoding="utf-8").strip()) == session_root.resolve(), "pointer must identify the current session")
 
         raw_copy = analysis_root / "raw_data" / "START_HERE.md"
         _assert(raw_copy.exists(), "raw_data duplicate START_HERE.md should exist")
@@ -4693,12 +4729,14 @@ def _build_sdf_pose_block(
         title,
         "  DockForge",
         "",
-        f"{natoms:>3d}  0  0  0  0  0            999 V2000",
+        f"{natoms:>3d}{max(len(coords) - 1, 0):>3d}  0  0  0  0            999 V2000",
     ]
     for x, y, z in coords:
         lines.append(
             f"{x:10.4f}{y:10.4f}{z:10.4f} C   0  0  0  0  0  0  0  0  0  0  0  0"
         )
+    for index in range(1, len(coords)):
+        lines.append(f"{index:3d}{index + 1:3d}  1  0  0  0  0")
     lines.append("M  END")
     return "\n".join(lines) + "\n$$$$\n"
 
@@ -4746,6 +4784,15 @@ def _seed_engine_outputs(project_root: Path, engines: Tuple[str, ...]) -> None:
                         "  1  0  0  0  0  0            999 V2000",
                         "    1.0000    2.0000    3.0000 C   0  0  0  0  0  0  0  0  0  0  0  0",
                         "M  END",
+                        "> <minimizedAffinity>",
+                        "-8.10",
+                        "",
+                        "> <CNNscore>",
+                        "0.61",
+                        "",
+                        "> <CNNaffinity>",
+                        "7.40",
+                        "",
                         "$$$$",
                     ]
                 )
@@ -5168,7 +5215,7 @@ def _smoke_visualization_suite_scientific_guardrails() -> None:
             protein_name_mapping_file=fixture["protein_name_mapping"],
         )
         joined = _validation_joined_table(fallback_ctx)
-        _assert(joined["affinity_kcal_mol"].notna().any(), "validation table should backfill affinity by tag when engine-specific matching fails")
+        _assert(joined["affinity_kcal_mol"].isna().all(), "validation plots must not backfill raw affinity from a different engine")
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -6172,7 +6219,7 @@ def _smoke_no_valid_engine_abort_and_solo_semantics() -> None:
         best_df = pd.read_csv(output_dir / "vina" / "best_poses.csv")
         _assert("pose_diversity_metric" in best_df.columns, "Vina solo should expose pose_diversity_metric")
         summary_text = (output_dir / "vina" / "summary.txt").read_text(encoding="utf-8")
-        _assert("docking collapse" in summary_text.lower(), "Vina solo summary should warn on collapse")
+        _assert("docking collapse" not in summary_text.lower(), "a single best pose's zero self-RMSD is not evidence of docking collapse")
     finally:
         shutil.rmtree(vina_root, ignore_errors=True)
 

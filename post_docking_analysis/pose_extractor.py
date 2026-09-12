@@ -14,6 +14,8 @@ import re
 import math
 
 from post_docking_analysis.complex_validation import validate_complex_pdb_structure
+from post_docking_analysis.score_semantics import sort_value
+from post_docking_analysis.pose_geometry import selected_record
 
 
 _BEST_POSE_CRITERIA_ALIASES = {
@@ -141,8 +143,8 @@ def _is_better_pose(
     2) lower vina_affinity wins
     3) lower pose mode wins
     """
-    cand_primary = _numeric_or_inf(candidate.get(criterion))
-    inc_primary = _numeric_or_inf(incumbent.get(criterion))
+    cand_primary = sort_value(candidate.get(criterion), criterion)
+    inc_primary = sort_value(incumbent.get(criterion), criterion)
     if cand_primary < inc_primary:
         return True
     if cand_primary > inc_primary:
@@ -162,20 +164,10 @@ def _extract_sdf_record_text(sdf_file: Path, pose_number: int) -> str:
     """
     Return one SDF mol record (1-based pose_number) from a possibly multi-pose SDF.
     """
-    if pose_number < 1:
-        return ""
     try:
-        content = sdf_file.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
+        return selected_record(sdf_file, pose_number).rstrip() + "\n$$$$\n"
+    except (ValueError, OSError):
         return ""
-    records = [record for record in content.split("$$$$") if record.strip()]
-    if pose_number > len(records):
-        return ""
-    record_body = records[pose_number - 1].strip("\n")
-    if not record_body:
-        return ""
-    record = record_body + "\n$$$$\n"
-    return record
 
 
 def _pdbqt_record_to_pdb_line(line: str) -> Optional[str]:
@@ -433,6 +425,7 @@ def extract_best_poses_from_gnina(
             manifest_rows.append(manifest_row)
             print(f"⚠️  Pose {pose_number} not found in SDF for tag {tag}: {sdf_file}")
             continue
+        out_pdb.with_suffix(".ligand.sdf").write_text(pose_record_text, encoding="utf-8")
 
         # Try to get docking center coordinates from log file
         log_file = gnina_dir / f"{tag}.log"
@@ -467,13 +460,14 @@ def extract_best_poses_from_gnina(
             receptor_mol = next(pybel.readfile("pdbqt", str(receptor_file)))
             receptor_pdb = receptor_mol.write("pdb")
             for line in receptor_pdb.split('\n'):
-                if line.startswith('ATOM'):
-                    # Fix the line format and assign chain A
+                if line.startswith(('ATOM', 'HETATM')):
+                    # Preserve receptor chain IDs and cofactors.
                     line = line.ljust(80)
-                    new_line = f"ATOM  {line[6:21]}A{line[22:]}"
+                    new_line = line
                     receptor_lines.append(new_line)
 
             # Read ligand pose record from selected SDF conformer block
+            out_pdb.with_suffix(".receptor.pdb").write_text("\n".join(receptor_lines + ["END"]) + "\n", encoding="utf-8")
             ligand_lines = []
             ligand_mol = pybel.readstring("sdf", pose_record_text)
             ligand_pdb = ligand_mol.write("pdb")
@@ -485,6 +479,8 @@ def extract_best_poses_from_gnina(
                     new_line = new_line[:17] + ligand_resname + new_line[20:]
                     ligand_lines.append(new_line)
 
+            # Preserve the selected ligand graph for downstream interactions.
+            out_pdb.with_suffix(".ligand.sdf").write_text(pose_record_text, encoding="utf-8")
             # Combine receptor and ligand
             all_lines = _renumber_atom_serials(receptor_lines + ligand_lines) + ["END"]
             combined_content = '\n'.join(all_lines)
@@ -523,6 +519,7 @@ def extract_best_poses_from_gnina(
                             receptor_pdb_lines.append(line)
                     
                     # Combine receptor and ligand
+                    out_pdb.with_suffix(".receptor.pdb").write_text("\n".join(receptor_pdb_lines + ["END"]) + "\n", encoding="utf-8")
                     combined_content = []
                     combined_content.extend(receptor_pdb_lines)
                     combined_content.append("")  # Empty line separator

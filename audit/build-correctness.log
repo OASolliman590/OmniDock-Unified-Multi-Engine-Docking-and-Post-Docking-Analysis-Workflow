@@ -1,0 +1,657 @@
+* Getting build dependencies for sdist...
+C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.venv\Lib\site-packages\setuptools\dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running egg_info
+writing pdb_prepare_wizard.egg-info\PKG-INFO
+writing dependency_links to pdb_prepare_wizard.egg-info\dependency_links.txt
+writing entry points to pdb_prepare_wizard.egg-info\entry_points.txt
+writing requirements to pdb_prepare_wizard.egg-info\requires.txt
+writing top-level names to pdb_prepare_wizard.egg-info\top_level.txt
+reading manifest file 'pdb_prepare_wizard.egg-info\SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+adding license file 'LICENSE'
+writing manifest file 'pdb_prepare_wizard.egg-info\SOURCES.txt'
+* Building sdist...
+C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.venv\Lib\site-packages\setuptools\dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running sdist
+running egg_info
+writing pdb_prepare_wizard.egg-info\PKG-INFO
+writing dependency_links to pdb_prepare_wizard.egg-info\dependency_links.txt
+writing entry points to pdb_prepare_wizard.egg-info\entry_points.txt
+writing requirements to pdb_prepare_wizard.egg-info\requires.txt
+writing top-level names to pdb_prepare_wizard.egg-info\top_level.txt
+reading manifest file 'pdb_prepare_wizard.egg-info\SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+adding license file 'LICENSE'
+writing manifest file 'pdb_prepare_wizard.egg-info\SOURCES.txt'
+running check
+creating pdb_prepare_wizard-3.0.1
+creating pdb_prepare_wizard-3.0.1\docking
+creating pdb_prepare_wizard-3.0.1\docking\preparation
+creating pdb_prepare_wizard-3.0.1\docking\runners
+creating pdb_prepare_wizard-3.0.1\pdb_prepare_wizard.egg-info
+creating pdb_prepare_wizard-3.0.1\post_docking_analysis
+creating pdb_prepare_wizard-3.0.1\post_docking_analysis\config
+creating pdb_prepare_wizard-3.0.1\test
+creating pdb_prepare_wizard-3.0.1\workflow
+copying files to pdb_prepare_wizard-3.0.1...
+copying LICENSE -> pdb_prepare_wizard-3.0.1
+copying MANIFEST.in -> pdb_prepare_wizard-3.0.1
+copying README.md -> pdb_prepare_wizard-3.0.1
+copying autodock_preparation.py -> pdb_prepare_wizard-3.0.1
+copying batch_pdb_preparation.py -> pdb_prepare_wizard-3.0.1
+copying cli_pipeline.py -> pdb_prepare_wizard-3.0.1
+copying core_pipeline.py -> pdb_prepare_wizard-3.0.1
+copying interactive_pipeline.py -> pdb_prepare_wizard-3.0.1
+copying main.py -> pdb_prepare_wizard-3.0.1
+copying prep_autodock_enhanced.sh -> pdb_prepare_wizard-3.0.1
+copying pyproject.toml -> pdb_prepare_wizard-3.0.1
+copying requirements.txt -> pdb_prepare_wizard-3.0.1
+copying setup.py -> pdb_prepare_wizard-3.0.1
+copying docking\__init__.py -> pdb_prepare_wizard-3.0.1\docking
+copying docking\cli.py -> pdb_prepare_wizard-3.0.1\docking
+copying docking\deployment.py -> pdb_prepare_wizard-3.0.1\docking
+copying docking\engine_registry.py -> pdb_prepare_wizard-3.0.1\docking
+copying docking\execution_environment.py -> pdb_prepare_wizard-3.0.1\docking
+copying docking\hpc_profiles.py -> pdb_prepare_wizard-3.0.1\docking
+copying docking\models.py -> pdb_prepare_wizard-3.0.1\docking
+copying docking\parameter_schema.py -> pdb_prepare_wizard-3.0.1\docking
+copying docking\preflight.py -> pdb_prepare_wizard-3.0.1\docking
+copying docking\project_layout.py -> pdb_prepare_wizard-3.0.1\docking
+copying docking\remote_ops.py -> pdb_prepare_wizard-3.0.1\docking
+copying docking\preparation\__init__.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\preparation\asset_identity.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\preparation\excel_sites.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\preparation\ligand_preparation.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\preparation\ligand_quality.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\preparation\pair_curation.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\preparation\pairlist_builder.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\preparation\project_aliases.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\preparation\project_builder.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\preparation\receptor_preparation.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\preparation\receptor_quality.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\preparation\structure_contract.py -> pdb_prepare_wizard-3.0.1\docking\preparation
+copying docking\runners\__init__.py -> pdb_prepare_wizard-3.0.1\docking\runners
+copying docking\runners\autodock4.py -> pdb_prepare_wizard-3.0.1\docking\runners
+copying docking\runners\base.py -> pdb_prepare_wizard-3.0.1\docking\runners
+copying docking\runners\gnina.py -> pdb_prepare_wizard-3.0.1\docking\runners
+copying docking\runners\job_contract.py -> pdb_prepare_wizard-3.0.1\docking\runners
+copying docking\runners\smina.py -> pdb_prepare_wizard-3.0.1\docking\runners
+copying docking\runners\vina.py -> pdb_prepare_wizard-3.0.1\docking\runners
+copying pdb_prepare_wizard.egg-info\PKG-INFO -> pdb_prepare_wizard-3.0.1\pdb_prepare_wizard.egg-info
+copying pdb_prepare_wizard.egg-info\SOURCES.txt -> pdb_prepare_wizard-3.0.1\pdb_prepare_wizard.egg-info
+copying pdb_prepare_wizard.egg-info\dependency_links.txt -> pdb_prepare_wizard-3.0.1\pdb_prepare_wizard.egg-info
+copying pdb_prepare_wizard.egg-info\entry_points.txt -> pdb_prepare_wizard-3.0.1\pdb_prepare_wizard.egg-info
+copying pdb_prepare_wizard.egg-info\not-zip-safe -> pdb_prepare_wizard-3.0.1\pdb_prepare_wizard.egg-info
+copying pdb_prepare_wizard.egg-info\requires.txt -> pdb_prepare_wizard-3.0.1\pdb_prepare_wizard.egg-info
+copying pdb_prepare_wizard.egg-info\top_level.txt -> pdb_prepare_wizard-3.0.1\pdb_prepare_wizard.egg-info
+copying post_docking_analysis\__init__.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\__main__.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\artifact_graph.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\autodock4_hpc_adapter.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\binding_affinity_analyzer.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\biology_integration.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\cli.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\complex_query.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\complex_validation.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\config.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\config_manager.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\consensus.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\correlation_analyzer.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\docking_parser.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\engine_detector.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\engine_hpc_adapter.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\enhanced_rmsd_analyzer.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\example_pairlist.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\example_usage.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\generate_scores_csv.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\geometric_consensus.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\gnina_hpc_adapter.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\hierarchical_analyzer.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\identify_complexes.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\identify_pairs.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\input_handler.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\ligand_naming.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\ligplot_cli.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\ligplot_integration.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\logging_config.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\multi_engine_pipeline.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\multi_engine_pipeline_impl.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\pandamap_integration.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\pandamap_runner.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\pdb_code_matcher.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\pipeline.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\plip_integration.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\pose_extractor.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\pose_geometry.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\poseview_integration.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\preprocess.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\prolif_interaction_maps.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\protein_naming.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\publication_pandamap.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\py3dmol_visualizer.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\pymol_generate.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\pymol_templates.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\pymol_visualizer.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\redocking_validation.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\report_generator.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\research_adapter.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\score_import.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\score_semantics.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\simplified_cli.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\simplified_input_handler.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\simplified_pipeline.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\simplified_pipeline_impl.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\smina_hpc_adapter.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\storage_sqlite.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\structure_quality.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\top_pose_selector.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\unified_pipeline.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\vina_hpc_adapter.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\visualization_suite.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\visualizer.py -> pdb_prepare_wizard-3.0.1\post_docking_analysis
+copying post_docking_analysis\config\sample_config.yaml -> pdb_prepare_wizard-3.0.1\post_docking_analysis\config
+copying post_docking_analysis\config\schema.yaml -> pdb_prepare_wizard-3.0.1\post_docking_analysis\config
+copying test\test_dockforge_smoke.py -> pdb_prepare_wizard-3.0.1\test
+copying test\test_docking_correctness.py -> pdb_prepare_wizard-3.0.1\test
+copying test\test_postdocking_correctness.py -> pdb_prepare_wizard-3.0.1\test
+copying test\test_preparation_correctness.py -> pdb_prepare_wizard-3.0.1\test
+copying test\test_reference_chemistry.py -> pdb_prepare_wizard-3.0.1\test
+copying test\test_workflow_correctness.py -> pdb_prepare_wizard-3.0.1\test
+copying workflow\__init__.py -> pdb_prepare_wizard-3.0.1\workflow
+copying workflow\cli.py -> pdb_prepare_wizard-3.0.1\workflow
+copying workflow\execution.py -> pdb_prepare_wizard-3.0.1\workflow
+copying workflow\ids.py -> pdb_prepare_wizard-3.0.1\workflow
+copying workflow\interactive.py -> pdb_prepare_wizard-3.0.1\workflow
+copying workflow\locking.py -> pdb_prepare_wizard-3.0.1\workflow
+copying workflow\models.py -> pdb_prepare_wizard-3.0.1\workflow
+copying workflow\reference_chemistry.py -> pdb_prepare_wizard-3.0.1\workflow
+copying workflow\state.py -> pdb_prepare_wizard-3.0.1\workflow
+Writing pdb_prepare_wizard-3.0.1\setup.cfg
+Creating tar archive
+removing 'pdb_prepare_wizard-3.0.1' (and everything under it)
+* Building wheel from sdist
+* Getting build dependencies for wheel...
+C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.venv\Lib\site-packages\setuptools\dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running egg_info
+writing pdb_prepare_wizard.egg-info\PKG-INFO
+writing dependency_links to pdb_prepare_wizard.egg-info\dependency_links.txt
+writing entry points to pdb_prepare_wizard.egg-info\entry_points.txt
+writing requirements to pdb_prepare_wizard.egg-info\requires.txt
+writing top-level names to pdb_prepare_wizard.egg-info\top_level.txt
+reading manifest file 'pdb_prepare_wizard.egg-info\SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+adding license file 'LICENSE'
+writing manifest file 'pdb_prepare_wizard.egg-info\SOURCES.txt'
+* Building wheel...
+C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.venv\Lib\site-packages\setuptools\dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+running bdist_wheel
+running build
+running build_py
+creating build\lib
+copying main.py -> build\lib
+copying core_pipeline.py -> build\lib
+copying cli_pipeline.py -> build\lib
+copying interactive_pipeline.py -> build\lib
+copying batch_pdb_preparation.py -> build\lib
+copying autodock_preparation.py -> build\lib
+creating build\lib\docking
+copying docking\cli.py -> build\lib\docking
+copying docking\deployment.py -> build\lib\docking
+copying docking\engine_registry.py -> build\lib\docking
+copying docking\execution_environment.py -> build\lib\docking
+copying docking\hpc_profiles.py -> build\lib\docking
+copying docking\models.py -> build\lib\docking
+copying docking\parameter_schema.py -> build\lib\docking
+copying docking\preflight.py -> build\lib\docking
+copying docking\project_layout.py -> build\lib\docking
+copying docking\remote_ops.py -> build\lib\docking
+copying docking\__init__.py -> build\lib\docking
+creating build\lib\post_docking_analysis
+copying post_docking_analysis\artifact_graph.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\autodock4_hpc_adapter.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\binding_affinity_analyzer.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\biology_integration.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\cli.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\complex_query.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\complex_validation.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\config.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\config_manager.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\consensus.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\correlation_analyzer.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\docking_parser.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\engine_detector.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\engine_hpc_adapter.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\enhanced_rmsd_analyzer.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\example_pairlist.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\example_usage.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\generate_scores_csv.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\geometric_consensus.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\gnina_hpc_adapter.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\hierarchical_analyzer.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\identify_complexes.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\identify_pairs.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\input_handler.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\ligand_naming.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\ligplot_cli.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\ligplot_integration.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\logging_config.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\multi_engine_pipeline.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\multi_engine_pipeline_impl.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\pandamap_integration.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\pandamap_runner.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\pdb_code_matcher.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\pipeline.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\plip_integration.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\poseview_integration.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\pose_extractor.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\pose_geometry.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\preprocess.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\prolif_interaction_maps.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\protein_naming.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\publication_pandamap.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\py3dmol_visualizer.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\pymol_generate.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\pymol_templates.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\pymol_visualizer.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\redocking_validation.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\report_generator.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\research_adapter.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\score_import.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\score_semantics.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\simplified_cli.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\simplified_input_handler.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\simplified_pipeline.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\simplified_pipeline_impl.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\smina_hpc_adapter.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\storage_sqlite.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\structure_quality.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\top_pose_selector.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\unified_pipeline.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\vina_hpc_adapter.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\visualization_suite.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\visualizer.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\__init__.py -> build\lib\post_docking_analysis
+copying post_docking_analysis\__main__.py -> build\lib\post_docking_analysis
+creating build\lib\workflow
+copying workflow\cli.py -> build\lib\workflow
+copying workflow\execution.py -> build\lib\workflow
+copying workflow\ids.py -> build\lib\workflow
+copying workflow\interactive.py -> build\lib\workflow
+copying workflow\locking.py -> build\lib\workflow
+copying workflow\models.py -> build\lib\workflow
+copying workflow\reference_chemistry.py -> build\lib\workflow
+copying workflow\state.py -> build\lib\workflow
+copying workflow\__init__.py -> build\lib\workflow
+creating build\lib\docking\preparation
+copying docking\preparation\asset_identity.py -> build\lib\docking\preparation
+copying docking\preparation\excel_sites.py -> build\lib\docking\preparation
+copying docking\preparation\ligand_preparation.py -> build\lib\docking\preparation
+copying docking\preparation\ligand_quality.py -> build\lib\docking\preparation
+copying docking\preparation\pairlist_builder.py -> build\lib\docking\preparation
+copying docking\preparation\pair_curation.py -> build\lib\docking\preparation
+copying docking\preparation\project_aliases.py -> build\lib\docking\preparation
+copying docking\preparation\project_builder.py -> build\lib\docking\preparation
+copying docking\preparation\receptor_preparation.py -> build\lib\docking\preparation
+copying docking\preparation\receptor_quality.py -> build\lib\docking\preparation
+copying docking\preparation\structure_contract.py -> build\lib\docking\preparation
+copying docking\preparation\__init__.py -> build\lib\docking\preparation
+creating build\lib\docking\runners
+copying docking\runners\autodock4.py -> build\lib\docking\runners
+copying docking\runners\base.py -> build\lib\docking\runners
+copying docking\runners\gnina.py -> build\lib\docking\runners
+copying docking\runners\job_contract.py -> build\lib\docking\runners
+copying docking\runners\smina.py -> build\lib\docking\runners
+copying docking\runners\vina.py -> build\lib\docking\runners
+copying docking\runners\__init__.py -> build\lib\docking\runners
+running egg_info
+writing pdb_prepare_wizard.egg-info\PKG-INFO
+writing dependency_links to pdb_prepare_wizard.egg-info\dependency_links.txt
+writing entry points to pdb_prepare_wizard.egg-info\entry_points.txt
+writing requirements to pdb_prepare_wizard.egg-info\requires.txt
+writing top-level names to pdb_prepare_wizard.egg-info\top_level.txt
+reading manifest file 'pdb_prepare_wizard.egg-info\SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+adding license file 'LICENSE'
+writing manifest file 'pdb_prepare_wizard.egg-info\SOURCES.txt'
+C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.venv\Lib\site-packages\setuptools\command\build_py.py:215: _Warning: Package 'post_docking_analysis.config' is absent from the `packages` configuration.
+!!
+
+        ********************************************************************************
+        ############################
+        # Package would be ignored #
+        ############################
+        Python recognizes 'post_docking_analysis.config' as an importable package[^1],
+        but it is absent from setuptools' `packages` configuration.
+
+        This leads to an ambiguous overall configuration. If you want to distribute this
+        package, please make sure that 'post_docking_analysis.config' is explicitly added
+        to the `packages` configuration field.
+
+        Alternatively, you can also rely on setuptools' discovery methods
+        (for example by using `find_namespace_packages(...)`/`find_namespace:`
+        instead of `find_packages(...)`/`find:`).
+
+        You can read more about "package discovery" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/package_discovery.html
+
+        If you don't want 'post_docking_analysis.config' to be distributed and are
+        already explicitly excluding 'post_docking_analysis.config' via
+        `find_namespace_packages(...)/find_namespace` or `find_packages(...)/find`,
+        you can try to use `exclude_package_data`, or `include-package-data=False` in
+        combination with a more fine grained `package-data` configuration.
+
+        You can read more about "package data files" on setuptools documentation page:
+
+        - https://setuptools.pypa.io/en/latest/userguide/datafiles.html
+
+
+        [^1]: For Python, any directory (with suitable naming) can be imported,
+              even if it does not contain any `.py` files.
+              On the other hand, currently there is no concept of package data
+              directory, all directories are treated like packages.
+        ********************************************************************************
+
+!!
+  check.warn(importable)
+creating build\lib\post_docking_analysis\config
+copying post_docking_analysis\config\sample_config.yaml -> build\lib\post_docking_analysis\config
+copying post_docking_analysis\config\schema.yaml -> build\lib\post_docking_analysis\config
+copying prep_autodock_enhanced.sh -> build\lib
+installing to build\bdist.win-amd64\wheel
+running install
+running install_lib
+creating build\bdist.win-amd64\wheel
+copying build\lib\autodock_preparation.py -> build\bdist.win-amd64\wheel\.
+copying build\lib\batch_pdb_preparation.py -> build\bdist.win-amd64\wheel\.
+copying build\lib\cli_pipeline.py -> build\bdist.win-amd64\wheel\.
+copying build\lib\core_pipeline.py -> build\bdist.win-amd64\wheel\.
+creating build\bdist.win-amd64\wheel\docking
+copying build\lib\docking\cli.py -> build\bdist.win-amd64\wheel\.\docking
+copying build\lib\docking\deployment.py -> build\bdist.win-amd64\wheel\.\docking
+copying build\lib\docking\engine_registry.py -> build\bdist.win-amd64\wheel\.\docking
+copying build\lib\docking\execution_environment.py -> build\bdist.win-amd64\wheel\.\docking
+copying build\lib\docking\hpc_profiles.py -> build\bdist.win-amd64\wheel\.\docking
+copying build\lib\docking\models.py -> build\bdist.win-amd64\wheel\.\docking
+copying build\lib\docking\parameter_schema.py -> build\bdist.win-amd64\wheel\.\docking
+copying build\lib\docking\preflight.py -> build\bdist.win-amd64\wheel\.\docking
+creating build\bdist.win-amd64\wheel\docking\preparation
+copying build\lib\docking\preparation\asset_identity.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\preparation\excel_sites.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\preparation\ligand_preparation.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\preparation\ligand_quality.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\preparation\pairlist_builder.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\preparation\pair_curation.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\preparation\project_aliases.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\preparation\project_builder.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\preparation\receptor_preparation.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\preparation\receptor_quality.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\preparation\structure_contract.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\preparation\__init__.py -> build\bdist.win-amd64\wheel\.\docking\preparation
+copying build\lib\docking\project_layout.py -> build\bdist.win-amd64\wheel\.\docking
+copying build\lib\docking\remote_ops.py -> build\bdist.win-amd64\wheel\.\docking
+creating build\bdist.win-amd64\wheel\docking\runners
+copying build\lib\docking\runners\autodock4.py -> build\bdist.win-amd64\wheel\.\docking\runners
+copying build\lib\docking\runners\base.py -> build\bdist.win-amd64\wheel\.\docking\runners
+copying build\lib\docking\runners\gnina.py -> build\bdist.win-amd64\wheel\.\docking\runners
+copying build\lib\docking\runners\job_contract.py -> build\bdist.win-amd64\wheel\.\docking\runners
+copying build\lib\docking\runners\smina.py -> build\bdist.win-amd64\wheel\.\docking\runners
+copying build\lib\docking\runners\vina.py -> build\bdist.win-amd64\wheel\.\docking\runners
+copying build\lib\docking\runners\__init__.py -> build\bdist.win-amd64\wheel\.\docking\runners
+copying build\lib\docking\__init__.py -> build\bdist.win-amd64\wheel\.\docking
+copying build\lib\interactive_pipeline.py -> build\bdist.win-amd64\wheel\.
+copying build\lib\main.py -> build\bdist.win-amd64\wheel\.
+creating build\bdist.win-amd64\wheel\post_docking_analysis
+copying build\lib\post_docking_analysis\artifact_graph.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\autodock4_hpc_adapter.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\binding_affinity_analyzer.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\biology_integration.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\cli.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\complex_query.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\complex_validation.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+creating build\bdist.win-amd64\wheel\post_docking_analysis\config
+copying build\lib\post_docking_analysis\config\sample_config.yaml -> build\bdist.win-amd64\wheel\.\post_docking_analysis\config
+copying build\lib\post_docking_analysis\config\schema.yaml -> build\bdist.win-amd64\wheel\.\post_docking_analysis\config
+copying build\lib\post_docking_analysis\config.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\config_manager.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\consensus.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\correlation_analyzer.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\docking_parser.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\engine_detector.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\engine_hpc_adapter.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\enhanced_rmsd_analyzer.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\example_pairlist.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\example_usage.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\generate_scores_csv.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\geometric_consensus.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\gnina_hpc_adapter.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\hierarchical_analyzer.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\identify_complexes.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\identify_pairs.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\input_handler.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\ligand_naming.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\ligplot_cli.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\ligplot_integration.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\logging_config.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\multi_engine_pipeline.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\multi_engine_pipeline_impl.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\pandamap_integration.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\pandamap_runner.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\pdb_code_matcher.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\pipeline.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\plip_integration.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\poseview_integration.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\pose_extractor.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\pose_geometry.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\preprocess.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\prolif_interaction_maps.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\protein_naming.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\publication_pandamap.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\py3dmol_visualizer.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\pymol_generate.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\pymol_templates.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\pymol_visualizer.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\redocking_validation.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\report_generator.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\research_adapter.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\score_import.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\score_semantics.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\simplified_cli.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\simplified_input_handler.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\simplified_pipeline.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\simplified_pipeline_impl.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\smina_hpc_adapter.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\storage_sqlite.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\structure_quality.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\top_pose_selector.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\unified_pipeline.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\vina_hpc_adapter.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\visualization_suite.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\visualizer.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\__init__.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\post_docking_analysis\__main__.py -> build\bdist.win-amd64\wheel\.\post_docking_analysis
+copying build\lib\prep_autodock_enhanced.sh -> build\bdist.win-amd64\wheel\.
+creating build\bdist.win-amd64\wheel\workflow
+copying build\lib\workflow\cli.py -> build\bdist.win-amd64\wheel\.\workflow
+copying build\lib\workflow\execution.py -> build\bdist.win-amd64\wheel\.\workflow
+copying build\lib\workflow\ids.py -> build\bdist.win-amd64\wheel\.\workflow
+copying build\lib\workflow\interactive.py -> build\bdist.win-amd64\wheel\.\workflow
+copying build\lib\workflow\locking.py -> build\bdist.win-amd64\wheel\.\workflow
+copying build\lib\workflow\models.py -> build\bdist.win-amd64\wheel\.\workflow
+copying build\lib\workflow\reference_chemistry.py -> build\bdist.win-amd64\wheel\.\workflow
+copying build\lib\workflow\state.py -> build\bdist.win-amd64\wheel\.\workflow
+copying build\lib\workflow\__init__.py -> build\bdist.win-amd64\wheel\.\workflow
+running install_egg_info
+Copying pdb_prepare_wizard.egg-info to build\bdist.win-amd64\wheel\.\pdb_prepare_wizard-3.0.1-py3.12.egg-info
+running install_scripts
+creating build\bdist.win-amd64\wheel\pdb_prepare_wizard-3.0.1.dist-info\WHEEL
+creating 'C:\\Users\\salma\\Documents\\ChatGPT\\Omni_suite\\OmniDock\\dist\\.tmp-s2knypjb\\pdb_prepare_wizard-3.0.1-py3-none-any.whl' and adding 'build\\bdist.win-amd64\\wheel' to it
+adding 'autodock_preparation.py'
+adding 'batch_pdb_preparation.py'
+adding 'cli_pipeline.py'
+adding 'core_pipeline.py'
+adding 'interactive_pipeline.py'
+adding 'main.py'
+adding 'prep_autodock_enhanced.sh'
+adding 'docking/__init__.py'
+adding 'docking/cli.py'
+adding 'docking/deployment.py'
+adding 'docking/engine_registry.py'
+adding 'docking/execution_environment.py'
+adding 'docking/hpc_profiles.py'
+adding 'docking/models.py'
+adding 'docking/parameter_schema.py'
+adding 'docking/preflight.py'
+adding 'docking/project_layout.py'
+adding 'docking/remote_ops.py'
+adding 'docking/preparation/__init__.py'
+adding 'docking/preparation/asset_identity.py'
+adding 'docking/preparation/excel_sites.py'
+adding 'docking/preparation/ligand_preparation.py'
+adding 'docking/preparation/ligand_quality.py'
+adding 'docking/preparation/pair_curation.py'
+adding 'docking/preparation/pairlist_builder.py'
+adding 'docking/preparation/project_aliases.py'
+adding 'docking/preparation/project_builder.py'
+adding 'docking/preparation/receptor_preparation.py'
+adding 'docking/preparation/receptor_quality.py'
+adding 'docking/preparation/structure_contract.py'
+adding 'docking/runners/__init__.py'
+adding 'docking/runners/autodock4.py'
+adding 'docking/runners/base.py'
+adding 'docking/runners/gnina.py'
+adding 'docking/runners/job_contract.py'
+adding 'docking/runners/smina.py'
+adding 'docking/runners/vina.py'
+adding 'pdb_prepare_wizard-3.0.1.dist-info/licenses/LICENSE'
+adding 'post_docking_analysis/__init__.py'
+adding 'post_docking_analysis/__main__.py'
+adding 'post_docking_analysis/artifact_graph.py'
+adding 'post_docking_analysis/autodock4_hpc_adapter.py'
+adding 'post_docking_analysis/binding_affinity_analyzer.py'
+adding 'post_docking_analysis/biology_integration.py'
+adding 'post_docking_analysis/cli.py'
+adding 'post_docking_analysis/complex_query.py'
+adding 'post_docking_analysis/complex_validation.py'
+adding 'post_docking_analysis/config.py'
+adding 'post_docking_analysis/config_manager.py'
+adding 'post_docking_analysis/consensus.py'
+adding 'post_docking_analysis/correlation_analyzer.py'
+adding 'post_docking_analysis/docking_parser.py'
+adding 'post_docking_analysis/engine_detector.py'
+adding 'post_docking_analysis/engine_hpc_adapter.py'
+adding 'post_docking_analysis/enhanced_rmsd_analyzer.py'
+adding 'post_docking_analysis/example_pairlist.py'
+adding 'post_docking_analysis/example_usage.py'
+adding 'post_docking_analysis/generate_scores_csv.py'
+adding 'post_docking_analysis/geometric_consensus.py'
+adding 'post_docking_analysis/gnina_hpc_adapter.py'
+adding 'post_docking_analysis/hierarchical_analyzer.py'
+adding 'post_docking_analysis/identify_complexes.py'
+adding 'post_docking_analysis/identify_pairs.py'
+adding 'post_docking_analysis/input_handler.py'
+adding 'post_docking_analysis/ligand_naming.py'
+adding 'post_docking_analysis/ligplot_cli.py'
+adding 'post_docking_analysis/ligplot_integration.py'
+adding 'post_docking_analysis/logging_config.py'
+adding 'post_docking_analysis/multi_engine_pipeline.py'
+adding 'post_docking_analysis/multi_engine_pipeline_impl.py'
+adding 'post_docking_analysis/pandamap_integration.py'
+adding 'post_docking_analysis/pandamap_runner.py'
+adding 'post_docking_analysis/pdb_code_matcher.py'
+adding 'post_docking_analysis/pipeline.py'
+adding 'post_docking_analysis/plip_integration.py'
+adding 'post_docking_analysis/pose_extractor.py'
+adding 'post_docking_analysis/pose_geometry.py'
+adding 'post_docking_analysis/poseview_integration.py'
+adding 'post_docking_analysis/preprocess.py'
+adding 'post_docking_analysis/prolif_interaction_maps.py'
+adding 'post_docking_analysis/protein_naming.py'
+adding 'post_docking_analysis/publication_pandamap.py'
+adding 'post_docking_analysis/py3dmol_visualizer.py'
+adding 'post_docking_analysis/pymol_generate.py'
+adding 'post_docking_analysis/pymol_templates.py'
+adding 'post_docking_analysis/pymol_visualizer.py'
+adding 'post_docking_analysis/redocking_validation.py'
+adding 'post_docking_analysis/report_generator.py'
+adding 'post_docking_analysis/research_adapter.py'
+adding 'post_docking_analysis/score_import.py'
+adding 'post_docking_analysis/score_semantics.py'
+adding 'post_docking_analysis/simplified_cli.py'
+adding 'post_docking_analysis/simplified_input_handler.py'
+adding 'post_docking_analysis/simplified_pipeline.py'
+adding 'post_docking_analysis/simplified_pipeline_impl.py'
+adding 'post_docking_analysis/smina_hpc_adapter.py'
+adding 'post_docking_analysis/storage_sqlite.py'
+adding 'post_docking_analysis/structure_quality.py'
+adding 'post_docking_analysis/top_pose_selector.py'
+adding 'post_docking_analysis/unified_pipeline.py'
+adding 'post_docking_analysis/vina_hpc_adapter.py'
+adding 'post_docking_analysis/visualization_suite.py'
+adding 'post_docking_analysis/visualizer.py'
+adding 'post_docking_analysis/config/sample_config.yaml'
+adding 'post_docking_analysis/config/schema.yaml'
+adding 'workflow/__init__.py'
+adding 'workflow/cli.py'
+adding 'workflow/execution.py'
+adding 'workflow/ids.py'
+adding 'workflow/interactive.py'
+adding 'workflow/locking.py'
+adding 'workflow/models.py'
+adding 'workflow/reference_chemistry.py'
+adding 'workflow/state.py'
+adding 'pdb_prepare_wizard-3.0.1.dist-info/METADATA'
+adding 'pdb_prepare_wizard-3.0.1.dist-info/WHEEL'
+adding 'pdb_prepare_wizard-3.0.1.dist-info/entry_points.txt'
+adding 'pdb_prepare_wizard-3.0.1.dist-info/top_level.txt'
+adding 'pdb_prepare_wizard-3.0.1.dist-info/RECORD'
+removing build\bdist.win-amd64\wheel
+Successfully built pdb_prepare_wizard-3.0.1.tar.gz and pdb_prepare_wizard-3.0.1-py3-none-any.whl

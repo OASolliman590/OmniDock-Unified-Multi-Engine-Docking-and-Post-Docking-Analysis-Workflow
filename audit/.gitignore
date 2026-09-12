@@ -1,0 +1,8 @@
+# Local probe outputs and intermediate regression runs.
+probe-data/
+postdocking-probe-artifacts/
+*.log
+!correctness-tests.log
+!build-correctness.log
+!wheel-verification.log
+!docking-dry-run.log

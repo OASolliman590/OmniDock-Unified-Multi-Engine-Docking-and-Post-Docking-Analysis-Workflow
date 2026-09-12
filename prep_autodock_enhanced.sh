@@ -36,7 +36,7 @@ DEFAULT_CONFIG='{
   "preparation": {
     "force_field": "AMBER",
     "ph": 7.4,
-    "allow_bad_res": true,
+    "allow_bad_res": false,
     "default_altloc": "A",
     "receptor_use_pdb2pqr": false,
     "ligand_preparation_backend": "engine_aware_full",
@@ -423,48 +423,6 @@ autodocktools_pythonpath_root_from_script() {
     )
 }
 
-prepare_receptor_with_autodocktools() {
-    local input_file="$1"
-    local output_file="$2"
-    local adt_script="${AUTODOCKTOOLS_PREPARE_RECEPTOR4:-}"
-    local adt_python="${AUTODOCKTOOLS_PYTHON:-python3}"
-
-    if [[ -z "$adt_script" || ! -f "$adt_script" ]]; then
-        log_error "AutoDockTools receptor script is not configured or missing: $adt_script"
-        return 1
-    fi
-
-    local adt_root
-    adt_root=$(autodocktools_pythonpath_root_from_script "$adt_script")
-    local adt_output=""
-
-    if ! adt_output=$(
-        PYTHONPATH="$adt_root${PYTHONPATH:+:$PYTHONPATH}" \
-        "$adt_python" "$adt_script" \
-            -r "$input_file" \
-            -o "$output_file" \
-            -A checkhydrogens \
-            -U nphs_lps_waters_deleteAltB 2>&1
-    ); then
-        log_error "AutoDockTools receptor preparation failed for $(basename "$input_file")"
-        if [[ -n "$adt_output" ]]; then
-            local first_error_line=""
-            first_error_line=$(printf '%s\n' "$adt_output" | tail -n 1)
-            log_error "prepare_receptor4.py output: $first_error_line"
-        fi
-        return 1
-    fi
-
-    if [[ -n "$adt_output" ]]; then
-        local last_line=""
-        last_line=$(printf '%s\n' "$adt_output" | tail -n 1)
-        if [[ -n "$last_line" ]]; then
-            log_info "prepare_receptor4.py: $last_line"
-        fi
-    fi
-    return 0
-}
-
 # ── Dependency Checking ────────────────────────────────────────────────────
 check_dependencies() {
     local missing_deps=()
@@ -488,13 +446,13 @@ check_dependencies() {
 
     # Check optional preparation tools and log their status.
     if ! command -v pdb2pqr30 &> /dev/null; then
-        log_info "pdb2pqr30 not found. Receptor preparation will fall back to Open Babel."
+        log_info "pdb2pqr30 not found. Explicit PDB2PQR protonation requests will fail."
     fi
     if ! mk_prepare_ligand.py --help >/dev/null 2>&1; then
-        log_info "mk_prepare_ligand.py is not usable. Ligand preparation will rely on profile-specific fallbacks."
+        log_info "mk_prepare_ligand.py is not usable. Profiles requiring Meeko will fail."
     fi
     if ! mk_prepare_receptor.py --help >/dev/null 2>&1; then
-        log_info "mk_prepare_receptor.py is not usable. Receptor preparation will fall back to Open Babel."
+        log_info "mk_prepare_receptor.py is not usable. Meeko receptor preparation will fail."
     fi
 
     if profile_requires_autodocktools_ligand "$ligand_profile" "$selected_engines_csv"; then
@@ -559,70 +517,19 @@ prepare_ligand_to_pdbqt() {
     local ph_value
     ph_value=$(jq -r '.preparation.ph // 7.4' "$CONFIG_FILE")
 
-    if command -v python3 >/dev/null 2>&1; then
-        if PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-            python3 -m docking.preparation.ligand_preparation \
-                --input "$input_file" \
-                --output "$output_file" \
-                --backend-profile "$profile" \
-                --ph "$ph_value" \
-                --engines "$selected_engines" >/dev/null 2>&1; then
-            return 0
-        fi
-        if [[ "$profile" != "engine_aware_full" ]]; then
-            log_error "Central ligand preparation failed in forced profile mode ($profile) for $(basename "$input_file")."
-            return 1
-        fi
-        log_info "Central ligand normalization failed for $(basename "$input_file"). Falling back to direct CLI conversion."
-    fi
-
-    if [[ "$profile" != "engine_aware_full" ]]; then
-        log_error "python3-based central ligand preparation is required for profile '$profile'."
+    # A failed chemistry contract must never become a direct CLI conversion.
+    if ! command -v python3 >/dev/null 2>&1; then
+        log_error "python3-based central ligand preparation is required."
         return 1
     fi
-
-    local fallback_input="$input_file"
-    local tmp_workdir=""
-    if command -v obabel >/dev/null 2>&1; then
-        tmp_workdir=$(mktemp -d "${TMPDIR:-/tmp}/pdbwiz_ligprep_fallback_XXXXXX")
-        local source_sdf="$tmp_workdir/source.sdf"
-        local with_3d_sdf="$tmp_workdir/with_3d.sdf"
-        local with_h_sdf="$tmp_workdir/with_h.sdf"
-        local minimized_sdf="$tmp_workdir/minimized.sdf"
-        if obabel "$input_file" -O "$source_sdf" >/dev/null 2>&1 \
-            && obabel "$source_sdf" -O "$with_3d_sdf" --gen3d >/dev/null 2>&1 \
-            && obabel "$with_3d_sdf" -O "$with_h_sdf" -h >/dev/null 2>&1; then
-            fallback_input="$with_h_sdf"
-            if obabel "$with_h_sdf" -O "$minimized_sdf" --minimize --steps 250 --ff MMFF94 >/dev/null 2>&1 \
-                || obabel "$with_h_sdf" -O "$minimized_sdf" --minimize --steps 250 --ff UFF >/dev/null 2>&1; then
-                fallback_input="$minimized_sdf"
-            fi
-            log_info "Fallback ligand normalization (Open Babel 3D) succeeded for $(basename "$input_file")."
-        else
-            log_info "Fallback ligand normalization failed for $(basename "$input_file"). Using original input for direct conversion."
-        fi
+    local preparation_log="${output_file}.preparation.log"
+    if PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -m docking.preparation.ligand_preparation \
+        --input "$input_file" --output "$output_file" --backend-profile "$profile" \
+        --ph "$ph_value" --engines "$selected_engines" >"$preparation_log" 2>&1; then
+        return 0
     fi
-
-    local rc=1
-    if has_working_meeko_ligand; then
-        if mk_prepare_ligand.py -i "$fallback_input" -o "$output_file" 2>/dev/null; then
-            rc=0
-        fi
-        if [[ $rc -ne 0 ]]; then
-            log_info "Meeko ligand preparation failed for $(basename "$input_file"). Falling back to Open Babel."
-        fi
-    fi
-
-    if [[ $rc -ne 0 ]]; then
-        if obabel "$fallback_input" -O "$output_file" -h >/dev/null 2>&1; then
-            rc=0
-        fi
-    fi
-
-    if [[ -n "$tmp_workdir" && -d "$tmp_workdir" ]]; then
-        rm -rf "$tmp_workdir"
-    fi
-    return $rc
+    log_error "Ligand preparation failed; see $preparation_log"
+    return 1
 }
 
 # ── File Format Conversion ─────────────────────────────────────────────────
@@ -651,10 +558,10 @@ convert_ligand_format() {
 # ── Quality Control ────────────────────────────────────────────────────────
 validate_file() {
     local file="$1"
-    local min_size_kb="${2:-1}"
+    local min_size_kb="${2:-0}"
     
-    if [[ ! -f "$file" ]]; then
-        log_error "File not found: $file"
+    if [[ ! -s "$file" ]]; then
+        log_error "File missing or empty: $file"
         return 1
     fi
     
@@ -766,12 +673,8 @@ prepare_ligands() {
             started_epoch=$(date +%s)
             log_info "[$processed_files/$total_files] Preparing ligand: $(basename "$mol_file")"
             
-            # Skip if already exists and valid
-            if [[ -f "$output_file" ]] && validate_file "$output_file"; then
-                log_info "Skipping existing valid ligand output: $(basename "$output_file")"
-                append_report_row "$LIGAND_SKIPPED_REPORT" "ligand" "$mol_file" "skipped" "already_prepared" "$output_file"
-                continue
-            fi
+            # Reprepare from the requested source/config; existence is not cache identity.
+
             
             if prepare_ligand_to_pdbqt "$mol_file" "$output_file"; then
                 if validate_ligand_pdbqt "$output_file"; then
@@ -793,6 +696,9 @@ prepare_ligands() {
     echo # New line after progress
     local success_count=$(find "$output_dir" -name "*.pdbqt" -type f | wc -l)
     log_success "Ligand preparation completed: $success_count/$total_files files"
+    if [[ -s "$LIGAND_FAILURE_REPORT" ]] && [[ $(wc -l < "$LIGAND_FAILURE_REPORT") -gt 1 ]]; then
+        return 1
+    fi
 }
 
 # ── Receptor Preparation ───────────────────────────────────────────────────
@@ -839,6 +745,11 @@ prepare_receptors() {
             if [[ "$role" == "unknown" ]]; then
                 log_info "Receptor PDB role uncertain for $(basename "$pdb_file"); proceeding with preparation (metrics=$metrics)."
             fi
+            # Collected source complexes are provenance, not docking receptors.
+            if [[ "$pdb_file" != *_cleaned.pdb && -f "${pdb_file%.*}_cleaned.pdb" ]]; then
+                log_info "Using explicitly cleaned receptor instead of source complex: $(basename "$pdb_file")"
+                continue
+            fi
             candidate_files+=("$pdb_file")
         done < <(find "$input_dir" -name "*.${format}" -type f -print0 2>/dev/null)
     done
@@ -874,63 +785,11 @@ prepare_receptors() {
             started_epoch=$(date +%s)
             log_info "[$processed_files/$total_files] Preparing receptor: $(basename "$pdb_file")"
             
-            # Skip if already exists and valid
-            if [[ -f "$pdbqt_file" ]] && validate_file "$pdbqt_file"; then
-                log_info "Skipping existing valid receptor output: $(basename "$pdbqt_file")"
-                append_report_row "$RECEPTOR_SKIPPED_REPORT" "receptor" "$pdb_file" "skipped" "already_prepared" "$pdbqt_file"
-                continue
-            fi
-            
-            local prep_input="$pdb_file"
-            local used_clean_intermediate="false"
+            # Always regenerate: file existence cannot establish input/config identity.
             local prepared_ok="false"
-
-            if [[ "$ligand_profile" == "autodocktools_only" ]]; then
-                if prepare_receptor_with_autodocktools "$pdb_file" "$pdbqt_file"; then
-                    prepared_ok="true"
-                fi
-            else
-                # Optional PDB2PQR path (disabled by default for better geometry stability,
-                # especially in protein+nucleic-acid assemblies).
-                if [[ "$receptor_use_pdb2pqr" == "true" ]]; then
-                    if command -v pdb2pqr30 >/dev/null 2>&1; then
-                        if pdb2pqr30 --ff "$(jq -r '.preparation.force_field' "$CONFIG_FILE")" \
-                                    --with-ph "$(jq -r '.preparation.ph' "$CONFIG_FILE")" \
-                                    "$pdb_file" "$pqr_file" >/dev/null 2>&1; then
-                            if obabel "$pqr_file" -O "$clean_pdb" >/dev/null 2>&1; then
-                                prep_input="$clean_pdb"
-                                used_clean_intermediate="true"
-                            else
-                                log_info "Open Babel clean step failed for $(basename "$pdb_file"). Falling back to the original PDB."
-                            fi
-                        else
-                            log_info "PDB2PQR failed for $(basename "$pdb_file"). Falling back to the original PDB."
-                        fi
-                    fi
-                fi
-
-                # Step 2: PDB → PDBQT via Meeko when usable, else Open Babel.
-                if has_working_meeko_receptor; then
-                    local meeko_args=("--read_pdb" "$prep_input" "-p" "$pdbqt_file")
-                    
-                    if [[ "$(jq -r '.preparation.allow_bad_res' "$CONFIG_FILE")" == "true" ]]; then
-                        meeko_args+=("--allow_bad_res")
-                    fi
-                    
-                    meeko_args+=("--default_altloc" "$(jq -r '.preparation.default_altloc' "$CONFIG_FILE")")
-                    
-                    if mk_prepare_receptor.py "${meeko_args[@]}" 2>/dev/null; then
-                        prepared_ok="true"
-                    else
-                        log_info "Meeko receptor preparation failed for $(basename "$pdb_file"). Falling back to Open Babel."
-                    fi
-                fi
-
-                if [[ "$prepared_ok" != "true" ]]; then
-                    if obabel "$prep_input" -O "$pdbqt_file" -xr >/dev/null 2>&1; then
-                        prepared_ok="true"
-                    fi
-                fi
+            local used_clean_intermediate="false"
+            if PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -m docking.preparation.receptor_preparation "$pdb_file" "$pdbqt_file" "$CONFIG_FILE"; then
+                prepared_ok="true"
             fi
 
             if [[ "$prepared_ok" == "true" ]]; then
@@ -960,6 +819,9 @@ prepare_receptors() {
     echo # New line after progress
     local success_count=$(find "$output_dir" -name "*.pdbqt" -type f | wc -l)
     log_success "Receptor preparation completed: $success_count/$total_files files"
+    if [[ -s "$RECEPTOR_FAILURE_REPORT" ]] && [[ $(wc -l < "$RECEPTOR_FAILURE_REPORT") -gt 1 ]]; then
+        return 1
+    fi
 }
 
 # ── Main Execution ─────────────────────────────────────────────────────────
