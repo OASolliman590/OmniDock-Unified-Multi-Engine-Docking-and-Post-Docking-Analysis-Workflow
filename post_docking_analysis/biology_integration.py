@@ -15,7 +15,7 @@ SUPPORTED_BIOLOGY_EXTENSIONS = {".csv", ".tsv", ".txt", ".json"}
 
 
 def _normalize_text(series: pd.Series) -> pd.Series:
-    return series.astype(str).str.strip()
+    return series.astype("string").str.strip().replace("", pd.NA)
 
 
 def _key_tuples_to_rows(
@@ -131,6 +131,10 @@ def attach_biology_annotations(
         dock[column] = _normalize_text(dock[column])
     for column in bio_keys:
         bio[column] = _normalize_text(bio[column])
+    if bio[bio_keys].isna().any(axis=None):
+        raise ValueError("Biology mapping keys must be explicit and nonmissing")
+    if bio.duplicated(bio_keys, keep=False).any():
+        raise ValueError("Biology mapping keys are not unique; keep replicate assays separately or explicitly aggregate compatible assays before annotation")
 
     rename_map = {}
     for column in bio.columns:
@@ -145,6 +149,7 @@ def attach_biology_annotations(
         right_on=bio_keys,
         how="left",
         suffixes=("", "_bio"),
+        validate="many_to_one",
     )
     bio_payload_cols = [column for column in matched.columns if str(column).startswith(biology_prefix)]
     matched_rows = int((matched[bio_payload_cols].notna().any(axis=1)).sum()) if bio_payload_cols else 0

@@ -1,0 +1,2 @@
+include README.md requirements.txt prep_autodock_enhanced.sh
+recursive-include post_docking_analysis/config *.yaml

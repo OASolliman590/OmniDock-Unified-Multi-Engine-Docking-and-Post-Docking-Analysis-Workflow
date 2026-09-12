@@ -459,7 +459,7 @@ class SimplifiedPostDockingPipeline:
                 stat = file_path.stat()
                 output_rows.append(
                     {
-                        "relative_path": str(relative),
+                        "relative_path": relative.as_posix(),
                         "category": self._classify_output_path(relative),
                         "extension": str(file_path.suffix.lower()),
                         "size_bytes": int(stat.st_size),
@@ -1984,11 +1984,20 @@ class SimplifiedPostDockingPipeline:
                 self.logger.warning("⚠️  No finite affinity values available for polypharmacology analysis")
                 return True
 
+            if "engine" in df and df["engine"].nunique() > 1:
+                unavailable_dir = self.output_dir / "analysis" / "polypharmacology"
+                unavailable_dir.mkdir(parents=True, exist_ok=True)
+                status = {"status":"not_evaluable", "reason":"cross_engine_raw_score_comparison_requires_calibration"}
+                (unavailable_dir / "status.json").write_text(json.dumps(status, indent=2), encoding="utf-8")
+                self.results["polypharmacology_analysis"] = status
+                return True
             # Ensure one best row per ligand-protein pair.
             idx = df.groupby(["ligand", "protein_label"])["vina_affinity"].idxmin()
             pair_df = df.loc[idx].copy().sort_values(["ligand", "protein_label"])
 
-            pair_df["is_reference_candidate"] = pair_df.apply(self._is_reference_candidate_row, axis=1)
+            pair_df["interpretation"] = "exploratory_uncalibrated_docking_scores_not_binding_or_selectivity"
+            pair_df["reference_validation"] = "not_established_by_this_analysis"
+            pair_df["is_reference_candidate"] = False
             pair_df["strong_binder"] = pair_df["vina_affinity"] <= strong_threshold
             pair_df["moderate_or_better_binder"] = pair_df["vina_affinity"] <= moderate_threshold
             pair_df["unfavorable_binder"] = pair_df["vina_affinity"] > 0.0
@@ -2084,20 +2093,22 @@ class SimplifiedPostDockingPipeline:
                 )
 
                 if poly_count >= min_targets_high:
-                    level = "High Polypharmacology Potential"
+                    level = "Exploratory docking hits on at least three targets"
                 elif poly_count >= min_targets_moderate:
-                    level = "Moderate Polypharmacology Potential"
+                    level = "Exploratory docking hits on at least two targets"
                 elif strong_count >= min_targets_moderate:
-                    level = "Potential Multi-Target Binder"
+                    level = "Exploratory multi-target score profile"
                 elif strong_count >= 1:
-                    level = "Single-Target Dominant"
+                    level = "Exploratory single-target score profile"
                 else:
-                    level = "Low Polypharmacology Potential"
+                    level = "No docking hits under exploratory cutoffs"
 
                 ligand_rows.append(
                     {
                         "ligand": ligand,
                         "polypharm_score": round(poly_score, 4),
+                        "interpretation": "uncalibrated_docking_heuristic_not_potency_or_selectivity",
+                        "reference_validation": "not_established_by_this_analysis",
                         "polypharm_level": level,
                         "targets_tested_count": len(set(target_list)),
                         "total_proteins_in_project": total_proteins,
@@ -2214,7 +2225,7 @@ class SimplifiedPostDockingPipeline:
                         cbar_kws={"label": "Best Affinity (kcal/mol)"},
                         ax=ax,
                     )
-                    ax.set_title("Polypharmacology Affinity Matrix (Ligand x Protein)")
+                    ax.set_title("Exploratory Docking Scores (Ligand x Protein; uncalibrated)")
                     ax.set_xlabel("Protein")
                     ax.set_ylabel("Ligand")
                     plt.tight_layout()
@@ -2267,9 +2278,9 @@ class SimplifiedPostDockingPipeline:
                             va="center",
                             fontsize=8,
                         )
-                    ax.set_xlabel("Polypharmacology Score")
+                    ax.set_xlabel("Uncalibrated docking heuristic")
                     ax.set_ylabel("Ligand")
-                    ax.set_title("Polypharmacology Leaderboard (Reference-Aware)")
+                    ax.set_title("Exploratory Docking Heuristic (not binding or selectivity evidence)")
                     ax.grid(True, axis="x", alpha=0.25)
                     plt.tight_layout()
                     leaderboard_plot = viz_dir / "polypharmacology_leaderboard.png"
@@ -2402,6 +2413,7 @@ class SimplifiedPostDockingPipeline:
         try:
             from rdkit import Chem
             from rdkit.Chem import rdMolAlign
+            from .pose_geometry import fixed_frame_rmsd
         except Exception:
             self.logger.error(
                 "❌ RDKit not available for pose RMSD calculations; RMSD stage is mandatory"
@@ -2762,8 +2774,11 @@ class SimplifiedPostDockingPipeline:
             scores_df["mode_int"] = pd.to_numeric(scores_df.get("mode"), errors="coerce")
             enabled_scopes = set(self.rmsd_scopes)
             enable_per_complex = "per_complex" in enabled_scopes
-            enable_per_protein = "per_protein" in enabled_scopes
-            enable_global = "global" in enabled_scopes
+            enable_per_protein = False
+            enable_global = False
+            for requested, directory in (("per_protein", per_protein_dir), ("global", global_best_dir)):
+                if requested in enabled_scopes:
+                    (directory / "not_evaluable.json").write_text(json.dumps({"status":"not_evaluable", "reason":"cross_ligand_or_receptor_RMSD_requires_explicit_atom_and_frame_mapping"}), encoding="utf-8")
 
             per_complex_rows: List[Dict[str, object]] = []
             processed_complexes = 0
@@ -2774,19 +2789,14 @@ class SimplifiedPostDockingPipeline:
                     if not sdf_file.exists():
                         continue
 
-                    supplier = Chem.SDMolSupplier(str(sdf_file), removeHs=False, sanitize=False)
-                    mols = [mol for mol in supplier if mol is not None]
+                    supplier = Chem.SDMolSupplier(str(sdf_file), removeHs=True, sanitize=True)
+                    mols = list(supplier)  # Preserve original record indices, including invalid records.
                     if len(mols) < 2:
                         continue
 
                     tag_scores = scores_df[scores_df["tag_norm"] == tag].copy()
                     tag_scores = tag_scores.sort_values("mode_int", na_position="last")
-                    if tag_scores.empty:
-                        pose_modes = list(range(1, len(mols) + 1))
-                    else:
-                        pose_modes = [int(v) for v in tag_scores["mode_int"].dropna().tolist()]
-                        if not pose_modes or len(pose_modes) < len(mols):
-                            pose_modes = list(range(1, len(mols) + 1))
+                    pose_modes = list(range(1, len(mols) + 1))
 
                     n_poses = min(len(mols), len(pose_modes))
                     if n_poses < 2:
@@ -2801,7 +2811,7 @@ class SimplifiedPostDockingPipeline:
                     for i in range(n_poses):
                         for j in range(i + 1, n_poses):
                             try:
-                                rmsd = float(rdMolAlign.GetBestRMS(mols[i], mols[j]))
+                                rmsd = fixed_frame_rmsd(mols[i], mols[j])
                             except Exception:
                                 rmsd = np.nan
                             rmsd_matrix[i, j] = rmsd
@@ -3285,7 +3295,7 @@ class SimplifiedPostDockingPipeline:
         complexes_dir = self.output_dir / "complexes"
         if not complexes_dir.exists():
             return []
-        return sorted(complexes_dir.glob("*.pdb"))
+        return sorted(path for path in complexes_dir.glob("*.pdb") if not path.name.endswith(".receptor.pdb"))
 
     def _get_best_poses_for_visualization(self) -> pd.DataFrame:
         """Return best poses from current results with display names applied."""

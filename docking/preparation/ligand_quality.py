@@ -164,106 +164,24 @@ def _extract_atom_type(line: str) -> str:
 def _has_invalid_autodock_type(atom_type: str) -> bool:
     if not atom_type:
         return True
-    if atom_type in VALID_AUTODOCK_TYPES:
+    if atom_type in VALID_AUTODOCK_TYPES or re.fullmatch(r"(?:CG|G)[0-3]", atom_type):
         return False
     if any(char.isdigit() for char in atom_type):
         return True
     return atom_type not in VALID_AUTODOCK_TYPES
 
 
-def _replace_atom_type(line: str, atom_type: str) -> str:
-    return re.sub(r"(\s+)(\S+)\s*$", lambda match: f"{match.group(1)}{atom_type}", line)
-
-
-def _infer_fixed_atom_type(atom_name: str, atom_type: str) -> Optional[str]:
-    raw = str(atom_type).strip()
-    if raw == "G0":
-        return None
-    if raw == "CG0":
-        return "C"
-
-    letters = "".join(ch for ch in raw if ch.isalpha())
-    if letters in VALID_AUTODOCK_TYPES:
-        return letters
-
-    atom_letters = "".join(ch for ch in str(atom_name).strip() if ch.isalpha()).upper()
-    if atom_letters.startswith("CL"):
-        return "Cl"
-    if atom_letters.startswith("BR"):
-        return "Br"
-    if atom_letters.startswith("ZN"):
-        return "Zn"
-    if atom_letters.startswith("FE"):
-        return "Fe"
-    if atom_letters.startswith("MG"):
-        return "Mg"
-    if atom_letters.startswith("MN"):
-        return "Mn"
-    if atom_letters.startswith("CA"):
-        return "Ca"
-    if atom_letters.startswith("CU"):
-        return "Cu"
-    if atom_letters.startswith("PD"):
-        return "Pd"
-    if atom_letters.startswith("OA"):
-        return "OA"
-    if atom_letters.startswith("OS"):
-        return "OS"
-    if atom_letters.startswith("NA"):
-        return "NA"
-    if atom_letters.startswith("NS"):
-        return "NS"
-    if atom_letters.startswith("SA"):
-        return "SA"
-    if atom_letters.startswith("SI"):
-        return "Si"
-    if atom_letters.startswith("HD"):
-        return "HD"
-    if atom_letters.startswith("HS"):
-        return "HS"
-    if atom_letters:
-        first = atom_letters[0]
-        if first in {"C", "N", "O", "S", "P", "H", "F", "I", "A"}:
-            return "OA" if first == "O" else first
-    return None
-
-
 def sanitize_prepared_ligand_pdbqt(source_file: Path, destination_file: Path) -> Dict[str, object]:
+    """Validate prepared chemistry without deleting or guessing atom types."""
     source = Path(source_file).expanduser().resolve()
     destination = Path(destination_file).expanduser()
-    lines = source.read_text(encoding="utf-8", errors="ignore").splitlines()
-    cleaned_lines: List[str] = []
-    dropped_atoms = 0
-    replaced_atoms = 0
-    invalid_before: List[str] = []
-
-    for line in lines:
-        if not line.startswith(("ATOM", "HETATM")):
-            cleaned_lines.append(line)
-            continue
-        atom_type = _extract_atom_type(line)
-        if not _has_invalid_autodock_type(atom_type):
-            cleaned_lines.append(line)
-            continue
-
-        invalid_before.append(atom_type)
-        atom_name = line[12:16].strip()
-        fixed_type = _infer_fixed_atom_type(atom_name, atom_type)
-        if fixed_type is None:
-            dropped_atoms += 1
-            continue
-        replaced_atoms += 1
-        cleaned_lines.append(_replace_atom_type(line, fixed_type))
-
+    issues = validate_prepared_ligand_pdbqt(source)
+    if issues:
+        raise ValueError("Prepared ligand requires regeneration from authoritative chemistry: " + "; ".join(issue.details for issue in issues))
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text("\n".join(cleaned_lines) + "\n", encoding="utf-8")
-    return {
-        "source_file": str(source),
-        "destination_file": str(destination),
-        "replaced_atoms": replaced_atoms,
-        "dropped_atoms": dropped_atoms,
-        "invalid_atom_types_before": sorted(set(invalid_before)),
-    }
+    if source != destination.resolve():
+        shutil.copy2(source, destination)
+    return {"source_file": str(source), "destination_file": str(destination), "replaced_atoms": 0, "dropped_atoms": 0, "invalid_atom_types_before": []}
 
 
 def _parse_float(segment: str, default: float) -> float:
@@ -321,99 +239,11 @@ def _format_pdb_atom_line(
 
 
 def sanitize_ligand_pdb_file(source_file: Path, destination_file: Path, preferred_altloc: str = "A") -> Dict[str, object]:
-    source = Path(source_file).expanduser().resolve()
-    destination = Path(destination_file).expanduser()
-    lines = source.read_text(encoding="utf-8", errors="ignore").splitlines()
-
-    grouped: Dict[tuple[str, str, str, str, str, str], List[Dict[str, object]]] = defaultdict(list)
-    order: List[tuple[str, str, str, str, str, str]] = []
-
-    for line in lines:
-        if not line.startswith(("ATOM", "HETATM")):
-            continue
-        atom_name = line[12:16]
-        key = (
-            line[0:6].strip() or "HETATM",
-            atom_name.strip(),
-            line[17:20].strip() or "LIG",
-            line[21].strip() or "A",
-            line[22:26].strip() or "1",
-            line[26].strip(),
-        )
-        if key not in grouped:
-            order.append(key)
-        grouped[key].append(
-            {
-                "record": line[0:6].strip() or "HETATM",
-                "atom_name": atom_name.strip() or "X",
-                "altloc": line[16].strip(),
-                "resname": line[17:20].strip() or "LIG",
-                "chain_id": line[21].strip() or "A",
-                "resseq": line[22:26].strip() or "1",
-                "icode": line[26].strip(),
-                "x": _parse_float(line[30:38], 0.0),
-                "y": _parse_float(line[38:46], 0.0),
-                "z": _parse_float(line[46:54], 0.0),
-                "occupancy": _parse_float(line[54:60], 1.0),
-                "bfactor": _parse_float(line[60:66], 0.0),
-                "element": _infer_element(atom_name, line[76:78]),
-            }
-        )
-
-    selected_atoms: List[Dict[str, object]] = []
-    removed_altlocs = 0
-    for key in order:
-        candidates = grouped[key]
-        if len(candidates) == 1:
-            selected_atoms.append(candidates[0])
-            continue
-        blank = [candidate for candidate in candidates if not candidate["altloc"]]
-        if blank:
-            selected = blank[0]
-        else:
-            preferred = [candidate for candidate in candidates if str(candidate["altloc"]).upper() == preferred_altloc.upper()]
-            if preferred:
-                selected = preferred[0]
-            else:
-                selected = max(candidates, key=lambda candidate: float(candidate["occupancy"]))
-        removed_altlocs += len(candidates) - 1
-        selected_atoms.append(selected)
-
-    element_counts: Dict[str, int] = defaultdict(int)
-    output_lines: List[str] = []
-    for serial, atom in enumerate(selected_atoms, start=1):
-        element = str(atom["element"] or "X")
-        element_counts[element] += 1
-        output_lines.append(
-            _format_pdb_atom_line(
-                record=str(atom["record"]),
-                serial=serial,
-                atom_name=_safe_atom_name(element, element_counts[element]),
-                resname=str(atom["resname"]),
-                chain_id=str(atom["chain_id"]),
-                resseq=str(atom["resseq"]),
-                icode=str(atom["icode"]),
-                x=float(atom["x"]),
-                y=float(atom["y"]),
-                z=float(atom["z"]),
-                occupancy=1.0,
-                bfactor=float(atom["bfactor"]),
-                element=element,
-            )
-        )
-    output_lines.append(f"TER   {len(selected_atoms) + 1:>5}      {selected_atoms[-1]['resname']:>3} {selected_atoms[-1]['chain_id'][:1]}{selected_atoms[-1]['resseq']:>4}")
-    output_lines.append("END")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
-    return {
-        "source_file": str(source),
-        "destination_file": str(destination),
-        "atom_count": len(selected_atoms),
-        "removed_altloc_atoms": removed_altlocs,
-    }
+    from .structure_contract import write_selection
+    return write_selection(source_file, destination_file, preferred_altloc=preferred_altloc)
 
 
-def validate_prepared_ligand_pdbqt(ligand_file: Path) -> List[LigandValidationIssue]:
+def validate_prepared_ligand_pdbqt(ligand_file: Path, selected_engines: Optional[Sequence[str]] = None) -> List[LigandValidationIssue]:
     path = Path(ligand_file).expanduser()
     if not path.exists():
         return [LigandValidationIssue(ligand=path.name, prepared_file=str(path), reason="missing_prepared_ligand", details="Prepared ligand file does not exist.")]
@@ -425,6 +255,43 @@ def validate_prepared_ligand_pdbqt(ligand_file: Path) -> List[LigandValidationIs
     root_count = _count_line_token(lines, "ROOT")
     torsdof_count = sum(1 for line in lines if line.startswith("TORSDOF"))
     issues: List[LigandValidationIssue] = []
+    from .structure_contract import coordinates
+    serials = set()
+    for line in atom_lines:
+        try:
+            coordinates(line)
+            serial = int(line[6:11])
+            if serial in serials:
+                raise ValueError("Duplicate atom serial")
+            serials.add(serial)
+            charge = float(line.split()[-2])
+            if not __import__("math").isfinite(charge):
+                raise ValueError("Nonfinite partial charge")
+        except (ValueError, IndexError) as exc:
+            issues.append(LigandValidationIssue(ligand=path.name, prepared_file=str(path), reason="invalid_atom_record", details=str(exc)))
+    stack = []
+    for line in lines:
+        if line.startswith(("BRANCH ", "ENDBRANCH ")):
+            try:
+                key = tuple(map(int, line.split()[1:]))
+                if len(key) != 2 or any(atom not in serials for atom in key):
+                    raise ValueError("Branch references absent atoms")
+                if line.startswith("BRANCH "):
+                    stack.append(key)
+                elif not stack or stack.pop() != key:
+                    raise ValueError("Unbalanced branch tree")
+            except ValueError as exc:
+                issues.append(LigandValidationIssue(ligand=path.name, prepared_file=str(path), reason="invalid_branch_tree", details=str(exc)))
+    if stack or _count_line_token(lines, "ENDROOT") != 1:
+        issues.append(LigandValidationIssue(ligand=path.name, prepared_file=str(path), reason="invalid_branch_tree", details="Unclosed branch or ROOT block"))
+    macrocycle_types = { _extract_atom_type(line) for line in atom_lines if re.fullmatch(r"(?:CG|G)[0-3]", _extract_atom_type(line)) }
+    if macrocycle_types and selected_engines and any(str(engine).lower() in {"autodock4", "smina"} for engine in selected_engines):
+        issues.append(LigandValidationIssue(ligand=path.name, prepared_file=str(path), reason="unsupported_macrocycle_protocol", details="Flexible macrocycles require an engine with a validated ring-closure protocol; prepare a rigid-ring conformer for this engine."))
+    for suffix in range(4):
+        cg = sum(_extract_atom_type(line) == f"CG{suffix}" for line in atom_lines)
+        glue = sum(_extract_atom_type(line) == f"G{suffix}" for line in atom_lines)
+        if cg != glue:
+            issues.append(LigandValidationIssue(ligand=path.name, prepared_file=str(path), reason="invalid_macrocycle_closure", details=f"Closure group {suffix} has {cg} carbons and {glue} pseudoatoms"))
 
     if not atom_lines:
         issues.append(
@@ -491,6 +358,7 @@ def audit_project_ligands(
     issues: List[LigandValidationIssue] = []
     warnings: List[str] = []
     admet_rows: List[Dict[str, object]] = []
+    screening_policy_issues: List[Dict[str, object]] = []
     normalized_admet = _normalize_ligand_admet_thresholds(admet_thresholds)
     normalized_admet["enable_admet_filters"] = bool(
         enable_admet_filters and normalized_admet.get("enable_admet_filters", True)
@@ -537,7 +405,8 @@ def audit_project_ligands(
                     raw_pdb_for_issue = raw_ligands_dir / f"{Path(ligand_name).stem}.pdb"
                     if raw_pdb_for_issue.exists():
                         issue.raw_pdb_file = str(raw_pdb_for_issue)
-                issues.append(issue)
+                screening_policy_issues.append(issue.to_dict())
+                warnings.append(f"Screening policy flag for {ligand_name}: {issue.details}")
             admet_rows.append(
                 {
                     "ligand": ligand_name,
@@ -559,6 +428,7 @@ def audit_project_ligands(
         "admet_filters_enabled": bool(normalized_admet["enable_admet_filters"]),
         "admet_thresholds": normalized_admet,
         "admet_metrics": admet_rows,
+        "screening_policy_issues": screening_policy_issues,
     }
     if report_path:
         report = Path(report_path).expanduser()
@@ -849,104 +719,35 @@ def _write_sdf_from_smiles(smiles: str, output_sdf: Path) -> None:
         writer.close()
 
 
-def repair_project_ligands(
-    project_root: Path,
-    ligand_names: Sequence[str],
-    preferred_altloc: str = "A",
-    backup_dir: Optional[Path] = None,
-) -> Dict[str, object]:
+def repair_project_ligands(project_root: Path, ligand_names: Sequence[str],
+                           preferred_altloc: str = "A", backup_dir: Optional[Path] = None) -> Dict[str, object]:
+    """Regenerate prepared artifacts from a graph source; never overwrite native references."""
     root = Path(project_root).expanduser().resolve()
     manifest = load_manifest(root)
-    layout_profile = detect_layout_profile(root)
-    layout = ensure_project_layout(root, layout_profile)
-
-    raw_ligands_dir = Path(manifest.get("raw_ligands_dir") or layout["raw_ligands"]).expanduser().resolve()
-    raw_ligands_sdf_dir = Path(manifest.get("raw_ligands_sdf_dir") or layout["raw_ligands_sdf"]).expanduser().resolve()
-    prepared_ligands_dir = Path(manifest.get("prepared_ligands_dir") or layout["prepared_ligands"]).expanduser().resolve()
-    docking_ligands_dir = Path(manifest.get("ligands_dir") or layout["ligands"]).expanduser().resolve()
-    metadata_dir = Path(manifest.get("metadata_dir") or layout["metadata"]).expanduser().resolve()
-
-    backup_root = Path(backup_dir).expanduser().resolve() if backup_dir else metadata_dir / "ligand_repair_backups"
-    repaired: List[Dict[str, object]] = []
-
+    layout = ensure_project_layout(root, detect_layout_profile(root))
+    raw_dir = Path(manifest.get("raw_ligands_sdf_dir") or layout["raw_ligands_sdf"])
+    prepared_dir = Path(manifest.get("prepared_ligands_dir") or layout["prepared_ligands"])
+    docking_dir = Path(manifest.get("ligands_dir") or layout["ligands"])
+    backup_root = Path(backup_dir) if backup_dir else Path(manifest.get("metadata_dir") or layout["metadata"]) / "ligand_repair_backups"
+    repaired = []
     for ligand_name in ligand_names:
         stem = Path(ligand_name).stem
-        raw_pdb = raw_ligands_dir / f"{stem}.pdb"
-        raw_sdf = raw_ligands_sdf_dir / f"{stem}.sdf"
-        prepared_pdbqt = prepared_ligands_dir / f"{stem}.pdbqt"
-        docking_pdbqt = docking_ligands_dir / f"{stem}.pdbqt"
-
-        stamp_dir = backup_root / stem
-        stamp_dir.mkdir(parents=True, exist_ok=True)
-        for original in (raw_pdb, raw_sdf, prepared_pdbqt, docking_pdbqt):
-            if original.exists():
-                backup_path = stamp_dir / original.name
-                if not backup_path.exists():
-                    shutil.copy2(original, backup_path)
-
-        with tempfile.TemporaryDirectory(prefix=f"ligand_repair_{stem}_") as tmp_dir:
-            temp_dir = Path(tmp_dir)
-            sanitized_pdb = temp_dir / f"{stem}.pdb"
-            sanitized_sdf = temp_dir / f"{stem}.sdf"
-            sanitized_pdbqt = temp_dir / f"{stem}.pdbqt"
-            source_mode = "raw_pdb"
-            if raw_pdb.exists():
-                sanitize_summary = sanitize_ligand_pdb_file(raw_pdb, sanitized_pdb, preferred_altloc=preferred_altloc)
-                _run_command(["obabel", str(sanitized_pdb), "-O", str(sanitized_sdf)])
-            elif raw_sdf.exists():
-                source_mode = "raw_sdf"
-                sanitize_summary = {
-                    "source_file": str(raw_sdf),
-                    "destination_file": str(sanitized_sdf),
-                    "atom_count": 0,
-                    "removed_altloc_atoms": 0,
-                }
-                shutil.copy2(raw_sdf, sanitized_sdf)
-                _run_command(["obabel", str(sanitized_sdf), "-O", str(sanitized_pdb)])
-            else:
-                smiles = _extract_smiles_from_prepared_ligand(prepared_pdbqt if prepared_pdbqt.exists() else docking_pdbqt)
-                if not smiles:
-                    raise FileNotFoundError(
-                        f"Could not repair {ligand_name}: no raw PDB, no raw SDF, and no usable REMARK SMILES were found"
-                    )
-                source_mode = "prepared_smiles"
-                _write_sdf_from_smiles(smiles, sanitized_sdf)
-                _run_command(["obabel", str(sanitized_sdf), "-O", str(sanitized_pdb)])
-                sanitize_summary = {
-                    "source_file": str(prepared_pdbqt if prepared_pdbqt.exists() else docking_pdbqt),
-                    "destination_file": str(sanitized_sdf),
-                    "atom_count": 0,
-                    "removed_altloc_atoms": 0,
-                    "smiles": smiles,
-                }
-            prep_method = _prepare_ligand_pdbqt(sanitized_sdf, sanitized_pdbqt)
-            atom_type_repair = sanitize_prepared_ligand_pdbqt(sanitized_pdbqt, sanitized_pdbqt)
-            issues = validate_prepared_ligand_pdbqt(sanitized_pdbqt)
-            if issues:
-                raise ValueError(f"Repaired ligand {ligand_name} is still invalid: {[issue.reason for issue in issues]}")
-
-            shutil.copy2(sanitized_pdb, raw_pdb)
-            shutil.copy2(sanitized_sdf, raw_sdf)
-            shutil.copy2(sanitized_pdbqt, prepared_pdbqt)
-            if docking_pdbqt.exists() or docking_pdbqt.is_symlink():
-                docking_pdbqt.unlink()
-            shutil.copy2(sanitized_pdbqt, docking_pdbqt)
-            repaired.append(
-                {
-                    "ligand": ligand_name,
-                    "source_mode": source_mode,
-                    "raw_pdb": str(raw_pdb),
-                    "raw_sdf": str(raw_sdf),
-                    "prepared_pdbqt": str(prepared_pdbqt),
-                    "docking_pdbqt": str(docking_pdbqt),
-                    "prep_method": prep_method,
-                    "sanitize_summary": sanitize_summary,
-                    "atom_type_repair": atom_type_repair,
-                }
-            )
-
-    report_path = metadata_dir / "ligand_repair_report.json"
-    payload = {"project_root": str(root), "repaired_ligands": repaired, "backup_dir": str(backup_root)}
-    report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    payload["report_path"] = str(report_path)
-    return payload
+        source = raw_dir / f"{stem}.sdf"
+        if not source.exists():
+            raise FileNotFoundError(f"Cannot repair {ligand_name}: an authoritative SDF is required; PDB coordinate inference is not a repair")
+        with tempfile.TemporaryDirectory(prefix=f"ligand_repair_{stem}_") as temporary:
+            generated = Path(temporary) / f"{stem}.pdbqt"
+            summary = prepare_ligand_for_vina_family(source, generated)
+            for directory in {prepared_dir, docking_dir}:
+                directory.mkdir(parents=True, exist_ok=True)
+                destination = directory / generated.name
+                if destination.exists():
+                    backup = backup_root / stem / directory.name / destination.name
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    if not backup.exists():
+                        shutil.copy2(destination, backup)
+                shutil.copy2(generated, destination)
+                metadata = dict(summary, output_file=str(destination.resolve()))
+                destination.with_suffix(destination.suffix + ".preparation.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            repaired.append({"ligand": ligand_name, "source_mode": "authoritative_sdf", "preparation_method": summary["preparation_method"], "native_reference_preserved": True})
+    return {"project_root": str(root), "repaired_count": len(repaired), "repaired": repaired, "backup_dir": str(backup_root)}

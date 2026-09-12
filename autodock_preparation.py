@@ -38,7 +38,7 @@ class PreparationConfig:
     receptors_output: str
     force_field: str = "AMBER"
     ph: float = 7.4
-    allow_bad_res: bool = True
+    allow_bad_res: bool = False
     default_altloc: str = "A"
     receptor_use_pdb2pqr: bool = False
     validate_outputs: bool = True
@@ -275,7 +275,7 @@ class AutoDockPreparationPipeline:
         missing_optional = [tool for tool in optional_tools if not self._tool_usable(tool)]
         if missing_optional:
             self.logger.warning(
-                "Optional preparation tools missing; shell fallback paths will be used where possible: %s",
+                "Preparation tools missing; stages requiring these tools will fail with diagnostics: %s",
                 ", ".join(missing_optional),
             )
 
@@ -339,7 +339,9 @@ class AutoDockPreparationPipeline:
                 
             # Get the first ligand (or let user choose)
             ligand_name = unique_hetatms[0]
-            ligand_info = hetatm_details[ligand_name][0]
+            ligand_info = next(({"chain": chain, "res_id": resid} for name, chain, resid, _ in hetatm_details if name == ligand_name), None)
+            if ligand_info is None:
+                raise ValueError("Selected ligand instance was not found")
             
             # Extract PDB ID from filename (e.g., "1ABC.pdb" -> "1ABC")
             pdb_id = Path(pdb_file).stem.upper()

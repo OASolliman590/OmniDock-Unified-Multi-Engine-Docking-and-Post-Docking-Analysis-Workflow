@@ -4,6 +4,15 @@ Setup script for PDB Prepare Wizard
 """
 
 from setuptools import setup, find_packages
+from setuptools.command.build_py import build_py
+from pathlib import Path
+
+
+class BuildWithPreparationScript(build_py):
+    """Keep the shell backend beside the installed preparation Python module."""
+    def run(self):
+        super().run()
+        self.copy_file("prep_autodock_enhanced.sh", str(Path(self.build_lib) / "prep_autodock_enhanced.sh"))
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
@@ -20,20 +29,29 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="",
-    packages=find_packages(),
+    packages=find_packages(exclude=("test", "test.*", "audit", "audit.*")),
+    py_modules=["main", "core_pipeline", "cli_pipeline", "interactive_pipeline",
+                "batch_pdb_preparation", "autodock_preparation"],
+    package_data={"post_docking_analysis": ["config/*.yaml"]},
+    cmdclass={"build_py": BuildWithPreparationScript},
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.12",
         "Topic :: Scientific/Engineering :: Bio-Informatics",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     install_requires=requirements,
+    extras_require={
+        "chemistry": ["rdkit>=2024.3", "meeko>=0.6", "gemmi>=0.6"],
+        "interactions": ["rdkit>=2024.3", "plip>=2.2", "prolif>=2.0", "MDAnalysis>=2.6"],
+        "dev": ["pytest>=8", "build>=1", "wheel"],
+        "notebooks": ["jupyter>=1.0"],
+    },
     entry_points={
         "console_scripts": [
             "pdb-prepare-wizard=main:main",

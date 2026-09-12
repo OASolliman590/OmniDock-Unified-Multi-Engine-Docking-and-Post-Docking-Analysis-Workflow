@@ -1,0 +1,963 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock
+configfile: pytest.ini
+collecting ... collected 226 items
+
+test/test_dockforge_smoke.py::_smoke_deterministic_run_id_utility PASSED [  0%]
+test/test_dockforge_smoke.py::_smoke_feature_flags_and_checkpoint_scaffold PASSED [  0%]
+test/test_dockforge_smoke.py::_smoke_background_task_non_blocking PASSED [  1%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_executor PASSED      [  1%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_cache_hit PASSED     [  2%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_registration_contract PASSED [  2%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_scope_request_contract PASSED [  3%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_pipeline_run_contract PASSED [  3%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_cli_scope_contract PASSED [  3%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_default_runner_migration_contract PASSED [  4%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_full_parallel_execution_contract PASSED [  4%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_unchanged_rerun_cache_contract PASSED [  5%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_parameter_invalidation_contract PASSED [  5%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_optional_failure_isolation_contract PASSED [  6%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_default_comparison_only_contract PASSED [  6%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract PASSED [  7%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract PASSED [  7%]
+test/test_dockforge_smoke.py::_smoke_artifact_graph_per_complex_warning_contract PASSED [  7%]
+test/test_dockforge_smoke.py::_smoke_meta_artifact_writers PASSED        [  8%]
+test/test_dockforge_smoke.py::_smoke_checkpoint_revise_lineage_integrity PASSED [  8%]
+test/test_dockforge_smoke.py::_smoke_manifest_completeness_and_deterministic_paths PASSED [  9%]
+test/test_dockforge_smoke.py::_smoke_sqlite_parity_and_skip_rationale PASSED [  9%]
+test/test_dockforge_smoke.py::_smoke_extension_stubs PASSED              [ 10%]
+test/test_dockforge_smoke.py::_smoke_simplified_cli_unified_wrapper_contract PASSED [ 10%]
+test/test_dockforge_smoke.py::_smoke_run_analysis_target_unified_delegation PASSED [ 11%]
+test/test_dockforge_smoke.py::_smoke_config_override_overlay_contract PASSED [ 11%]
+test/test_dockforge_smoke.py::_smoke_run_analysis_target_delegation_config_forwarding_contract PASSED [ 11%]
+test/test_dockforge_smoke.py::_smoke_simplified_cli_wrapper_config_forwarding_contract PASSED [ 12%]
+test/test_dockforge_smoke.py::_smoke_user_facing_analysis_unified_path_contract PASSED [ 12%]
+test/test_dockforge_smoke.py::_smoke_clean_interaction_cli_dispatch_contract PASSED [ 13%]
+test/test_dockforge_smoke.py::_smoke_clean_interaction_cli_shortcut_contract PASSED [ 13%]
+test/test_dockforge_smoke.py::_smoke_non_gnina_rmsd_enforcement_contract PASSED [ 14%]
+test/test_dockforge_smoke.py::_smoke_legacy_stage_routes_blocked_contract PASSED [ 14%]
+test/test_dockforge_smoke.py::_smoke_non_gnina_bridge_no_legacy_stage_execution_contract PASSED [ 15%]
+test/test_dockforge_smoke.py::_smoke_private_analysis_helpers_reject_interaction_alias_bypass_contract PASSED [ 15%]
+test/test_dockforge_smoke.py::_smoke_interactive_clean_alias_collapse_contract PASSED [ 15%]
+test/test_dockforge_smoke.py::_smoke_interactive_run_tracking_summary_surface_contract PASSED [ 16%]
+test/test_dockforge_smoke.py::_smoke_interactive_favorite_flow_clean_followup_contract PASSED [ 16%]
+test/test_dockforge_smoke.py::_smoke_noninteractive_interaction_alias_to_clean_contract PASSED [ 17%]
+test/test_dockforge_smoke.py::_smoke_noninteractive_interaction_alias_cli_contract PASSED [ 17%]
+test/test_dockforge_smoke.py::_smoke_prompt_back_navigation_contract PASSED [ 18%]
+test/test_dockforge_smoke.py::_smoke_hpc_interactive_qc_bypass_contract PASSED [ 18%]
+test/test_dockforge_smoke.py::_smoke_hpc_interactive_admet_bypass_contract PASSED [ 19%]
+test/test_dockforge_smoke.py::_smoke_hpc_profile_yaml_loader_contract PASSED [ 19%]
+test/test_dockforge_smoke.py::_smoke_interactive_ssh_systems_yaml_contract PASSED [ 19%]
+test/test_dockforge_smoke.py::_smoke_nmrbox_condor_slot_parser_contract PASSED [ 20%]
+test/test_dockforge_smoke.py::_smoke_nmrbox_condor_fit_probe_contract PASSED [ 20%]
+test/test_dockforge_smoke.py::_smoke_analysis_session_progress_file_contract PASSED [ 21%]
+test/test_dockforge_smoke.py::_smoke_profile_validator PASSED            [ 21%]
+test/test_dockforge_smoke.py::_smoke_top_pose_selector_determinism PASSED [ 22%]
+test/test_dockforge_smoke.py::_smoke_top_pose_consensus_direction_contracts PASSED [ 22%]
+test/test_dockforge_smoke.py::_smoke_consensus_direction_and_single_engine_qc PASSED [ 23%]
+test/test_dockforge_smoke.py::_smoke_dag_reference_baselines_wiring_contract PASSED [ 23%]
+test/test_dockforge_smoke.py::_smoke_geometric_consensus_soft_alignment_contract PASSED [ 23%]
+test/test_dockforge_smoke.py::_smoke_geometric_consensus_hard_mismatch_contract PASSED [ 24%]
+test/test_dockforge_smoke.py::_smoke_redocking_multi_pose_sdf_parser_contract PASSED [ 24%]
+test/test_dockforge_smoke.py::_smoke_redocking_validation_multi_pose_end_to_end_contract PASSED [ 25%]
+test/test_dockforge_smoke.py::_smoke_favorite_engine_scope_guard_contract PASSED [ 25%]
+test/test_dockforge_smoke.py::_smoke_favorite_engine_empty_scope_guard_contract PASSED [ 26%]
+test/test_dockforge_smoke.py::_smoke_pairlist_directional_matching_contract PASSED [ 26%]
+test/test_dockforge_smoke.py::_smoke_pose_parser_chain_and_dashboard_contract PASSED [ 26%]
+test/test_dockforge_smoke.py::_smoke_multiligand_residue_identity_contract PASSED [ 27%]
+test/test_dockforge_smoke.py::_smoke_vina_cnn_correlation_stats_contract PASSED [ 27%]
+test/test_dockforge_smoke.py::_smoke_cross_engine_correlation_contract_sparse_and_mixed PASSED [ 28%]
+test/test_dockforge_smoke.py::_smoke_consensus_mode_isolation_contract PASSED [ 28%]
+test/test_dockforge_smoke.py::_smoke_prepare_guard PASSED                [ 29%]
+test/test_dockforge_smoke.py::_smoke_prepare_ph_guard PASSED             [ 29%]
+test/test_dockforge_smoke.py::_smoke_ligand_output_contract_validator PASSED [ 30%]
+test/test_dockforge_smoke.py::_smoke_preparation_preflight_artifacts PASSED [ 30%]
+test/test_dockforge_smoke.py::_smoke_preparation_mode_matrix PASSED      [ 30%]
+test/test_dockforge_smoke.py::_smoke_execution_environment_and_schema PASSED [ 31%]
+test/test_dockforge_smoke.py::_smoke_docking_preflight PASSED            [ 31%]
+test/test_dockforge_smoke.py::_smoke_docking_preflight_receptor_qc_gate PASSED [ 32%]
+test/test_dockforge_smoke.py::_smoke_hpc_deploy_receptor_qc_gate PASSED  [ 32%]
+test/test_dockforge_smoke.py::_smoke_post_docking_allscore_contracts PASSED [ 33%]
+test/test_dockforge_smoke.py::_smoke_biology_unresolved_mapping_reporting PASSED [ 33%]
+test/test_dockforge_smoke.py::_smoke_plugin_system_retired_contract PASSED [ 34%]
+test/test_dockforge_smoke.py::_smoke_complex_export_index_contract PASSED [ 34%]
+test/test_dockforge_smoke.py::_smoke_unified_output_topology_contract PASSED [ 34%]
+test/test_dockforge_smoke.py::_smoke_visualization_suite_core_contracts PASSED [ 35%]
+test/test_dockforge_smoke.py::_smoke_visualization_suite_single_engine_conditionals PASSED [ 35%]
+test/test_dockforge_smoke.py::_smoke_visualization_suite_skip_policies_and_no_raise PASSED [ 36%]
+test/test_dockforge_smoke.py::_smoke_visualization_suite_scientific_guardrails PASSED [ 36%]
+test/test_dockforge_smoke.py::_smoke_visualization_suite_start_here_embedding_contract PASSED [ 37%]
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing PASSED [ 37%]
+test/test_dockforge_smoke.py::_smoke_engine_detection_autodock4_parity_contract PASSED [ 38%]
+test/test_dockforge_smoke.py::_smoke_engine_hpc_adapter_parity_contract PASSED [ 38%]
+test/test_dockforge_smoke.py::_smoke_run_tracking_schema_consistency_contract PASSED [ 38%]
+test/test_dockforge_smoke.py::_smoke_optional_feature_taxonomy_contract PASSED [ 39%]
+test/test_dockforge_smoke.py::_smoke_simplified_pipeline_interaction_contract_stages PASSED [ 39%]
+test/test_dockforge_smoke.py::_smoke_pandamap_publication_artifact_contract PASSED [ 40%]
+test/test_dockforge_smoke.py::_smoke_pandamap_quality_gate_contract PASSED [ 40%]
+test/test_dockforge_smoke.py::_smoke_engine_detection_cache_override_contract PASSED [ 41%]
+test/test_dockforge_smoke.py::_smoke_rmsd_scope_normalizer_contract PASSED [ 41%]
+test/test_dockforge_smoke.py::_smoke_strict_consensus_single_engine_warning_contract PASSED [ 42%]
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_foundation PASSED [ 42%]
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance PASSED [ 42%]
+test/test_dockforge_smoke.py::_smoke_engine_scope_picker_zero_guard PASSED [ 43%]
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics PASSED [ 43%]
+test/test_dockforge_smoke.py::_smoke_cli_interactive_fallback_and_gnina_complex_export PASSED [ 44%]
+test/test_docking_correctness.py::test_resume_requires_exact_inputs_protocol_and_validated_output PASSED [ 44%]
+test/test_docking_correctness.py::test_empty_legacy_pose_does_not_resume PASSED [ 45%]
+test/test_docking_correctness.py::test_failed_rerun_retires_old_pose_and_clears_scores PASSED [ 45%]
+test/test_docking_correctness.py::test_invalid_output_and_startup_failure_never_complete[missing] PASSED [ 46%]
+test/test_docking_correctness.py::test_invalid_output_and_startup_failure_never_complete[empty] PASSED [ 46%]
+test/test_docking_correctness.py::test_invalid_output_and_startup_failure_never_complete[truncated] PASSED [ 46%]
+test/test_docking_correctness.py::test_invalid_output_and_startup_failure_never_complete[startup] PASSED [ 47%]
+test/test_docking_correctness.py::test_changed_input_after_plan_does_not_execute PASSED [ 47%]
+test/test_docking_correctness.py::test_input_mutation_during_execution_invalidates_result PASSED [ 48%]
+test/test_docking_correctness.py::test_existing_job_lock_prevents_artifact_retirement PASSED [ 48%]
+test/test_docking_correctness.py::test_interruption_clears_old_score_table PASSED [ 49%]
+test/test_docking_correctness.py::test_cli_returns_failure_for_failed_engine PASSED [ 49%]
+test/test_docking_correctness.py::test_portable_deployment_uses_shared_executor_and_posix_paths[generate_slurm_deployment-options0] PASSED [ 50%]
+test/test_docking_correctness.py::test_portable_deployment_uses_shared_executor_and_posix_paths[generate_condor_deployment-options1] PASSED [ 50%]
+test/test_docking_correctness.py::test_deploy_preserves_reviewed_local_protocol PASSED [ 50%]
+test/test_docking_correctness.py::test_gnina_resource_flags_independent PASSED [ 51%]
+test/test_docking_correctness.py::test_gnina_scores_come_from_poses_not_runner_log PASSED [ 51%]
+test/test_docking_correctness.py::test_ad4_grid_and_parameter_files_are_portable_and_consistent PASSED [ 52%]
+test/test_docking_correctness.py::test_ad4_adt_branch_supplies_same_custom_parameters PASSED [ 52%]
+test/test_docking_correctness.py::test_required_qc_exceptions_block[ligand] PASSED [ 53%]
+test/test_docking_correctness.py::test_required_qc_exceptions_block[receptor] PASSED [ 53%]
+test/test_docking_correctness.py::test_invalid_geometry_blocks[center_x-nan] PASSED [ 53%]
+test/test_docking_correctness.py::test_invalid_geometry_blocks[size_x--1] PASSED [ 54%]
+test/test_docking_correctness.py::test_invalid_geometry_blocks[size_y-inf] PASSED [ 54%]
+test/test_docking_correctness.py::test_invalid_geometry_blocks[size_z-0] PASSED [ 55%]
+test/test_docking_correctness.py::test_nonfinite_box_schema_rejected PASSED [ 55%]
+test/test_docking_correctness.py::test_reference_coordinate_provenance_survives_conversion_and_scaling PASSED [ 56%]
+test/test_docking_correctness.py::test_symlink_privilege_failure_has_usable_fallback PASSED [ 56%]
+test/test_docking_correctness.py::test_multimodel_sdf_and_ad4_completion_validation PASSED [ 57%]
+test/test_docking_correctness.py::test_bundled_executor_runs_without_repository_imports PASSED [ 57%]
+test/test_docking_correctness.py::test_wrapped_or_partially_resolved_engines_cannot_certify_resume PASSED [ 57%]
+test/test_docking_correctness.py::test_attempt_provenance_does_not_repeat_long_pose_names PASSED [ 58%]
+test/test_postdocking_correctness.py::test_docking_rmsd_preserves_translation_and_rotation PASSED [ 58%]
+test/test_postdocking_correctness.py::test_graph_permutation_preserves_pose_rmsd PASSED [ 59%]
+test/test_postdocking_correctness.py::test_same_size_different_chemistry_is_rejected PASSED [ 59%]
+test/test_postdocking_correctness.py::test_sdf_selects_exact_record_with_empty_title PASSED [ 60%]
+test/test_postdocking_correctness.py::test_pdbqt_selects_single_model_and_never_guesses_graph PASSED [ 60%]
+test/test_postdocking_correctness.py::test_meeko_smiles_mapping_preserves_atom_identity PASSED [ 61%]
+test/test_postdocking_correctness.py::test_meeko_macrocycle_pseudoatoms_do_not_change_chemical_atom_count PASSED [ 61%]
+test/test_postdocking_correctness.py::test_geometric_missingness_cannot_pass[file] PASSED [ 61%]
+test/test_postdocking_correctness.py::test_geometric_missingness_cannot_pass[frame] PASSED [ 62%]
+test/test_postdocking_correctness.py::test_geometric_missingness_cannot_pass[engine] PASSED [ 62%]
+test/test_postdocking_correctness.py::test_geometric_identical_graphs_common_frame_pass PASSED [ 63%]
+test/test_postdocking_correctness.py::test_missing_or_false_reference_flags_are_not_evidence[nan] PASSED [ 63%]
+test/test_postdocking_correctness.py::test_missing_or_false_reference_flags_are_not_evidence[None] PASSED [ 64%]
+test/test_postdocking_correctness.py::test_missing_or_false_reference_flags_are_not_evidence[False] PASSED [ 64%]
+test/test_postdocking_correctness.py::test_missing_or_false_reference_flags_are_not_evidence[false] PASSED [ 65%]
+test/test_postdocking_correctness.py::test_missing_or_false_reference_flags_are_not_evidence[0] PASSED [ 65%]
+test/test_postdocking_correctness.py::test_reference_discovery_never_uses_raw_conformer PASSED [ 65%]
+test/test_postdocking_correctness.py::test_redocking_uses_selected_pose_and_requires_provenance PASSED [ 66%]
+test/test_postdocking_correctness.py::test_sparse_validation_does_not_claim_high_confidence PASSED [ 66%]
+test/test_postdocking_correctness.py::test_failed_reference_jobs_remain_in_validation_coverage PASSED [ 67%]
+test/test_postdocking_correctness.py::test_explicit_import_is_hash_checked_and_marked_unverified PASSED [ 67%]
+test/test_postdocking_correctness.py::test_explicit_import_rejects_invalid_identity_score_and_pose[pose-1.5] PASSED [ 68%]
+test/test_postdocking_correctness.py::test_explicit_import_rejects_invalid_identity_score_and_pose[pose-nan] PASSED [ 68%]
+test/test_postdocking_correctness.py::test_explicit_import_rejects_invalid_identity_score_and_pose[affinity_kcal_mol-inf] PASSED [ 69%]
+test/test_postdocking_correctness.py::test_explicit_import_rejects_invalid_identity_score_and_pose[ligand-] PASSED [ 69%]
+test/test_postdocking_correctness.py::test_all_normalizers_preserve_scientific_direction[affinity_kcal_mol-values0-per_engine_rank] PASSED [ 69%]
+test/test_postdocking_correctness.py::test_all_normalizers_preserve_scientific_direction[affinity_kcal_mol-values0-per_engine_minmax] PASSED [ 70%]
+test/test_postdocking_correctness.py::test_all_normalizers_preserve_scientific_direction[affinity_kcal_mol-values0-per_engine_zscore] PASSED [ 70%]
+test/test_postdocking_correctness.py::test_all_normalizers_preserve_scientific_direction[cnn_affinity-values1-per_engine_rank] PASSED [ 71%]
+test/test_postdocking_correctness.py::test_all_normalizers_preserve_scientific_direction[cnn_affinity-values1-per_engine_minmax] PASSED [ 71%]
+test/test_postdocking_correctness.py::test_all_normalizers_preserve_scientific_direction[cnn_affinity-values1-per_engine_zscore] PASSED [ 72%]
+test/test_postdocking_correctness.py::test_gnina_selectors_prefer_higher_predicted_pk PASSED [ 72%]
+test/test_postdocking_correctness.py::test_atlas_agrees_with_consensus_score_direction[weighted_hybrid] PASSED [ 73%]
+test/test_postdocking_correctness.py::test_atlas_agrees_with_consensus_score_direction[strict_consensus] PASSED [ 73%]
+test/test_postdocking_correctness.py::test_atlas_agrees_with_consensus_score_direction[dockbox_geometric] PASSED [ 73%]
+test/test_postdocking_correctness.py::test_atlas_agrees_with_consensus_score_direction[favorite_guardrails] PASSED [ 74%]
+test/test_postdocking_correctness.py::test_engine_score_offset_does_not_change_consensus_winner_or_rank PASSED [ 74%]
+test/test_postdocking_correctness.py::test_reference_anchor_requires_same_engine_and_scoring_function PASSED [ 75%]
+test/test_postdocking_correctness.py::test_invalid_reference_pose_index_only_disables_that_row[nan] PASSED [ 75%]
+test/test_postdocking_correctness.py::test_invalid_reference_pose_index_only_disables_that_row[bad] PASSED [ 76%]
+test/test_postdocking_correctness.py::test_invalid_reference_pose_index_only_disables_that_row[0] PASSED [ 76%]
+test/test_postdocking_correctness.py::test_invalid_reference_pose_index_only_disables_that_row[1.5] PASSED [ 76%]
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report PASSED [ 77%]
+test/test_postdocking_correctness.py::test_atlas_cross_engine_identity_and_rank_ignore_raw_score_offset PASSED [ 77%]
+test/test_postdocking_correctness.py::test_requested_missing_engine_remains_in_consensus_denominator PASSED [ 78%]
+test/test_postdocking_correctness.py::test_sole_autodock4_route_keeps_and_ranks_its_own_scores PASSED [ 78%]
+test/test_postdocking_correctness.py::test_pdbqt_heavy_atom_denominator_uses_one_pose_and_excludes_pseudoatoms PASSED [ 79%]
+test/test_postdocking_correctness.py::test_agreement_table_reports_named_consensus_representative_score PASSED [ 79%]
+test/test_postdocking_correctness.py::test_unchecked_geometry_is_not_qc_pass PASSED [ 80%]
+test/test_postdocking_correctness.py::test_biology_replicates_cannot_duplicate_candidates PASSED [ 80%]
+test/test_postdocking_correctness.py::test_missing_smina_rmsd_is_not_zero PASSED [ 80%]
+test/test_postdocking_correctness.py::test_runner_and_unlisted_logs_do_not_enter_scores PASSED [ 81%]
+test/test_postdocking_correctness.py::test_source_cache_detects_same_timestamp_edits_and_deletions PASSED [ 81%]
+test/test_postdocking_correctness.py::test_receptor_export_preserves_chains_and_cofactor_records PASSED [ 82%]
+test/test_preparation_correctness.py::test_extraction_preserves_identity_charge_connectivity_and_shared_frame PASSED [ 82%]
+test/test_preparation_correctness.py::test_altloc_requires_one_complete_conformer_and_keeps_occupancy PASSED [ 83%]
+test/test_preparation_correctness.py::test_multimodel_is_rejected_instead_of_merging PASSED [ 83%]
+test/test_preparation_correctness.py::test_default_cli_removes_only_selected_ligand_instance PASSED [ 84%]
+test/test_preparation_correctness.py::test_site_envelope_contacts_are_order_independent_and_chain_specific PASSED [ 84%]
+test/test_preparation_correctness.py::test_unsupported_pocket_metrics_are_not_fabricated PASSED [ 84%]
+test/test_preparation_correctness.py::test_nonfinite_receptor_is_rejected[nan] PASSED [ 85%]
+test/test_preparation_correctness.py::test_nonfinite_receptor_is_rejected[inf] PASSED [ 85%]
+test/test_preparation_correctness.py::test_macrocycle_closure_types_are_preserved_and_engine_qualified PASSED [ 86%]
+test/test_preparation_correctness.py::test_real_meeko_macrocycle_output_survives_validation_and_copy SKIPPEDonds: An Application Control policy
+has blocked this file.)                                                  [ 86%]
+test/test_preparation_correctness.py::test_unknown_type_repair_cannot_delete_chemistry PASSED [ 87%]
+test/test_preparation_correctness.py::test_pdb_cannot_be_treated_as_authoritative_ligand_chemistry PASSED [ 87%]
+test/test_preparation_correctness.py::test_ph_failure_does_not_fall_back_to_add_hydrogens PASSED [ 88%]
+test/test_preparation_correctness.py::test_missing_openbabel_does_not_substitute_untreated_rdkit_state PASSED [ 88%]
+test/test_preparation_correctness.py::test_receptor_backend_cannot_silently_drop_heavy_atoms PASSED [ 88%]
+test/test_preparation_correctness.py::test_strict_receptor_propagates_original_coordinate_frame PASSED [ 89%]
+test/test_preparation_correctness.py::test_builder_selects_cleaned_receptor_and_rejects_ambiguous_conformations PASSED [ 89%]
+test/test_preparation_correctness.py::test_materialization_rejects_stale_copied_input PASSED [ 90%]
+test/test_preparation_correctness.py::test_reference_metadata_does_not_mislabel_cross_docking PASSED [ 90%]
+test/test_preparation_correctness.py::test_spreadsheet_rejects_duplicate_sites_and_nonfinite_centers PASSED [ 91%]
+test/test_preparation_correctness.py::test_project_build_preserves_verified_native_reference_and_frame PASSED [ 91%]
+test/test_reference_chemistry.py::test_authoritative_instance_retains_native_coordinates_and_graph PASSED [ 92%]
+test/test_reference_chemistry.py::test_instance_coordinates_are_never_aligned_to_hide_mismatch PASSED [ 92%]
+test/test_reference_chemistry.py::test_generated_conformer_cannot_become_experimental_reference PASSED [ 92%]
+test/test_reference_chemistry.py::test_multiple_instance_records_are_rejected PASSED [ 93%]
+test/test_workflow_correctness.py::test_graph_blocks_every_descendant_of_failed_node PASSED [ 93%]
+test/test_workflow_correctness.py::test_lock_timeout_also_bounds_competing_threads PASSED [ 94%]
+test/test_workflow_correctness.py::test_graph_rejects_success_without_declared_output PASSED [ 94%]
+test/test_workflow_correctness.py::test_graph_rejects_false_even_with_old_output PASSED [ 95%]
+test/test_workflow_correctness.py::test_graph_missing_external_input_blocks_callback PASSED [ 95%]
+test/test_workflow_correctness.py::test_old_output_does_not_satisfy_successful_noop PASSED [ 96%]
+test/test_workflow_correctness.py::test_failed_optional_recomputation_cannot_feed_stale_output PASSED [ 96%]
+test/test_workflow_correctness.py::test_cache_detects_same_size_content_change_with_preserved_timestamp PASSED [ 96%]
+test/test_workflow_correctness.py::test_cache_detects_nested_directory_content_change PASSED [ 97%]
+test/test_workflow_correctness.py::test_cache_rejects_modified_output PASSED [ 97%]
+test/test_workflow_correctness.py::test_input_mutation_during_computation_is_not_cached_as_success PASSED [ 98%]
+test/test_workflow_correctness.py::test_optional_missing_input_is_explicit_and_does_not_block_report PASSED [ 98%]
+test/test_workflow_correctness.py::test_state_concurrent_threads_preserve_all_updates PASSED [ 99%]
+test/test_workflow_correctness.py::test_state_concurrent_processes_preserve_all_updates PASSED [ 99%]
+test/test_workflow_correctness.py::test_checkpoint_order_is_newest_first_even_when_timestamps_tie PASSED [100%]
+
+============================== warnings summary ===============================
+test/test_dockforge_smoke.py::_smoke_artifact_graph_registration_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_registration_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_registry_aof8e_8b\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_registry_aof8e_8b\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_registration_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_registry_aof8e_8b\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_registry_aof8e_8b\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_registration_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_registry_aof8e_8b\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_registry_aof8e_8b\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py: 33 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_scope_yb5mgf62\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_scope_yb5mgf62\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py: 17 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_scope_yb5mgf62\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_scope_yb5mgf62\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_scope_request_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_scope_request_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_scope_request_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_scope_request_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_scope_request_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_scope_request_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_scope_yb5mgf62\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_scope_yb5mgf62\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py: 59 warnings
+  C:\Users\salma\AppData\Local\Programs\Python\Python312\Lib\site-packages\seaborn\categorical.py:700: MatplotlibDeprecationWarning: vert: bool was deprecated in Matplotlib 3.11 and will be removed in 3.13. Use orientation: {'vertical', 'horizontal'} instead.
+    artists = ax.bxp(**boxplot_kws)
+
+test/test_dockforge_smoke.py: 40 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\visualization_suite.py:281: UserWarning: set_ticklabels() should only be used with a fixed number of ticks, i.e. after set_ticks() or using a FixedLocator. Otherwise, ticks may be mislabeled.
+    ax.set_xticklabels(wrapped, rotation=rotation, ha="right", fontsize=fontsize)
+
+test/test_dockforge_smoke.py: 36 warnings
+  C:\Users\salma\AppData\Local\Programs\Python\Python312\Lib\site-packages\seaborn\matrix.py:243: PendingDeprecationWarning: The set_bad function will be deprecated in a future version. Use cmap.with_extremes(bad=...) or Colormap(bad=...) instead.
+    self.cmap.set_bad(bad)
+
+test/test_dockforge_smoke.py: 14 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\visualization_suite.py:1019: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+    fig.tight_layout()
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_pipeline_run_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_pipeline_run_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_pipeline_run_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_pipeline_run_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_run_fzzmjbhu\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_run_fzzmjbhu\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_pipeline_run_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_pipeline_run_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_run_fzzmjbhu\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_run_fzzmjbhu\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_pipeline_run_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_run_fzzmjbhu\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_run_fzzmjbhu\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_cli_scope_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_cli_scope_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_cli_scope_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_cli_scope_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_cli_c7qyfuj8\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_cli_c7qyfuj8\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_cli_scope_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_cli_scope_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_cli_scope_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_cli_c7qyfuj8\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_cli_c7qyfuj8\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_cli_scope_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_cli_c7qyfuj8\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_cli_c7qyfuj8\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py: 13 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_full_parallel_ludu26c9\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_full_parallel_ludu26c9\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_full_parallel_execution_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_full_parallel_execution_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_full_parallel_execution_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_full_parallel_execution_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_full_parallel_execution_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_full_parallel_execution_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_full_parallel_ludu26c9\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_full_parallel_ludu26c9\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_full_parallel_execution_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_full_parallel_ludu26c9\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_full_parallel_ludu26c9\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py: 12 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_rerun_cache_nonojz3d\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_rerun_cache_nonojz3d\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_unchanged_rerun_cache_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_unchanged_rerun_cache_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_unchanged_rerun_cache_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_unchanged_rerun_cache_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_unchanged_rerun_cache_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_unchanged_rerun_cache_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_unchanged_rerun_cache_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_rerun_cache_nonojz3d\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_rerun_cache_nonojz3d\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_unchanged_rerun_cache_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_unchanged_rerun_cache_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_rerun_cache_nonojz3d\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_rerun_cache_nonojz3d\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py: 21 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_param_invalidation_tu3uppl7\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_param_invalidation_tu3uppl7\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py: 12 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_param_invalidation_tu3uppl7\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_param_invalidation_tu3uppl7\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_parameter_invalidation_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_parameter_invalidation_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_param_invalidation_tu3uppl7\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_param_invalidation_tu3uppl7\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_optional_failure_isolation_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_optional_failure_isolation_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_optional_failure_isolation_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_optional_failure_isolation_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_optional_failure_isolation_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_optional_failure_isolation_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_optional_failure_kesqorg8\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_optional_failure_kesqorg8\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_optional_failure_isolation_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_optional_failure_kesqorg8\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_optional_failure_kesqorg8\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_optional_failure_isolation_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_optional_failure_kesqorg8\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_optional_failure_kesqorg8\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_default_comparison_only_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_default_comparison_only_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_default_comparison_only_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_default_comparison_only_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_default_comparison_only_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_comparison_only_1ytu5cs2\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_comparison_only_1ytu5cs2\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_default_comparison_only_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_default_comparison_only_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_default_comparison_only_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_comparison_only_1ytu5cs2\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_comparison_only_1ytu5cs2\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_default_comparison_only_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_comparison_only_1ytu5cs2\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_comparison_only_1ytu5cs2\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_multi_schema_e0s0kwzi\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_multi_schema_e0s0kwzi\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_multi_schema_e0s0kwzi\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_multi_schema_e0s0kwzi\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_multi_schema_e0s0kwzi\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_multi_schema_e0s0kwzi\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_gnina_schema_v37ei0et\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_gnina_schema_v37ei0et\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_gnina_schema_v37ei0et\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_gnina_schema_v37ei0et\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_gnina_solo_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_gnina_schema_v37ei0et\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_gnina_schema_v37ei0et\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_multi_t03gv375\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_multi_t03gv375\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_multi_t03gv375\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_multi_t03gv375\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_multi_t03gv375\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_multi_t03gv375\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_gnina_zd6sb6ao\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_gnina_zd6sb6ao\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_gnina_zd6sb6ao\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_gnina_zd6sb6ao\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_gnina_zd6sb6ao\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_gnina_zd6sb6ao\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_vina_a4c29zfu\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_vina_a4c29zfu\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_vina_a4c29zfu\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_vina_a4c29zfu\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_vina_a4c29zfu\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_vina_a4c29zfu\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_smina_e7as20t5\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_smina_e7as20t5\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_smina_e7as20t5\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_smina_e7as20t5\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_all_strategy_schema_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_smina_e7as20t5\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_strategy_smina_e7as20t5\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_per_complex_warning_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_per_complex_warn_6u4u1a8i\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_per_complex_warn_6u4u1a8i\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_per_complex_warning_contract
+test/test_dockforge_smoke.py::_smoke_artifact_graph_per_complex_warning_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_per_complex_warn_6u4u1a8i\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_per_complex_warn_6u4u1a8i\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_artifact_graph_per_complex_warning_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_artifact_per_complex_warn_6u4u1a8i\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_artifact_per_complex_warn_6u4u1a8i\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_sqlite_parity_and_skip_rationale
+test/test_dockforge_smoke.py::_smoke_sqlite_parity_and_skip_rationale
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_sqlite_parity_n3ctfiuh\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_sqlite_parity_n3ctfiuh\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_sqlite_parity_and_skip_rationale
+test/test_dockforge_smoke.py::_smoke_sqlite_parity_and_skip_rationale
+test/test_dockforge_smoke.py::_smoke_sqlite_parity_and_skip_rationale
+test/test_dockforge_smoke.py::_smoke_sqlite_parity_and_skip_rationale
+test/test_dockforge_smoke.py::_smoke_sqlite_parity_and_skip_rationale
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_sqlite_parity_n3ctfiuh\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_sqlite_parity_n3ctfiuh\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_sqlite_parity_and_skip_rationale
+test/test_dockforge_smoke.py::_smoke_sqlite_parity_and_skip_rationale
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_sqlite_parity_n3ctfiuh\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_sqlite_parity_n3ctfiuh\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_extension_stubs
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_extensions_1nkgci9u\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_extensions_1nkgci9u\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_run_analysis_target_unified_delegation
+test/test_dockforge_smoke.py::_smoke_run_analysis_target_unified_delegation
+test/test_dockforge_smoke.py::_smoke_run_analysis_target_unified_delegation
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_target_delegate_dljun45t\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_target_delegate_dljun45t\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_run_analysis_target_unified_delegation
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_target_delegate_dljun45t\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_target_delegate_dljun45t\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_run_analysis_target_unified_delegation
+test/test_dockforge_smoke.py::_smoke_run_analysis_target_unified_delegation
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_target_delegate_dljun45t\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_target_delegate_dljun45t\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_user_facing_analysis_unified_path_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_unified_path_contract_e0b6x5yw\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_unified_path_contract_e0b6x5yw\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_interactive_run_tracking_summary_surface_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_interactive_tracking_surface_3ef7yppu\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_interactive_tracking_surface_3ef7yppu\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_interactive_favorite_flow_clean_followup_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_interactive_favorite_clean_followup_gk78ibtm\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_interactive_favorite_clean_followup_gk78ibtm\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_dag_reference_baselines_wiring_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_ref_baseline_wiring_urabxcgh\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_ref_baseline_wiring_urabxcgh\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_dag_reference_baselines_wiring_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_ref_baseline_wiring_urabxcgh\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_ref_baseline_wiring_urabxcgh\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_favorite_engine_scope_guard_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_favorite_guard_scope_frqzxn3x\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_favorite_guard_scope_frqzxn3x\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_favorite_engine_empty_scope_guard_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_favorite_guard_empty_4_qy0qye\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_favorite_guard_empty_4_qy0qye\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_preparation_preflight_artifacts
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\workflow\execution.py:1223: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    "generated_at_utc": datetime.utcnow().isoformat() + "Z",
+
+test/test_dockforge_smoke.py::_smoke_preparation_preflight_artifacts
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\workflow\execution.py:1239: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    "generated_at_utc": datetime.utcnow().isoformat() + "Z",
+
+test/test_dockforge_smoke.py::_smoke_docking_preflight
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_preflight_vng6o5yl\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_preflight_vng6o5yl\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_docking_preflight_receptor_qc_gate
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_preflight_receptor_qc_yr5zfv6q\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_preflight_receptor_qc_yr5zfv6q\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_hpc_deploy_receptor_qc_gate
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_deploy_receptor_qc_lt8g42_a\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_deploy_receptor_qc_lt8g42_a\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_post_docking_allscore_contracts
+test/test_dockforge_smoke.py::_smoke_post_docking_allscore_contracts
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_allscore_kjqkn6px\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_allscore_kjqkn6px\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_post_docking_allscore_contracts
+test/test_dockforge_smoke.py::_smoke_post_docking_allscore_contracts
+test/test_dockforge_smoke.py::_smoke_post_docking_allscore_contracts
+test/test_dockforge_smoke.py::_smoke_post_docking_allscore_contracts
+test/test_dockforge_smoke.py::_smoke_post_docking_allscore_contracts
+test/test_dockforge_smoke.py::_smoke_post_docking_allscore_contracts
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_allscore_kjqkn6px\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_allscore_kjqkn6px\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_post_docking_allscore_contracts
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_allscore_kjqkn6px\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_allscore_kjqkn6px\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_biology_unresolved_mapping_reporting
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_biology_unresolved_j5lqoeyo\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_biology_unresolved_j5lqoeyo\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_biology_unresolved_mapping_reporting
+test/test_dockforge_smoke.py::_smoke_biology_unresolved_mapping_reporting
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_biology_unresolved_j5lqoeyo\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_biology_unresolved_j5lqoeyo\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_biology_unresolved_mapping_reporting
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_biology_unresolved_j5lqoeyo\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_biology_unresolved_j5lqoeyo\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_unified_output_topology_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_output_topology_z92yx5n5\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_output_topology_z92yx5n5\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_unified_output_topology_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\test\test_dockforge_smoke.py:4639: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_output_topology_z92yx5n5\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_output_topology_z92yx5n5\5-Analysis.
+    shim = ensure_post_docking_compat_shim(temp_root)
+
+test/test_dockforge_smoke.py: 11 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_viz_start_here_xq1f3t3f\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_viz_start_here_xq1f3t3f\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_visualization_suite_start_here_embedding_contract
+test/test_dockforge_smoke.py::_smoke_visualization_suite_start_here_embedding_contract
+test/test_dockforge_smoke.py::_smoke_visualization_suite_start_here_embedding_contract
+test/test_dockforge_smoke.py::_smoke_visualization_suite_start_here_embedding_contract
+test/test_dockforge_smoke.py::_smoke_visualization_suite_start_here_embedding_contract
+test/test_dockforge_smoke.py::_smoke_visualization_suite_start_here_embedding_contract
+test/test_dockforge_smoke.py::_smoke_visualization_suite_start_here_embedding_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_viz_start_here_xq1f3t3f\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_viz_start_here_xq1f3t3f\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_visualization_suite_start_here_embedding_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_viz_start_here_xq1f3t3f\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_viz_start_here_xq1f3t3f\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_9rawev53\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_9rawev53\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_9rawev53\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_9rawev53\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_gnina_owyeq3cc\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_gnina_owyeq3cc\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_gnina_owyeq3cc\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_gnina_owyeq3cc\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_engine_detection_and_auto_routing
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_gnina_owyeq3cc\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_gnina_owyeq3cc\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_engine_detection_autodock4_parity_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_autodock4_6laaz0_z\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_autodock4_6laaz0_z\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_engine_detection_autodock4_parity_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_mixed4_yeusdq_v\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_mixed4_yeusdq_v\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_engine_detection_autodock4_parity_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_mixed4_yeusdq_v\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_mixed4_yeusdq_v\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_engine_hpc_adapter_parity_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_hpc_adapter_i5djcs9a\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_hpc_adapter_i5djcs9a\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py: 14 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_run_tracking_schema_xvpe_e6x\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_run_tracking_schema_xvpe_e6x\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py: 12 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_run_tracking_schema_xvpe_e6x\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_run_tracking_schema_xvpe_e6x\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_run_tracking_schema_consistency_contract
+test/test_dockforge_smoke.py::_smoke_run_tracking_schema_consistency_contract
+test/test_dockforge_smoke.py::_smoke_run_tracking_schema_consistency_contract
+test/test_dockforge_smoke.py::_smoke_run_tracking_schema_consistency_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_run_tracking_schema_xvpe_e6x\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_run_tracking_schema_xvpe_e6x\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_optional_feature_taxonomy_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_optional_feature_taxonomy_e_mbr14o\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_optional_feature_taxonomy_e_mbr14o\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_optional_feature_taxonomy_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_optional_feature_taxonomy_e_mbr14o\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_optional_feature_taxonomy_e_mbr14o\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_engine_detection_cache_override_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_cache_override_fa26f2v1\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_cache_override_fa26f2v1\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_engine_detection_cache_override_contract
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_cache_override_fa26f2v1\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_detect_cache_override_fa26f2v1\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_foundation
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_foundation
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_foundation
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_4ggdyy7h\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_4ggdyy7h\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_foundation
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_foundation
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_4ggdyy7h\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_4ggdyy7h\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_foundation
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_foundation
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_4ggdyy7h\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_4ggdyy7h\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py: 14 warnings
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_accept_mroka50t\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_accept_mroka50t\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_accept_mroka50t\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_accept_mroka50t\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance
+test/test_dockforge_smoke.py::_smoke_engine_scope_filter_acceptance
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_accept_mroka50t\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_engine_scope_accept_mroka50t\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_no_valid_engines_rkzgfavn\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_no_valid_engines_rkzgfavn\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_smina_solo_2awyslzd\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_smina_solo_2awyslzd\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_smina_solo_2awyslzd\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_smina_solo_2awyslzd\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_smina_solo_2awyslzd\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_smina_solo_2awyslzd\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_vina_solo_acdgq5al\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_vina_solo_acdgq5al\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_vina_solo_acdgq5al\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_vina_solo_acdgq5al\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+test/test_dockforge_smoke.py::_smoke_no_valid_engine_abort_and_solo_semantics
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_vina_solo_acdgq5al\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_vina_solo_acdgq5al\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_cli_interactive_fallback_and_gnina_complex_export
+test/test_dockforge_smoke.py::_smoke_cli_interactive_fallback_and_gnina_complex_export
+test/test_dockforge_smoke.py::_smoke_cli_interactive_fallback_and_gnina_complex_export
+test/test_dockforge_smoke.py::_smoke_cli_interactive_fallback_and_gnina_complex_export
+test/test_dockforge_smoke.py::_smoke_cli_interactive_fallback_and_gnina_complex_export
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_gnina_complex_export_uotpicew\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_gnina_complex_export_uotpicew\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_dockforge_smoke.py::_smoke_cli_interactive_fallback_and_gnina_complex_export
+test/test_dockforge_smoke.py::_smoke_cli_interactive_fallback_and_gnina_complex_export
+test/test_dockforge_smoke.py::_smoke_cli_interactive_fallback_and_gnina_complex_export
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_gnina_complex_export_uotpicew\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_gnina_complex_export_uotpicew\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_dockforge_smoke.py::_smoke_cli_interactive_fallback_and_gnina_complex_export
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\AppData\Local\Temp\dockforge_gnina_complex_export_uotpicew\5-Post_Docking_Analysis. New runs write to C:\Users\salma\AppData\Local\Temp\dockforge_gnina_complex_export_uotpicew\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+test/test_docking_correctness.py::test_resume_requires_exact_inputs_protocol_and_validated_output
+test/test_docking_correctness.py::test_resume_requires_exact_inputs_protocol_and_validated_output
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_resume_requires_exact_inp0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_resume_requires_exact_inp0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_empty_legacy_pose_does_not_resume
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_empty_legacy_pose_does_no0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_empty_legacy_pose_does_no0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_failed_rerun_retires_old_pose_and_clears_scores
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_failed_rerun_retires_old_0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_failed_rerun_retires_old_0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_invalid_output_and_startup_failure_never_complete[missing]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_output_and_startu0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_output_and_startu0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_invalid_output_and_startup_failure_never_complete[empty]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_output_and_startu1\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_output_and_startu1\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_invalid_output_and_startup_failure_never_complete[truncated]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_output_and_startu2\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_output_and_startu2\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_invalid_output_and_startup_failure_never_complete[startup]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_output_and_startu3\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_output_and_startu3\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_changed_input_after_plan_does_not_execute
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_changed_input_after_plan_0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_changed_input_after_plan_0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_input_mutation_during_execution_invalidates_result
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_input_mutation_during_exe0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_input_mutation_during_exe0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_existing_job_lock_prevents_artifact_retirement
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_existing_job_lock_prevent0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_existing_job_lock_prevent0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_interruption_clears_old_score_table
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_interruption_clears_old_s0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_interruption_clears_old_s0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_cli_returns_failure_for_failed_engine
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_cli_returns_failure_for_f0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_cli_returns_failure_for_f0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_portable_deployment_uses_shared_executor_and_posix_paths[generate_slurm_deployment-options0]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_portable_deployment_uses_0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_portable_deployment_uses_0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_portable_deployment_uses_shared_executor_and_posix_paths[generate_condor_deployment-options1]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_portable_deployment_uses_1\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_portable_deployment_uses_1\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_deploy_preserves_reviewed_local_protocol
+test/test_docking_correctness.py::test_deploy_preserves_reviewed_local_protocol
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_deploy_preserves_reviewed0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_deploy_preserves_reviewed0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_gnina_resource_flags_independent
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_gnina_resource_flags_inde0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_gnina_resource_flags_inde0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_gnina_scores_come_from_poses_not_runner_log
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_gnina_scores_come_from_po0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_gnina_scores_come_from_po0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_ad4_grid_and_parameter_files_are_portable_and_consistent
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_ad4_grid_and_parameter_fi0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_ad4_grid_and_parameter_fi0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_ad4_adt_branch_supplies_same_custom_parameters
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_ad4_adt_branch_supplies_s0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_ad4_adt_branch_supplies_s0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_required_qc_exceptions_block[ligand]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_required_qc_exceptions_bl0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_required_qc_exceptions_bl0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_required_qc_exceptions_block[receptor]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_required_qc_exceptions_bl1\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_required_qc_exceptions_bl1\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_invalid_geometry_blocks[center_x-nan]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_geometry_blocks_c0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_geometry_blocks_c0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_invalid_geometry_blocks[size_x--1]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_geometry_blocks_s0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_geometry_blocks_s0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_invalid_geometry_blocks[size_y-inf]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_geometry_blocks_s1\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_geometry_blocks_s1\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_invalid_geometry_blocks[size_z-0]
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_geometry_blocks_s2\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_invalid_geometry_blocks_s2\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_bundled_executor_runs_without_repository_imports
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_bundled_executor_runs_wit0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_bundled_executor_runs_wit0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_docking_correctness.py::test_wrapped_or_partially_resolved_engines_cannot_certify_resume
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_wrapped_or_partially_reso0\project with spaces\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_wrapped_or_partially_reso0\project with spaces\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:195: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_default_dag_carries_real_0\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_default_dag_carries_real_0\5-Analysis.
+    ensure_post_docking_compat_shim(project_root)
+
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\docking\project_layout.py:277: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_default_dag_carries_real_0\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_default_dag_carries_real_0\5-Analysis.
+    ensure_post_docking_compat_shim(root)
+
+test/test_postdocking_correctness.py::test_default_dag_carries_real_molecular_reference_to_gate_ranking_report
+  C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\post_docking_analysis\multi_engine_pipeline_impl.py:316: RuntimeWarning: Legacy post-docking directory exists at C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_default_dag_carries_real_0\5-Post_Docking_Analysis. New runs write to C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\.test-tmp-complete\test_default_dag_carries_real_0\5-Analysis.
+    self.compat_shim_info = ensure_post_docking_compat_shim(self.project_dir)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: C:\Users\salma\Documents\ChatGPT\Omni_suite\OmniDock\audit\correctness-tests.xml -
+========== 225 passed, 1 skipped, 586 warnings in 209.78s (0:03:29) ===========

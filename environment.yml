@@ -4,10 +4,13 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - python=3.9
+  - python=3.12
   - numpy
   - pandas
   - biopython
+  - rdkit
+  - meeko
+  - pyyaml
   - plip
   - matplotlib
   - seaborn
@@ -17,7 +20,6 @@ dependencies:
   - scipy  # For statistical analysis
   - pip
   - pip:
-    - plip
-    - openpyxl>=3.0.0
+    - openpyxl>=3.1.5
     - questionary>=2.0.1
     - pdb-tools>=2.5.0

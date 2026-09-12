@@ -2,12 +2,17 @@
 
 Formerly **PDB Prepare Wizard**.
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Conda](https://img.shields.io/badge/conda-forge-blue.svg)](https://conda-forge.org/)
 [![Biopython](https://img.shields.io/badge/Biopython-1.79+-green.svg)](https://biopython.org/)
 
 A comprehensive platform for multi-engine docking project preparation, execution, and post-docking analysis. DockForge provides automated protein/ligand workflows, comparative docking analytics, and optional interaction-analysis stages.
+
+The scientific correctness update changes preparation, resume, score ranking, and
+reference validation. Read [the migration and validation notes](docs/correctness-update.md)
+before reusing old results. Consensus ranks are relative prioritization signals;
+they are not experimental binding affinities or evidence of biological efficacy.
 
 ## DockForge Workflow Map
 
@@ -52,10 +57,10 @@ DockForge supports legacy compatibility, but the canonical auditable layout is:
   - **Removal Summary**: Shows exactly what will be removed before confirmation
 
 ### Enhanced Analysis (v3.0)
-- **🆕 Advanced PLIP Integration**: Research-grade protein-ligand interaction analysis
+- **🆕 PLIP Integration**: Optional protein-ligand interaction analysis
   - **Text-based PLIP parsing**: Reliable interaction detection using PLIP's official report format
   - **Comprehensive interaction types**: Hydrophobic, hydrogen bonds, halogen bonds, π-stacking, water bridges, salt bridges, metal complexes, π-cation interactions
-  - **Perfect PLIP web server match**: Results exactly match the official PLIP web server
+  - Results depend on the installed PLIP version and structure preparation
   - **Future-proof design**: Automatically detects unknown interaction types
 - **🆕 Residue-Level Coordinate Extraction**: Enhanced `extract_residue_level_coordinates()` function
   - Individual residue averages for detailed binding site analysis
@@ -63,11 +68,9 @@ DockForge supports legacy compatibility, but the canonical auditable layout is:
   - Comprehensive statistics (residue count, atom count)
   - PLIP-enhanced interaction detection with detailed breakdowns
 - **Active Site Analysis**: Extract binding site coordinates using PLIP-enhanced or distance-based methods
-- **Pocket Analysis**: Comprehensive analysis of pocket properties including:
-  - Electrostatic potential
-  - Hydrophobic character
-  - Pocket volume estimation
-  - Druggability scoring
+- **Pocket Analysis**: Contact and residue descriptors from the selected structure.
+  Pocket volume, electrostatic potential, and druggability are reported as
+  unevaluated where no validated calculation is implemented.
 
 ### Multiple Interface Options (v2.1.0)
 - **🆕 Interactive Mode**: User-friendly interactive pipeline with guided prompts
@@ -82,8 +85,8 @@ DockForge supports legacy compatibility, but the canonical auditable layout is:
 - **Excel Integration**: Generate comprehensive Excel reports with all results
 - **Report Generation**: Generate detailed CSV and Excel reports with all analysis results
 - **🆕 Post-Docking Analysis**: Comprehensive analysis of molecular docking results
-  - **Binding Affinity Analysis**: Parse and analyze Vina/GNINA docking results
-  - **Best Pose Selection**: Automatically identify highest binding affinity poses
+  - **Docking Score Analysis**: Parse engine scores with explicit score directions
+  - **Best Pose Selection**: Rank poses using the selected score or consensus policy
   - **PDB Extraction**: Extract best poses as complete receptor-ligand complex PDB files
   - **Statistical Analysis**: Generate comprehensive statistics and rankings
   - **Visualization**: Create binding affinity distributions and top performer plots
@@ -101,13 +104,13 @@ DockForge supports legacy compatibility, but the canonical auditable layout is:
   - **Configuration Support**: JSON/YAML configuration files
   - **Progress Tracking**: Real-time progress indicators and detailed logging
   - **Error Recovery**: Robust error handling and graceful failure recovery
-  - **✅ Fixed PDB→SDF→PDBQT Conversion**: Resolved explicit hydrogens requirement
-  - **✅ Production Ready**: Fully tested and validated with real research data
+  - **Chemistry preservation**: Require authoritative ligand graphs and retain atom mappings
+  - **Validation status**: Regression-tested code; target-specific scientific benchmarking is still required
 
 ## 📋 Requirements
 
 ### System Requirements
-- Python 3.8 or higher
+- Python 3.10 or higher
 - Internet connection (for PDB downloads)
 - 2GB+ RAM recommended for large structures
 
@@ -116,8 +119,9 @@ DockForge supports legacy compatibility, but the canonical auditable layout is:
 - **Optional (post-docking only)**: plip (interaction analysis plugin path)
 - **Visualization**: matplotlib, seaborn
 - **Excel Support**: openpyxl (for Excel report generation)
-- **Post-Docking Analysis**: openbabel (for ligand processing and PDBQT conversion)
-- **Development**: jupyter
+- **Chemical mapping and reference RMSD**: RDKit; Meeko mappings for PDBQT poses
+- **External preparation**: Open Babel and the chosen receptor/ligand backend
+- **Development**: pytest and build; Jupyter is optional
 - **Interactive Workflow**: questionary
 
 ## 🛠️ Installation
@@ -130,7 +134,7 @@ conda env create -f environment.yml
 conda activate pdb-prepare-wizard
 
 # Install the package
-pip install -e .
+pip install -e '.[chemistry]'
 
 # Verify installation
 python main.py --help
@@ -147,7 +151,7 @@ source pdb-wizard-env/bin/activate  # On Windows: pdb-wizard-env\Scripts\activat
 pip install -r requirements.txt
 
 # Install the package
-pip install -e .
+pip install -e '.[chemistry]'
 ```
 
 ### Option 3: Manual Installation

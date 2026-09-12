@@ -5,9 +5,9 @@ from typing import Dict, List
 
 import pandas as pd
 
-from post_docking_analysis.generate_scores_csv import generate_all_scores_csv
 from ..models import PairlistRow
 from .base import DockingEngineRunner
+from .job_contract import parse_sdf_scores
 
 
 class GninaRunner(DockingEngineRunner):
@@ -74,21 +74,20 @@ class GninaRunner(DockingEngineRunner):
             command.extend(["--seed", str(seed)])
         if use_gpu and device not in (None, ""):
             command.extend(["--device", str(device)])
-        elif cpu not in (None, ""):
+        if not use_gpu:
+            command.append("--no_gpu")
+        if cpu not in (None, ""):
             command.extend(["--cpu", str(cpu)])
         return command
 
     def collect_normalized_scores(self, pairlist_rows: List[PairlistRow]) -> pd.DataFrame:
         all_scores = self.layout["scores"] / "all_scores.csv"
-        if not generate_all_scores_csv(
-            self.layout["poses"],
-            output_file=all_scores,
-            pairlist_file=self.pairlist_file,
-            log_dir=self.layout["logs"],
-        ):
-            return pd.DataFrame()
-
-        df = pd.read_csv(all_scores)
+        records = []
+        for pose_file in self.accepted_pose_files(pairlist_rows):
+            for record in parse_sdf_scores(pose_file):
+                records.append({"tag": pose_file.stem, "mode": record["pose"], "vina_affinity": record["affinity"], "cnn_affinity": record["cnn_affinity"], "cnn_score": record["cnn_score"]})
+        df = pd.DataFrame(records, columns=["tag", "mode", "vina_affinity", "cnn_affinity", "cnn_score"])
+        df.to_csv(all_scores, index=False)
         pair_index: Dict[str, PairlistRow] = {row.tag: row for row in pairlist_rows}
         rows = []
         for _, record in df.iterrows():

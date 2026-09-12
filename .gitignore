@@ -88,6 +88,8 @@ logs/
 
 # pytest
 .pytest_cache/
+.test-tmp*/
+pytest-cache-files-*/
 .coverage
 htmlcov/
 

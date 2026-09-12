@@ -51,7 +51,8 @@ from post_docking_analysis.biology_integration import (
 )
 from post_docking_analysis.correlation_analyzer import compute_cross_engine_rank_correlations
 from post_docking_analysis.docking_parser import parse_autodock4_dlg, parse_vina_pdbqt
-from post_docking_analysis.generate_scores_csv import generate_all_scores_csv
+from post_docking_analysis.generate_scores_csv import generate_all_scores_csv, parse_gnina_log
+from docking.runners.job_contract import parse_sdf_scores
 from post_docking_analysis.ligand_naming import (
     build_ligand_name_mapping,
     ligand_mapping_to_dataframe,
@@ -82,6 +83,9 @@ from post_docking_analysis.top_pose_selector import (
 )
 from post_docking_analysis.artifact_graph import ArtifactGraph, ArtifactNode
 from post_docking_analysis.visualization_suite import generate_visualization_suite
+from post_docking_analysis.score_import import read_explicit_score_import
+from post_docking_analysis.score_semantics import score_spec, sort_value, explicit_true
+from post_docking_analysis.pose_geometry import content_hash, load_pose_molecule, selected_record
 
 
 NORMALIZED_COLUMNS = [
@@ -152,7 +156,10 @@ _PAIR_METADATA_COLUMNS = (
     "cocrystal_ligand_name",
     "reference_pose_file",
     "reference_ligand_file",
+    "reference_source", "reference_pdb_id", "reference_frame_id", "receptor_frame_id",
+    "reference_pose_index", "scoring_function",
 )
+NORMALIZED_COLUMNS += list(_PAIR_METADATA_COLUMNS) + ["score_provenance"]
 _BEST_POSE_SELECTION_METRIC_ALIASES = {
     "auto": "auto",
     "affinity": "vina_affinity",
@@ -470,6 +477,9 @@ class MultiEngineAnalysisPipeline:
             "engine_agreement": numbered["post_scores_consensus"] / "engine_agreement.csv",
             "classified_hits": numbered["post_scores_consensus"] / "classified_hits.csv",
             "best_poses": session_root / "top_pose_ligand_performance" / "top_pose_per_ligand_global.csv",
+            "best_poses_per_protein": session_root / "top_pose_ligand_performance" / "top_pose_per_ligand_per_protein.csv",
+            "top_pose_confidence": session_root / "top_pose_ligand_performance" / "top_pose_confidence_metrics.csv",
+            "top_pose_manifest": session_root / "top_pose_ligand_performance" / "top_pose_selection_manifest.json",
             "ligand_performance_summary": session_root / "top_pose_ligand_performance" / "ligand_performance_summary.csv",
             "complexes": session_root / "complexes",
             "prolif": interactions_root / "prolif",
@@ -527,6 +537,17 @@ class MultiEngineAnalysisPipeline:
             "favorite_engine": str(self.favorite_engine or self.engine or self.rerun_engine or ""),
             "biology_file": str(self.biology_file or ""),
             "biology_mapping_mode": self.biology_mapping_mode,
+            "scientific_schema_version": 2,
+            "complex_query": self.complex_query,
+            "exclude_problematic_ligands": self.exclude_problematic_ligands,
+            "positive_affinity_threshold": self.positive_affinity_threshold,
+            "minimum_pose_count": self.minimum_pose_count,
+            "enable_poseview": self.enable_poseview,
+            "rmsd_scopes": list(self.rmsd_scopes),
+            "speed_profile": self.speed_profile,
+            "pair_allowlist": str(self.pair_allowlist or ""),
+            "winner_only": self.winner_only,
+            "min_affinity_advantage": self.min_affinity_advantage,
         }
         serialized = json.dumps(payload, indent=2, sort_keys=True)
         if path.exists():
@@ -580,13 +601,14 @@ class MultiEngineAnalysisPipeline:
             payload = {"validation_gate_state": "no_scores", "allow_reference_anchor": False}
             paths["validation_gate"].parent.mkdir(parents=True, exist_ok=True)
             paths["validation_gate"].write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            pd.DataFrame(columns=["protein", "engine", "scoring_function", "reference_affinity"]).to_csv(paths["reference_baselines"], index=False)
             return {"details": "no scores available for validation gate"}
-        best_by_engine = self._best_rows_by_group(scores, ["engine", "tag"], "affinity_kcal_mol").sort_values(
-            ["engine", "affinity_kcal_mol", "tag"]
-        )
+        best_by_engine, _ = self._prepare_dag_consensus_inputs(scores, self._resolve_dag_consensus_strategy(paths))
         validation_bundle = run_redocking_validation(
             project_dir=self.project_dir,
             best_by_engine=best_by_engine,
+            expected_reference_rows=self.pairlist_df,
+            expected_engines=self.engines_in_scope,
             output_dir=paths["validation_gate"].parent,
         )
         payload = dict(validation_bundle.get("validation_gate") or validation_bundle.get("summary") or {})
@@ -610,9 +632,12 @@ class MultiEngineAnalysisPipeline:
                 best_by_engine.groupby("tag", dropna=False)
                 .agg(
                     engine_support_count=("engine", "nunique"),
-                    best_affinity_kcal_mol=("affinity_kcal_mol", "min"),
                 )
                 .reset_index()
+            )
+            engine_agreement = engine_agreement.merge(
+                consensus_df[["tag", "winner_engine", "best_affinity_kcal_mol"]],
+                on="tag", how="left", validate="one_to_one",
             )
         else:
             engine_agreement = pd.DataFrame(
@@ -649,6 +674,8 @@ class MultiEngineAnalysisPipeline:
             return "single/gnina"
         if engine_name == "smina":
             return "single/smina"
+        if engine_name == "autodock4":
+            return "single/autodock4"
         return "single/vina"
 
     def _prepare_dag_consensus_inputs(
@@ -690,6 +717,8 @@ class MultiEngineAnalysisPipeline:
                 frame["smina_scoring_function"] = json.dumps(smina_meta.get("smina_scoring_weights", {}) or {})
                 if bool(smina_meta.get("inconsistent_scoring_weights", False)):
                     warnings.append("smina_inconsistent_scoring_weights")
+            elif target_engine == "autodock4":
+                primary_name = "autodock4_affinity"
             else:
                 primary_name = "vina_affinity"
                 secondary_name = "rmsd_lb"
@@ -730,6 +759,7 @@ class MultiEngineAnalysisPipeline:
             favorite_engine=self.favorite_engine or self.rerun_engine or self._dag_preferred_engine(),
             normalization_method=self.normalization_method,
             score_column=ranking_column,
+            expected_engines=self.engines_in_scope,
         )
         return consensus_df
 
@@ -764,9 +794,13 @@ class MultiEngineAnalysisPipeline:
                 reference_baselines = pd.read_csv(Path(baselines_path))
             except Exception:
                 reference_baselines = pd.DataFrame()
+        gate = json.loads(paths["validation_gate"].read_text(encoding="utf-8")) if paths["validation_gate"].exists() else {}
+        policy = self.hit_class_policy
+        if policy == "reference_anchor" and not explicit_true(gate.get("allow_reference_anchor")):
+            policy = "target_percentile"
         classified = classify_hits_target_aware(
             consensus_df,
-            policy=self.hit_class_policy,
+            policy=policy,
             strong_percentile=self.hit_class_strong_percentile,
             moderate_percentile=self.hit_class_moderate_percentile,
             reference_baselines=reference_baselines,
@@ -779,9 +813,7 @@ class MultiEngineAnalysisPipeline:
         normalized_file = paths["normalized_scores"]
         classified = pd.read_csv(classified_file) if classified_file.exists() else pd.DataFrame()
         normalized_scores = pd.read_csv(normalized_file) if normalized_file.exists() else self._load_or_build_scores()
-        best_by_engine = self._best_rows_by_group(normalized_scores, ["engine", "tag"], "affinity_kcal_mol").sort_values(
-            ["engine", "affinity_kcal_mol", "tag"]
-        ) if not normalized_scores.empty else pd.DataFrame()
+        best_by_engine, _ = self._prepare_dag_consensus_inputs(normalized_scores, self._resolve_dag_consensus_strategy(paths)) if not normalized_scores.empty else (pd.DataFrame(), {})
         top_pose_payload = build_top_pose_atlas(
             best_by_engine=best_by_engine,
             consensus_df=classified,
@@ -806,7 +838,15 @@ class MultiEngineAnalysisPipeline:
         normalized_scores = pd.read_csv(normalized_file) if normalized_file.exists() else self._load_or_build_scores()
         if normalized_scores.empty:
             return pd.DataFrame()
-        manifest_df, selection_metric = self._select_best_pose_rows(normalized_scores)
+        strategy = self._resolve_dag_consensus_strategy(paths)
+        candidates, selection = self._prepare_dag_consensus_inputs(normalized_scores, strategy=strategy)
+        selection_metric = selection.get("ranking_column", "affinity_kcal_mol")
+        consensus = pd.read_csv(paths["consensus_ranked"]) if paths["consensus_ranked"].is_file() else pd.DataFrame()
+        if not consensus.empty and "winner_engine" in consensus:
+            winners = consensus.drop_duplicates("tag").set_index("tag")["winner_engine"]
+            manifest_df = candidates[candidates["engine"].eq(candidates["tag"].map(winners))].copy()
+        else:
+            manifest_df = candidates.sort_values(["tag", "engine"]).drop_duplicates("tag").copy()
         if manifest_df.empty:
             return manifest_df
         manifest_df["bridge_output_name"] = manifest_df["tag"].astype(str)
@@ -1111,7 +1151,7 @@ class MultiEngineAnalysisPipeline:
         output_root: Path,
     ) -> Dict[str, object]:
         output_root.mkdir(parents=True, exist_ok=True)
-        complex_files = sorted(complexes_dir.glob("*.pdb")) if complexes_dir.exists() else []
+        complex_files = sorted(path for path in complexes_dir.glob("*.pdb") if not path.name.endswith(".receptor.pdb")) if complexes_dir.exists() else []
         if not complex_files:
             return {"warnings": [f"{node_name}_no_complexes"], "details": "no complexes available"}
 
@@ -1159,7 +1199,7 @@ class MultiEngineAnalysisPipeline:
         except Exception:
             pass
         scores = self._load_or_build_scores()
-        self._write_comparative_reports(scores, analysis_scope=self.analysis_scope)
+        self._write_comparative_reports(scores, analysis_scope=self.analysis_scope, preserve_dag_atlas=True)
         destination = paths["comparative"]
         destination.mkdir(parents=True, exist_ok=True)
         reports_dir = self.output_dir / "reports"
@@ -1189,7 +1229,7 @@ class MultiEngineAnalysisPipeline:
         source = self.output_dir / "reports" / "polypharmacology"
         if not source.exists():
             scores = self._load_or_build_scores()
-            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope)
+            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope, preserve_dag_atlas=True)
         copied = self._copy_matching_files(source, paths["polypharmacology"])
         return {"details": f"polypharmacology_files_copied={copied}"}
 
@@ -1199,7 +1239,7 @@ class MultiEngineAnalysisPipeline:
         reports_dir = self.output_dir / "reports"
         if not (reports_dir / "biology_mapping_report.json").exists():
             scores = self._load_or_build_scores()
-            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope)
+            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope, preserve_dag_atlas=True)
         copied = 0
         for candidate in (
             "biology_correlation_global.csv",
@@ -1385,6 +1425,7 @@ class MultiEngineAnalysisPipeline:
             compute,
             optional: bool = False,
             cacheable: bool = True,
+            optional_inputs: Optional[List[Path]] = None,
         ) -> None:
             graph.register(
                 ArtifactNode(
@@ -1394,15 +1435,33 @@ class MultiEngineAnalysisPipeline:
                     compute=compute,
                     optional=optional,
                     cacheable=cacheable,
+                    optional_inputs=[str(path) for path in (optional_inputs or [])],
                 )
             )
 
         pairlist_file = pairlist_path(self.project_dir)
+        source_inputs = []
+        for source_engine in (self.engines_in_scope or self.manifest.get("engines", [])):
+            layout = ensure_engine_layout(self.project_dir, source_engine)
+            source_inputs.extend([layout["poses"], layout["logs"], layout["scores"] / "all_scores.csv", layout["scores"] / "normalized_scores.import.json"])
+            if (layout["scores"] / "normalized_scores.import.json").is_file():
+                source_inputs.append(layout["scores"] / "normalized_scores.csv")
+        reference_inputs = []
+        for column in ("reference_pose_file", "reference_ligand_file"):
+            if column in self.pairlist_df:
+                for value in self.pairlist_df[column].dropna().astype(str):
+                    if value.strip():
+                        path = Path(value)
+                        reference_inputs.append(path if path.is_absolute() else self.project_dir / path)
+        receptor_inputs = [shared_receptors_dir(self.project_dir)]
+        biology_inputs = [Path(self.biology_file)] if self.biology_file else []
+        extra_inputs = [Path(self.pair_allowlist)] if self.pair_allowlist else []
         _register(
             "raw_scores",
-            [pairlist_file, paths["engine_scope_config"]],
+            [pairlist_file, paths["engine_scope_config"], paths["analysis_parameters"], *source_inputs, *receptor_inputs, *extra_inputs],
             [paths["raw_scores"]],
             lambda: self._dag_compute_raw_scores_node(paths),
+            optional_inputs=source_inputs + receptor_inputs,
         )
         _register(
             "normalized_scores",
@@ -1412,26 +1471,28 @@ class MultiEngineAnalysisPipeline:
         )
         _register(
             "validation_gate",
-            [paths["normalized_scores"]],
-            [paths["validation_gate"]],
+            [paths["normalized_scores"], *reference_inputs, *receptor_inputs, paths["analysis_parameters"]],
+            [paths["validation_gate"], paths["reference_baselines"]],
             lambda: self._dag_compute_validation_gate_node(paths),
+            optional_inputs=reference_inputs + receptor_inputs,
         )
         _register(
             "consensus_ranked",
-            [paths["normalized_scores"], paths["engine_scope_config"], paths["analysis_parameters"]],
+            [paths["normalized_scores"], paths["engine_scope_config"], paths["analysis_parameters"], *source_inputs, *receptor_inputs],
             [paths["consensus_ranked"], paths["engine_agreement"]],
             lambda: self._dag_compute_consensus_ranked_node(paths),
+            optional_inputs=source_inputs + receptor_inputs,
         )
         _register(
             "classified_hits",
-            [paths["consensus_ranked"], paths["validation_gate"], paths["analysis_parameters"]],
+            [paths["consensus_ranked"], paths["validation_gate"], paths["reference_baselines"], paths["analysis_parameters"]],
             [paths["classified_hits"]],
             lambda: self._dag_compute_classified_hits_node(paths),
         )
         _register(
             "top_pose_atlas",
             [paths["classified_hits"], paths["normalized_scores"], paths["analysis_parameters"]],
-            [paths["best_poses"], paths["ligand_performance_summary"]],
+            [paths["best_poses"], paths["ligand_performance_summary"], paths["best_poses_per_protein"], paths["top_pose_confidence"], paths["top_pose_manifest"]],
             lambda: self._dag_compute_top_pose_atlas_node(paths),
         )
         _register(
@@ -1451,9 +1512,10 @@ class MultiEngineAnalysisPipeline:
         )
         _register(
             "complexes",
-            [paths["classified_hits"], paths["best_poses"]],
+            [paths["classified_hits"], paths["best_poses"], *source_inputs, *receptor_inputs],
             [paths["complexes"]],
             lambda: self._dag_compute_complexes_node(paths),
+            optional_inputs=source_inputs + receptor_inputs,
         )
         for node_name, path_key in (
             ("prolif", "prolif"),
@@ -1483,7 +1545,7 @@ class MultiEngineAnalysisPipeline:
         ):
             _register(
                 node_name,
-                [paths["classified_hits"]] if node_name == "comparative" else [paths["comparative"]],
+                [paths["classified_hits"], paths["best_poses"], paths["best_poses_per_protein"], paths["ligand_performance_summary"], paths["top_pose_confidence"], paths["top_pose_manifest"], *biology_inputs, paths["analysis_parameters"]] if node_name == "comparative" else [paths["comparative"], *biology_inputs],
                 [paths[path_key]],
                 (
                     lambda node_name=node_name: self._dag_compute_polypharmacology_node(paths)
@@ -1502,6 +1564,7 @@ class MultiEngineAnalysisPipeline:
                 [paths["interactions"]],
                 "Registered for DAG migration; interaction branch aggregate node for scope resolution.",
             ),
+            optional_inputs=[paths["prolif"], paths["pandamap"], paths["poseview"], paths["pymol"]],
         )
         _register(
             "reports",
@@ -1520,6 +1583,7 @@ class MultiEngineAnalysisPipeline:
             [paths["reports"]],
             lambda: self._dag_compute_reports_node(paths),
             cacheable=False,
+            optional_inputs=[paths["figures_manifest"]],
         )
         return graph
 
@@ -1574,17 +1638,15 @@ class MultiEngineAnalysisPipeline:
     def _count_heavy_atoms_from_pdbqt(pdbqt_file: Path) -> Optional[int]:
         try:
             heavy_atoms = 0
-            with open(pdbqt_file, "r", encoding="utf-8", errors="replace") as handle:
-                for raw_line in handle:
-                    if not raw_line.startswith(("ATOM", "HETATM")):
-                        continue
-                    token = raw_line.split()[-1] if raw_line.split() else ""
-                    element = "".join(ch for ch in token if ch.isalpha()).upper()
-                    if not element:
-                        atom_name = raw_line[12:16].strip()
-                        element = "".join(ch for ch in atom_name if ch.isalpha()).upper()[:1]
-                    if element and element != "H":
-                        heavy_atoms += 1
+            for raw_line in selected_record(pdbqt_file, 1).splitlines():
+                if not raw_line.startswith(("ATOM", "HETATM")):
+                    continue
+                atom_type = raw_line.split()[-1]
+                if atom_type in {"H", "HD", "HS", "G0", "G1", "G2", "G3"}:
+                    continue
+                if not atom_type or not atom_type[0].isalpha():
+                    return None
+                heavy_atoms += 1
             return heavy_atoms or None
         except Exception:
             return None
@@ -1908,7 +1970,7 @@ class MultiEngineAnalysisPipeline:
             suffix = file_path.suffix.lower()
             output_rows.append(
                 {
-                    "relative_path": str(relative),
+                    "relative_path": relative.as_posix(),
                     "category": category,
                     "extension": suffix,
                     "size_bytes": int(file_path.stat().st_size),
@@ -2236,8 +2298,46 @@ class MultiEngineAnalysisPipeline:
                 _set_step("finalize_run_tracking", "needs_review", str(tracking_exc))
                 logger.warning("Run tracking finalization failed: %s", tracking_exc)
 
+    @staticmethod
+    def _source_fingerprint(engine_layout: Dict[str, Path], pair_index: Dict[str, object]) -> str:
+        digest = hashlib.sha256(json.dumps(pair_index, sort_keys=True, default=str).encode())
+        source_paths = [engine_layout["poses"], engine_layout["logs"], engine_layout["scores"] / "all_scores.csv"]
+        for source in source_paths:
+            source = Path(source)
+            digest.update(str(source).encode())
+            candidates = sorted(source.rglob("*")) if source.is_dir() else [source]
+            for path in candidates:
+                if path.is_file():
+                    digest.update(str(path).encode())
+                    digest.update(content_hash(path).encode())
+                elif not path.exists():
+                    digest.update(b"missing")
+        for code_file in sorted(Path(__file__).parent.glob("*.py")):
+            digest.update(content_hash(code_file).encode())
+        parser_path = Path(__file__).parents[1] / "docking" / "runners" / "job_contract.py"
+        digest.update(content_hash(parser_path).encode())
+        return digest.hexdigest()
+
+    @staticmethod
+    def _pose_is_usable(path: Path) -> bool:
+        if not path.is_file() or path.stat().st_size == 0:
+            return False
+        completion = Path(str(path) + ".completion.json")
+        if completion.exists():
+            try:
+                payload = json.loads(completion.read_text(encoding="utf-8"))
+                if payload.get("status") not in {"completed", "success"}:
+                    return False
+                expected_hash = payload.get("pose_sha256") or payload.get("pose_hash")
+                if expected_hash and expected_hash != content_hash(path):
+                    return False
+            except (OSError, ValueError):
+                return False
+        return True
+
     def _load_or_build_scores(self) -> pd.DataFrame:
         frames: List[pd.DataFrame] = []
+        self.pairlist_df = load_pairlist(self.project_dir)
         pair_index = self._pair_index()
         candidate_engines = self.engines_in_scope or [
             str(engine).strip().lower()
@@ -2247,36 +2347,54 @@ class MultiEngineAnalysisPipeline:
         for engine in candidate_engines:
             engine_layout = ensure_engine_layout(self.project_dir, engine)
             normalized_path = engine_layout["scores"] / "normalized_scores.csv"
+            raw_pose_files = [path for path in engine_layout["poses"].glob("*") if path.suffix.lower() in {".sdf", ".pdbqt", ".dlg"}]
+            imported = read_explicit_score_import(engine_layout["scores"]) if not raw_pose_files else None
+            if imported is not None:
+                if not imported["engine"].eq(engine).all():
+                    raise ValueError(f"Imported score engine must match folder engine {engine}")
+                frame = self._merge_pair_metadata(imported, self._pair_metadata_frame())
+                for column in NORMALIZED_COLUMNS:
+                    if column not in frame:
+                        frame[column] = None
+                frame["scoring_function"] = frame["scoring_function"].fillna(engine)
+                if pair_index:
+                    frame = frame[frame["tag"].isin(pair_index)]
+                frames.append(frame[NORMALIZED_COLUMNS].copy())
+                continue
             _use_cached = False
-            if normalized_path.exists():
-                # Check if cached file is newer than all source pose/log files so
-                # stale scores from previous runs are not silently reused.
-                cache_mtime = normalized_path.stat().st_mtime
-                source_dirs = [engine_layout.get("poses"), engine_layout.get("logs")]
-                source_mtimes: List[float] = []
-                for src_dir in source_dirs:
-                    if src_dir and Path(src_dir).exists():
-                        for src_file in Path(src_dir).iterdir():
-                            if src_file.is_file():
-                                source_mtimes.append(src_file.stat().st_mtime)
-                if source_mtimes and cache_mtime >= max(source_mtimes):
-                    _use_cached = True
-                else:
-                    logger.info(
-                        "_load_or_build_scores: %s is stale (source files newer); rebuilding for %s",
-                        normalized_path.name,
-                        engine,
-                    )
+            cache_key_file = normalized_path.with_suffix(".sources.json")
+            fingerprint = self._source_fingerprint(engine_layout, pair_index)
+            if normalized_path.exists() and cache_key_file.exists():
+                try:
+                    saved_key = json.loads(cache_key_file.read_text(encoding="utf-8"))
+                    _use_cached = saved_key.get("source") == fingerprint and saved_key.get("output") == content_hash(normalized_path)
+                except (ValueError, OSError):
+                    pass
             if _use_cached:
                 frame = pd.read_csv(normalized_path)
             else:
                 frame = self._build_normalized_frame(engine, engine_layout, pair_index)
+                if fingerprint != self._source_fingerprint(engine_layout, pair_index):
+                    raise RuntimeError("Docking inputs changed during score import; rerun from stable completed outputs")
                 if not frame.empty:
                     frame.to_csv(normalized_path, index=False)
+                    cache_key_file.write_text(json.dumps({"source": fingerprint, "output": content_hash(normalized_path)}), encoding="utf-8")
             if not frame.empty:
                 for column in NORMALIZED_COLUMNS:
                     if column not in frame.columns:
                         frame[column] = None
+                frame = self._merge_pair_metadata(frame, self._pair_metadata_frame())
+                if "scoring_function" not in frame:
+                    frame["scoring_function"] = engine
+                frame["scoring_function"] = frame["scoring_function"].fillna(engine)
+                if "receptor_frame_id" not in frame:
+                    frame["receptor_frame_id"] = None
+                for protein in frame["protein"].dropna().unique():
+                    mask = frame["protein"].eq(protein) & frame["receptor_frame_id"].isna()
+                    receptor = shared_receptors_dir(self.project_dir) / f"{Path(str(protein)).stem}.pdbqt"
+                    if receptor.is_file():
+                        frame.loc[mask, "receptor_frame_id"] = "prepared-state:" + content_hash(receptor)
+                frame = frame[frame["pose_file"].map(lambda value: self._pose_is_usable(Path(str(value))))]
                 frames.append(frame[NORMALIZED_COLUMNS].copy())
         if not frames:
             return pd.DataFrame(columns=NORMALIZED_COLUMNS)
@@ -2395,7 +2513,7 @@ class MultiEngineAnalysisPipeline:
         keep = ["tag"] + [column for column in _PAIR_METADATA_COLUMNS if column in frame.columns]
         meta = frame[keep].copy().drop_duplicates("tag")
         if "is_cocrystal_benchmark" in meta.columns:
-            meta["is_cocrystal_benchmark"] = meta["is_cocrystal_benchmark"].fillna(False).astype(bool)
+            meta["is_cocrystal_benchmark"] = meta["is_cocrystal_benchmark"].map(explicit_true)
         return meta
 
     @staticmethod
@@ -2423,17 +2541,24 @@ class MultiEngineAnalysisPipeline:
         pair_index: Dict[str, Dict[str, object]],
     ) -> pd.DataFrame:
         if engine == "gnina":
-            scores_path = engine_layout["scores"] / "all_scores.csv"
-            if not scores_path.exists():
-                success = generate_all_scores_csv(
-                    engine_layout["poses"],
-                    output_file=scores_path,
-                    pairlist_file=pairlist_path(self.project_dir),
-                    log_dir=engine_layout["logs"],
-                )
-                if not success:
-                    return pd.DataFrame(columns=NORMALIZED_COLUMNS)
-            source = pd.read_csv(scores_path)
+            source_rows = []
+            for pose_file in sorted(engine_layout["poses"].glob("*.sdf")):
+                tag = pose_file.stem
+                if (pair_index and tag not in pair_index) or not self._pose_is_usable(pose_file):
+                    continue
+                try:
+                    parsed = parse_sdf_scores(pose_file)
+                    source_rows.extend({"tag": tag, "mode": item["pose"], "vina_affinity": item["affinity"],
+                                        "cnn_affinity": item.get("cnn_affinity"), "cnn_score": item.get("cnn_score")}
+                                       for item in parsed)
+                except (ValueError, KeyError, OSError):
+                    # Legacy imports may lack SDF properties. Require a real pose
+                    # and exact requested tag before accepting its engine log.
+                    log_file = engine_layout["logs"] / f"{tag}.log"
+                    if log_file.is_file():
+                        parsed, _ = parse_gnina_log(log_file, {key:key for key in pair_index} if pair_index else None)
+                        source_rows.extend(parsed)
+            source = pd.DataFrame(source_rows)
             rows = []
             for _, record in source.iterrows():
                 tag = str(record.get("tag", ""))
@@ -2552,7 +2677,7 @@ class MultiEngineAnalysisPipeline:
                 )
         return pd.DataFrame(rows)
 
-    def _write_comparative_reports(self, scores: pd.DataFrame, analysis_scope: str = "full") -> None:
+    def _write_comparative_reports(self, scores: pd.DataFrame, analysis_scope: str = "full", *, preserve_dag_atlas: bool = False) -> None:
         scope = str(analysis_scope or "full").strip().lower()
         if scope not in _SUPPORTED_ANALYSIS_SCOPES:
             scope = "full"
@@ -2601,9 +2726,9 @@ class MultiEngineAnalysisPipeline:
         engine_summary = self._annotate_scope_columns(engine_summary)
         engine_summary.to_csv(reports_dir / "engine_summary.csv", index=False)
 
-        cross_engine_best = self._best_rows_by_group(best_by_engine, ["tag"], "affinity_kcal_mol").sort_values(
-            ["affinity_kcal_mol", "tag"]
-        )
+        relative_best = normalize_engine_scores(best_by_engine, group_keys=["engine", "protein", "site_id"])
+        cross_engine_best = relative_best.sort_values(["tag", "normalized_affinity_score", "engine"], ascending=[True, False, True]).drop_duplicates("tag").copy()
+        cross_engine_best["interpretation"] = "relative_engine_rank_not_raw_energy_winner"
         cross_engine_best = self._annotate_scope_columns(cross_engine_best)
         cross_engine_best.to_csv(reports_dir / "best_engine_per_complex.csv", index=False)
 
@@ -2619,6 +2744,8 @@ class MultiEngineAnalysisPipeline:
         validation_bundle = run_redocking_validation(
             project_dir=self.project_dir,
             best_by_engine=best_by_engine,
+            expected_reference_rows=self.pairlist_df,
+            expected_engines=self.engines_in_scope,
             output_dir=reports_dir,
         )
         redocking_validation_df = validation_bundle.get("validation_df", pd.DataFrame())
@@ -2653,6 +2780,7 @@ class MultiEngineAnalysisPipeline:
                 best_by_engine=best_by_engine,
                 consensus_mode=self.consensus_mode,
                 favorite_engine=self.favorite_engine or self.rerun_engine,
+                expected_engines=self.engines_in_scope,
                 normalization_method=self.normalization_method,
             )
             consensus_df = classify_hits_target_aware(
@@ -2943,7 +3071,23 @@ class MultiEngineAnalysisPipeline:
         )
         top_pose_session_root = self.output_dir / "top_pose_ligand_performance"
         top_pose_canonical_root = self._canonical_top_pose_root()
-        session_top_pose_outputs = write_top_pose_atlas(top_pose_payload, top_pose_session_root)
+        if preserve_dag_atlas:
+            # The atlas node owns these files. A downstream report must consume
+            # its exact representative choices and must never rewrite its inputs.
+            file_keys = {
+                "top_pose_per_ligand_per_protein": "top_pose_per_ligand_per_protein",
+                "top_pose_per_ligand_global": "top_pose_per_ligand_global",
+                "ligand_performance_summary": "ligand_performance_summary",
+                "top_pose_confidence_metrics": "top_pose_confidence_metrics",
+            }
+            for payload_key, stem in file_keys.items():
+                top_pose_payload[payload_key] = pd.read_csv(top_pose_session_root / f"{stem}.csv")
+            manifest_path = top_pose_session_root / "top_pose_selection_manifest.json"
+            top_pose_payload["manifest"] = json.loads(manifest_path.read_text(encoding="utf-8"))
+            session_top_pose_outputs = {f"{key}_file": str(top_pose_session_root / f"{stem}.csv") for key, stem in file_keys.items()}
+            session_top_pose_outputs["top_pose_selection_manifest_file"] = str(manifest_path)
+        else:
+            session_top_pose_outputs = write_top_pose_atlas(top_pose_payload, top_pose_session_root)
         canonical_top_pose_outputs = write_top_pose_atlas(top_pose_payload, top_pose_canonical_root)
         self.top_pose_outputs = {
             **session_top_pose_outputs,
@@ -3935,6 +4079,8 @@ class MultiEngineAnalysisPipeline:
             )
 
         best_by_engine = self._best_rows_by_group(scores, ["engine", "tag"], "affinity_kcal_mol")
+        if self.min_affinity_advantage > 0 and best_by_engine["engine"].nunique() > 1:
+            raise ValueError("Cross-engine raw affinity advantage is uncalibrated; use consensus rank promotion")
         engine_best = best_by_engine[best_by_engine["engine"] == target_engine].copy()
         if engine_best.empty:
             raise ValueError(f"No comparative scores were available for rerun engine '{target_engine}'")
@@ -3960,6 +4106,7 @@ class MultiEngineAnalysisPipeline:
             consensus_mode=self.consensus_mode,
             favorite_engine=target_engine,
             normalization_method=self.normalization_method,
+            expected_engines=self.engines_in_scope,
         )
         rescoring_df = select_rescoring_candidates(
             consensus_df=consensus_df,
@@ -4066,8 +4213,9 @@ class MultiEngineAnalysisPipeline:
     @staticmethod
     def _build_pair_competition(best_by_engine: pd.DataFrame, target_engine: str) -> pd.DataFrame:
         rows = []
-        for tag, group in best_by_engine.groupby("tag", dropna=False):
-            ordered = group.sort_values(["affinity_kcal_mol", "engine"], ascending=[True, True]).reset_index(drop=True)
+        relative = normalize_engine_scores(best_by_engine, group_keys=["engine", "protein", "site_id"])
+        for tag, group in relative.groupby("tag", dropna=False):
+            ordered = group.sort_values(["normalized_affinity_score", "engine"], ascending=[False, True]).reset_index(drop=True)
             target_rows = ordered[ordered["engine"] == target_engine]
             if target_rows.empty:
                 continue
@@ -4078,8 +4226,8 @@ class MultiEngineAnalysisPipeline:
             best_other_affinity = float(best_other["affinity_kcal_mol"]) if best_other is not None else None
             target_affinity = float(target_row["affinity_kcal_mol"])
             affinity_advantage = None
-            if best_other_affinity is not None:
-                affinity_advantage = best_other_affinity - target_affinity
+            # Raw affinity differences across engines are not meaningful.
+            affinity_advantage = None
             rows.append(
                 {
                     "tag": tag,
@@ -4089,6 +4237,7 @@ class MultiEngineAnalysisPipeline:
                     "best_other_affinity_kcal_mol": best_other_affinity,
                     "affinity_advantage_kcal_mol": affinity_advantage,
                     "is_target_engine_winner": bool(str(best_row["engine"]) == target_engine),
+                    "winner_basis": "relative_within_engine_target_rank",
                 }
             )
         return pd.DataFrame(rows)
@@ -4205,7 +4354,7 @@ class MultiEngineAnalysisPipeline:
         best, _selected_metric = self._select_best_pose_rows(engine_scores, requested_metric=ranking_label)
         best["pose"] = pd.to_numeric(best.get("pose"), errors="coerce")
         if _selected_metric == "cnn_affinity":
-            best.sort_values(["cnn_affinity", "affinity_kcal_mol", "pose", "tag"], inplace=True)
+            best.sort_values(["cnn_affinity", "affinity_kcal_mol", "pose", "tag"], ascending=[False, True, True, True], inplace=True)
         else:
             best.sort_values(["affinity_kcal_mol", "pose", "tag"], inplace=True)
         best = self._annotate_scope_columns(best)
@@ -4215,7 +4364,7 @@ class MultiEngineAnalysisPipeline:
         gnina_complex_export_count = 0
         if engine == "gnina":
             engine_layout = ensure_engine_layout(self.project_dir, "gnina")
-            scores_csv = engine_layout["scores"] / "all_scores.csv"
+            scores_csv = output_dir / "all_scores.csv"
             if scores_csv.exists():
                 try:
                     gnina_complex_export_count = extract_best_poses_from_gnina(
@@ -4238,10 +4387,7 @@ class MultiEngineAnalysisPipeline:
         summary = self._annotate_scope_columns(summary)
         summary.to_csv(output_dir / "protein_summary.csv", index=False)
         collapse_warning = ""
-        if engine == "vina":
-            rmsd = pd.to_numeric(best.get("rmsd_lb"), errors="coerce").dropna()
-            if not rmsd.empty and (rmsd == 0.0).all():
-                collapse_warning = "Potential docking collapse detected: best-pose rmsd_lb == 0.0 across all reported poses."
+        # Vina reports distance from its best mode: mode 1 is zero by definition.
         if engine == "smina":
             smina_meta = (
                 (self.engine_detection_report.get("engines") or {}).get("smina", {})
@@ -4538,9 +4684,9 @@ class MultiEngineAnalysisPipeline:
         with open(receptor_file, "r", encoding="utf-8", errors="ignore") as handle:
             for line in handle:
                 if receptor_file.suffix.lower() == ".pdbqt":
-                    converted = self._pdbqt_atom_to_pdb_record(line, "ATOM  ", "A")
+                    converted = self._pdbqt_atom_to_pdb_record(line, line[:6], line[21:22] or " ")
                 else:
-                    converted = self._normalize_pdb_record(line, "ATOM  ", "A")
+                    converted = self._normalize_pdb_record(line, line[:6], line[21:22] or " ")
                 if converted:
                     receptor_lines.append(converted)
         return receptor_lines
@@ -4722,7 +4868,9 @@ class MultiEngineAnalysisPipeline:
             return scores.copy()
         ranked = scores.copy()
         ranked[value_col] = pd.to_numeric(ranked[value_col], errors="coerce")
-        idx = ranked.groupby(group_cols, dropna=False)[value_col].idxmin()
+        valid = ranked[np.isfinite(ranked[value_col])]
+        grouped = valid.groupby(group_cols, dropna=False)[value_col]
+        idx = grouped.idxmin() if score_spec(value_col).lower_is_better else grouped.idxmax()
         idx = idx.dropna().astype(int)
         if idx.empty:
             return ranked.iloc[0:0].copy()
@@ -4791,7 +4939,7 @@ class MultiEngineAnalysisPipeline:
             primary = pd.to_numeric(working.get("affinity_kcal_mol"), errors="coerce")
             metric = "vina_affinity"
 
-        working["_primary_sort"] = primary.fillna(np.inf)
+        working["_primary_sort"] = primary.map(lambda value: sort_value(value, metric))
         working["_secondary_sort"] = pd.to_numeric(working.get("affinity_kcal_mol"), errors="coerce").fillna(np.inf)
         working["_pose_sort"] = pd.to_numeric(working.get("pose"), errors="coerce").fillna(np.inf)
         working["_engine_sort"] = working["engine"].astype(str)
@@ -4951,8 +5099,19 @@ class MultiEngineAnalysisPipeline:
             if not output_name:
                 output_name = f"complex_{extracted + 1}"
             output_file = poses_dir / f"{output_name}.pdb"
+            for sidecar_suffix in (".ligand.sdf", ".geometry.json"):
+                output_file.with_suffix(sidecar_suffix).unlink(missing_ok=True)
             all_lines = self._renumber_pdb_serials(receptor_lines + ligand_lines)
             output_file.write_text("\n".join(all_lines + ["END"]) + "\n", encoding="utf-8")
+            output_file.with_suffix(".receptor.pdb").write_text("\n".join(receptor_lines + ["END"]) + "\n", encoding="utf-8")
+            try:
+                from rdkit import Chem
+                ligand_molecule = load_pose_molecule(pose_file, pose_number)
+                with Chem.SDWriter(str(output_file.with_suffix(".ligand.sdf"))) as writer:
+                    writer.write(ligand_molecule)
+                output_file.with_suffix(".geometry.json").write_text(json.dumps({"receptor_frame_id": row.get("receptor_frame_id"), "pose_file": str(pose_file), "pose": pose_number}), encoding="utf-8")
+            except Exception as exc:
+                logger.warning("Complex %s is display-only: authoritative chemical graph unavailable (%s)", output_name, exc)
             validation = validate_complex_pdb_structure(output_file, receptor_reference=receptor_file)
             validation_errors = [str(item) for item in (validation.get("errors") or [])]
             validation_warnings = [str(item) for item in (validation.get("warnings") or [])]
@@ -5065,7 +5224,13 @@ class MultiEngineAnalysisPipeline:
         best_poses_dir.mkdir(parents=True, exist_ok=True)
         copied = 0
         for complex_file in sorted(complexes_dir.glob("*.pdb")):
+            if complex_file.name.endswith(".receptor.pdb"):
+                continue
             shutil.copy2(complex_file, best_poses_dir / complex_file.name)
+            for suffix in (".ligand.sdf", ".receptor.pdb", ".geometry.json"):
+                sidecar = complex_file.with_suffix(suffix)
+                if sidecar.exists():
+                    shutil.copy2(sidecar, best_poses_dir / sidecar.name)
             copied += 1
         return copied
 
@@ -5099,6 +5264,8 @@ class MultiEngineAnalysisPipeline:
 
         rows: List[Dict[str, object]] = []
         for pdb_file in sorted(complexes_dir.glob("*.pdb")):
+            if pdb_file.name.endswith(".receptor.pdb"):
+                continue
             stem = pdb_file.stem
             source = source_lookup.get(stem, {})
             validation = validate_complex_pdb_structure(pdb_file)
@@ -5209,6 +5376,11 @@ class MultiEngineAnalysisPipeline:
         summary_csv = scope_dir / f"{summary_basename}.csv"
         summary_json = scope_dir / f"{summary_basename}.json"
         state_file = scope_dir / f"{summary_basename}_scope_state.json"
+        if any(column in export_df and export_df[column].nunique() > 1 for column in ("ligand", "protein_name", "protein_label")):
+            summary = {"scope": scope_name, "state": "not_evaluable", "reason": "cross_ligand_or_cross_receptor_RMSD_requires_explicit_mapping", "pose_count": len(export_df)}
+            summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+            pd.DataFrame([summary]).to_csv(summary_csv, index=False)
+            return summary
 
         def _scope_signature(frame: pd.DataFrame) -> str:
             signature_df = frame.copy()
@@ -5226,6 +5398,7 @@ class MultiEngineAnalysisPipeline:
                     "matrix_filename": matrix_filename,
                     "summary_basename": summary_basename,
                     "signature_csv": signature_df.to_csv(index=False),
+                    "source_content": {str(path): content_hash(path) for value in signature_df.to_numpy().ravel() for original in [Path(str(value))] if original.is_file() for path in [original, original.with_suffix(".ligand.sdf"), original.with_suffix(".geometry.json")] if path.is_file()},
                 },
                 sort_keys=True,
             )

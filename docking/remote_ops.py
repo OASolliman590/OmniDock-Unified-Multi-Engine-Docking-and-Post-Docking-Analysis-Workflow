@@ -4,7 +4,7 @@ import re
 import shlex
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Tuple
 
 from .hpc_profiles import resolve_remote_project_dir, resolve_ssh_target
@@ -46,7 +46,7 @@ def resolve_remote_target(
         raise ValueError(
             "No remote project directory configured. Provide --remote-project-dir or set remote.project_root/project_root_base in the local HPC profile."
         )
-    return resolved_ssh_target, resolved_remote_dir
+    return resolved_ssh_target, str(PurePosixPath(resolved_remote_dir.replace("\\", "/")))
 
 
 def build_sync_commands(
@@ -61,7 +61,7 @@ def build_sync_commands(
     if shutil.which("rsync") is None:
         raise RuntimeError("rsync is required for dock sync but was not found on PATH.")
 
-    mkdir_cmd = ["ssh", ssh_target, "mkdir", "-p", remote_project_dir]
+    mkdir_cmd = ["ssh", ssh_target, "mkdir -p -- " + shlex.quote(remote_project_dir)]
     rsync_cmd = ["rsync", "-az"]
     if delete:
         rsync_cmd.append("--delete")
@@ -132,7 +132,7 @@ def build_submit_commands(
     commands: List[List[str]] = []
     for engine in engines:
         remote_script = (
-            Path(remote_project_dir)
+            PurePosixPath(remote_project_dir.replace("\\", "/"))
             / "4-Docking"
             / "deployments"
             / round_id

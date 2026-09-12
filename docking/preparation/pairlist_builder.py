@@ -15,6 +15,7 @@ from ..project_layout import (
     pairlist_path,
 )
 from .excel_sites import load_site_catalog_from_summary
+from .asset_identity import REFERENCE_FIELDS, pair_reference_metadata
 from .project_aliases import (
     build_ligand_alias_lookup,
     build_protein_alias_lookup,
@@ -60,6 +61,10 @@ PAIRLIST_COLUMNS = [
 ]
 
 
+PAIR_INTENT_COLUMNS += REFERENCE_FIELDS
+PAIRLIST_COLUMNS += REFERENCE_FIELDS
+
+
 def _normalize_key(value: str) -> str:
     raw = Path(str(value).strip()).stem.lower()
     for suffix in ("_cleaned", "_prepared", "_prep"):
@@ -76,35 +81,13 @@ def _extract_pdb_id(value: str) -> str:
 
 
 def _index_assets(directory: Path, allowed_suffixes: set[str]) -> Dict[str, Path]:
-    directory = Path(directory)
-    if not directory.exists():
-        raise FileNotFoundError(f"Asset directory not found: {directory}")
-
-    index: Dict[str, Path] = {}
-    for path in sorted(directory.iterdir()):
-        if not path.is_file() or path.suffix.lower() not in allowed_suffixes:
-            continue
-        for token in {path.name.lower(), path.stem.lower(), _normalize_key(path.name), _normalize_key(path.stem)}:
-            index.setdefault(token, path)
-        if "_ligand_" in path.stem.lower():
-            ligand_suffix = path.stem.lower().split("_ligand_", 1)[1]
-            index.setdefault(ligand_suffix, path)
-            index.setdefault(_normalize_key(ligand_suffix), path)
-        try:
-            index.setdefault(_extract_pdb_id(path.name).lower(), path)
-        except ValueError:
-            pass
-    if not index:
-        raise ValueError(f"No usable assets found in {directory}")
-    return index
+    from .asset_identity import index_assets
+    return index_assets(directory, allowed_suffixes, _normalize_key)
 
 
 def _list_unique_assets(directory: Path, allowed_suffixes: set[str]) -> List[Path]:
-    return sorted(
-        path
-        for path in Path(directory).iterdir()
-        if path.is_file() and path.suffix.lower() in allowed_suffixes
-    )
+    from .asset_identity import active_assets
+    return active_assets(directory, allowed_suffixes)
 
 
 def _resolve_asset(raw_name: str, asset_index: Dict[str, Path], asset_type: str) -> Path:
@@ -119,6 +102,8 @@ def _resolve_asset(raw_name: str, asset_index: Dict[str, Path], asset_type: str)
         except ValueError:
             pass
     for candidate in candidates:
+        if candidate in getattr(asset_index, "ambiguous", set()):
+            raise ValueError(f"Ambiguous {asset_type} alias '{raw_name}'; use an exact prepared filename")
         if candidate in asset_index:
             return asset_index[candidate]
     raise ValueError(f"Could not match {asset_type} '{raw_name}' to a prepared file")
@@ -255,12 +240,13 @@ def generate_pairlists(
             "center_x": float(site_row["center_x"]),
             "center_y": float(site_row["center_y"]),
             "center_z": float(site_row["center_z"]),
-            "size_x": float(default_box_size),
-            "size_y": float(default_box_size),
-            "size_z": float(default_box_size),
+            "size_x": float(site_row.get("size_x") if pd.notna(site_row.get("size_x")) else default_box_size),
+            "size_y": float(site_row.get("size_y") if pd.notna(site_row.get("size_y")) else default_box_size),
+            "size_z": float(site_row.get("size_z") if pd.notna(site_row.get("size_z")) else default_box_size),
             "protein_display_name": protein_display_name,
             "ligand_display_name": ligand_display_name,
         }
+        core_row.update(pair_reference_metadata(receptor_source, ligand_source))
         pairlist_rows.append(core_row.copy())
         pair_intent_rows.append(
             {

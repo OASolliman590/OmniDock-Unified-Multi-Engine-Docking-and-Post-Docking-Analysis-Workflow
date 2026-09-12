@@ -46,6 +46,12 @@ class PairlistRow:
     size_x: float
     size_y: float
     size_z: float
+    reference_source: str = ""
+    reference_frame_id: str = ""
+    receptor_frame_id: str = ""
+    reference_pdb_id: str = ""
+    reference_pose_file: str = ""
+    reference_ligand_file: str = ""
 
     @property
     def tag(self) -> str:
@@ -114,6 +120,12 @@ class EngineJobResult:
     status: str
     returncode: Optional[int] = None
     error: str = ""
+    engine: str = ""
+    fingerprint: str = ""
+    completion_file: str = ""
+    input_files: List[Dict[str, str]] = field(default_factory=list)
+    executables: List[str] = field(default_factory=list)
+    skip_completed: bool = False
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)

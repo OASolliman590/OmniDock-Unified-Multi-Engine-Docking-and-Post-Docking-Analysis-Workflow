@@ -19,6 +19,9 @@ import pandas as pd
 
 from docking.project_layout import shared_ligands_dir
 from post_docking_analysis.geometric_consensus import _extract_sdf_pose
+from post_docking_analysis.pose_geometry import pose_rmsd, selected_record
+from post_docking_analysis.score_semantics import explicit_true
+from post_docking_analysis.pose_geometry import content_hash
 
 logger = logging.getLogger(__name__)
 
@@ -45,22 +48,14 @@ _REFERENCE_TEXT_TOKENS = (
 
 
 def _is_reference_candidate_row(row: pd.Series) -> bool:
-    if bool(row.get("is_cocrystal_benchmark")):
+    if explicit_true(row.get("is_cocrystal_benchmark")):
         return True
 
     pair_source = str(row.get("pair_source") or "").strip().lower()
     if pair_source in {"cocrystal", "reference", "native", "redocking", "comparative", "compartive"}:
         return True
 
-    site_id = str(row.get("site_id") or "").strip().lower()
-    if site_id in _REFERENCE_SITE_TOKENS:
-        return True
-
-    text = " ".join(
-        str(row.get(key) or "")
-        for key in ("tag", "ligand", "cocrystal_ligand_name", "ligand_display_name")
-    ).lower()
-    return any(token in text for token in _REFERENCE_TEXT_TOKENS)
+    return False
 
 
 def _atom_element_from_pdb_line(line: str) -> str:
@@ -88,7 +83,7 @@ def _parse_pdb_like_heavy_atoms(
         return _extract_sdf_pose(file_path, pose_index=pose_index)
 
     try:
-        lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        lines = selected_record(file_path, pose_index).splitlines()
     except Exception as exc:
         return np.empty((0, 3), dtype=float), [], f"read_error:{exc}"
 
@@ -116,34 +111,39 @@ def _parse_pdb_like_heavy_atoms(
 def _kabsch_rmsd(coords_a: np.ndarray, coords_b: np.ndarray) -> float:
     if coords_a.shape != coords_b.shape or coords_a.shape[0] <= 0:
         return float("nan")
-    a = coords_a - np.mean(coords_a, axis=0)
-    b = coords_b - np.mean(coords_b, axis=0)
-    covariance = np.dot(a.T, b)
-    u, _, vt = np.linalg.svd(covariance)
-    rot = np.dot(vt.T, u.T)
-    if np.linalg.det(rot) < 0:
-        vt[-1, :] *= -1
-        rot = np.dot(vt.T, u.T)
-    aligned = np.dot(a, rot)
-    diff = aligned - b
+    # Legacy API name: docking validation must remain in the receptor frame.
+    diff = coords_a - coords_b
     return float(np.sqrt(np.mean(np.sum(diff * diff, axis=1))))
 
 
-def _compute_pose_rmsd(docked_pose_file: Path, reference_pose_file: Path) -> Tuple[Optional[float], str]:
-    dock_coords, dock_elements, dock_err = _parse_pdb_like_heavy_atoms(docked_pose_file, pose_index=1)
-    if dock_coords.size == 0:
-        return None, f"docked_pose_parse_failed:{dock_err or 'unknown'}"
-    ref_coords, ref_elements, ref_err = _parse_pdb_like_heavy_atoms(reference_pose_file, pose_index=1)
-    if ref_coords.size == 0:
-        return None, f"reference_pose_parse_failed:{ref_err or 'unknown'}"
-    if dock_coords.shape[0] != ref_coords.shape[0]:
-        return None, f"atom_count_mismatch:{dock_coords.shape[0]}!={ref_coords.shape[0]}"
-    if dock_elements != ref_elements:
-        return None, "element_sequence_mismatch"
-    rmsd = _kabsch_rmsd(dock_coords, ref_coords)
-    if not np.isfinite(rmsd):
-        return None, "rmsd_not_finite"
-    return float(rmsd), ""
+def _positive_pose_index(value, default=None) -> int:
+    if pd.isna(value):
+        if default is None:
+            raise ValueError("missing_pose_index")
+        return default
+    number = float(value)
+    if not np.isfinite(number) or number < 1 or number != int(number):
+        raise ValueError("invalid_pose_index")
+    return int(number)
+
+
+def _experimental_provenance(row: pd.Series) -> bool:
+    source = row.get("reference_source")
+    accession = row.get("reference_pdb_id")
+    if pd.isna(source) or pd.isna(accession) or not str(accession).strip():
+        return False
+    label, separator, identifier = str(source).strip().lower().partition(":")
+    return label in {"cocrystal", "experimental"} and (
+        not separator or identifier.upper() == str(accession).strip().upper()
+    )
+
+
+def _compute_pose_rmsd(docked_pose_file: Path, reference_pose_file: Path, *, pose_index: int = 1, reference_pose_index: int = 1) -> Tuple[Optional[float], str]:
+    try:
+        value = pose_rmsd(docked_pose_file, reference_pose_file, pose_a=pose_index, pose_b=reference_pose_index)
+        return (value, "") if np.isfinite(value) else (None, "rmsd_not_finite")
+    except Exception as exc:
+        return None, str(exc)
 
 
 def _candidate_reference_roots(project_dir: Path) -> List[Path]:
@@ -203,25 +203,7 @@ def _find_reference_pose_file(project_dir: Path, row: pd.Series) -> Optional[Pat
         if resolved is not None and resolved.is_file():
             return resolved
 
-    roots = _candidate_reference_roots(project_dir)
-    if not roots:
-        return None
-
-    extensions = (".pdb", ".pdbqt")
-    for token in _iter_ligand_name_tokens(row):
-        for root in roots:
-            exact_candidates: List[Path] = []
-            fuzzy_candidates: List[Path] = []
-            for ext in extensions:
-                exact = root / f"{token}{ext}"
-                if exact.exists() and exact.is_file():
-                    exact_candidates.append(exact.resolve())
-            if exact_candidates:
-                return sorted(exact_candidates)[0]
-            for ext in extensions:
-                fuzzy_candidates.extend(sorted(root.glob(f"*{token}*{ext}")))
-            if fuzzy_candidates:
-                return Path(fuzzy_candidates[0]).resolve()
+    # Raw ligands and fuzzy file-name matches are not experimental references.
     return None
 
 
@@ -242,12 +224,10 @@ def _build_validation_summary_markdown(summary: Dict[str, object]) -> str:
         "",
     ]
     confidence = str(summary.get("confidence_signal", "LOW")).upper()
-    if confidence == "HIGH":
-        lines.append("Validation confidence is high: most evaluable redocking rows passed.")
-    elif confidence == "MEDIUM":
-        lines.append("Validation confidence is moderate: mixed redocking pass/fail outcomes.")
+    if confidence == "SUFFICIENT_PROTOCOL_CHECKS":
+        lines.append("The configured reference-count, coverage and pose-reproduction checks passed. This is a protocol check, not evidence of predictive affinity or physical pose validity.")
     else:
-        lines.append("Validation confidence is low: no/limited evaluable rows or weak redocking reproduction.")
+        lines.append("Reference checks are limited by coverage, independent reference count, or pose reproduction. Reference anchoring is disabled.")
     return "\n".join(lines) + "\n"
 
 
@@ -258,6 +238,10 @@ def run_redocking_validation(
     output_dir: Path,
     pass_threshold_angstrom: float = 2.0,
     warn_threshold_angstrom: float = 3.5,
+    minimum_reference_complexes: int = 3,
+    minimum_coverage: float = 1.0,
+    expected_reference_rows: Optional[pd.DataFrame] = None,
+    expected_engines: Optional[List[str]] = None,
 ) -> Dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     validation_file = output_dir / "redocking_validation.csv"
@@ -275,6 +259,7 @@ def run_redocking_validation(
         "redocking_rmsd_angstrom",
         "redocking_classification",
         "validation_reason",
+        "pose", "scoring_function",
     ]
     baseline_columns = [
         "protein",
@@ -285,9 +270,26 @@ def run_redocking_validation(
         "redocking_classification",
         "anchor_status",
         "anchor_reason",
+        "engine", "scoring_function",
     ]
 
-    if best_by_engine is None or best_by_engine.empty:
+    best_by_engine = best_by_engine.copy() if best_by_engine is not None else pd.DataFrame()
+    if expected_reference_rows is not None and not expected_reference_rows.empty:
+        known = set(zip(best_by_engine.get("tag", []), best_by_engine.get("engine", [])))
+        missing = []
+        engines = expected_engines or sorted(set(best_by_engine.get("engine", [])))
+        for _, candidate in expected_reference_rows.iterrows():
+            if not _is_reference_candidate_row(candidate):
+                continue
+            identity = candidate.to_dict()
+            identity["protein"] = identity.get("protein", identity.get("receptor", ""))
+            identity["tag"] = identity.get("tag", f"{identity['protein']}_{identity.get('site_id', '')}_{identity.get('ligand', '')}")
+            for engine in engines:
+                if (identity["tag"], engine) not in known:
+                    missing.append({**identity, "engine":engine, "pose":1, "pose_file":"", "affinity_kcal_mol":np.nan})
+        if missing:
+            best_by_engine = pd.concat([best_by_engine, pd.DataFrame(missing)], ignore_index=True)
+    if best_by_engine.empty:
         empty = pd.DataFrame(
             columns=validation_columns
         )
@@ -342,8 +344,19 @@ def run_redocking_validation(
             reason = "missing_docked_pose_file"
         elif reference_pose_path is None or not reference_pose_path.exists():
             reason = "missing_reference_pose_file"
+        elif not _experimental_provenance(row):
+            reason = "missing_experimental_reference_provenance"
+        elif not str(row.get("reference_pdb_id", "") or "").strip() or pd.isna(row.get("reference_pdb_id")):
+            reason = "missing_reference_source_identifier"
+        elif pd.isna(row.get("receptor_frame_id")) or pd.isna(row.get("reference_frame_id")) or not str(row.get("receptor_frame_id", "")).strip() or str(row.get("receptor_frame_id")) != str(row.get("reference_frame_id")):
+            reason = "unverified_common_receptor_frame"
         else:
-            rmsd, error = _compute_pose_rmsd(docked_pose_path, reference_pose_path)
+            try:
+                pose_index = _positive_pose_index(row.get("pose", 1))
+                reference_index = _positive_pose_index(row.get("reference_pose_index", 1), default=1)
+                rmsd, error = _compute_pose_rmsd(docked_pose_path, reference_pose_path, pose_index=pose_index, reference_pose_index=reference_index)
+            except (TypeError, ValueError, OverflowError):
+                rmsd, error = None, "invalid_pose_index"
             if rmsd is None:
                 reason = error or "rmsd_computation_failed"
             else:
@@ -365,6 +378,8 @@ def run_redocking_validation(
                 "redocking_rmsd_angstrom": rmsd,
                 "redocking_classification": classification,
                 "validation_reason": reason,
+                "pose": row.get("pose", 1),
+                "scoring_function": row.get("scoring_function", row.get("engine", "")),
             }
         )
 
@@ -378,7 +393,9 @@ def run_redocking_validation(
     )
 
     baseline_rows: List[Dict[str, object]] = []
-    for protein, group in merged.groupby("protein", dropna=False):
+    if "scoring_function" not in merged:
+        merged["scoring_function"] = merged["engine"]
+    for (protein, engine, scoring_function), group in merged.groupby(["protein", "engine", "scoring_function"], dropna=False):
         valid = group[group["redocking_classification"] == "pass"].copy()
         if not valid.empty:
             valid["affinity_kcal_mol"] = pd.to_numeric(valid.get("affinity_kcal_mol"), errors="coerce")
@@ -395,6 +412,7 @@ def run_redocking_validation(
                     "redocking_classification": "pass",
                     "anchor_status": "eligible",
                     "anchor_reason": "validated_reference",
+                    "engine": str(engine), "scoring_function": str(scoring_function),
                 }
             )
         else:
@@ -408,6 +426,7 @@ def run_redocking_validation(
                     "redocking_classification": "not_evaluable",
                     "anchor_status": "fallback_percentile",
                     "anchor_reason": "no_passed_redocking_reference",
+                    "engine": str(engine), "scoring_function": str(scoring_function),
                 }
             )
     reference_baselines_df = pd.DataFrame(baseline_rows, columns=baseline_columns)
@@ -421,14 +440,17 @@ def run_redocking_validation(
     total_reference_rows = int(len(validation_df))
     not_evaluable_count = int((validation_df["redocking_classification"] == "not_evaluable").sum())
     pass_rate = float(pass_count / evaluable_count) if evaluable_count else 0.0
-    if total_reference_rows == 0 or evaluable_count == 0:
-        confidence = "LOW"
-    elif pass_rate >= 0.80:
-        confidence = "HIGH"
-    elif pass_rate >= 0.50:
-        confidence = "MEDIUM"
-    else:
-        confidence = "LOW"
+    coverage = float(evaluable_count / total_reference_rows) if total_reference_rows else 0.0
+    # Aliases and additional engines do not create independent experimental complexes.
+    unique_reference_count = len({
+        (str(row.get("reference_pdb_id", "")).upper(), str(row.get("reference_frame_id", "")),
+         content_hash(reference_path))
+        for _, row in references.iterrows() if _experimental_provenance(row)
+        if (reference_path := _find_reference_pose_file(project_dir, row)) is not None
+    })
+    sufficient = coverage >= minimum_coverage and unique_reference_count >= minimum_reference_complexes and pass_rate >= 0.80
+    # This is protocol-check evidence, not a statistical confidence estimate.
+    confidence = "SUFFICIENT_PROTOCOL_CHECKS" if sufficient else "LIMITED"
 
     summary_payload = {
         "total_reference_rows": total_reference_rows,
@@ -439,13 +461,17 @@ def run_redocking_validation(
         "not_evaluable_rows": not_evaluable_count,
         "pass_rate": f"{pass_rate:.3f}",
         "confidence_signal": confidence,
+        "coverage": coverage,
+        "unique_reference_complexes": unique_reference_count,
+        "minimum_reference_complexes": int(minimum_reference_complexes),
+        "minimum_coverage": float(minimum_coverage),
     }
-    gate_state = "validated" if confidence == "HIGH" else "needs_review"
+    gate_state = "validated" if sufficient else "needs_review"
     allow_reference_anchor = gate_state == "validated"
     gate_reason = (
-        "high_confidence_redocking"
+        "sufficient_protocol_checks"
         if gate_state == "validated"
-        else "redocking_confidence_not_high"
+        else "insufficient_protocol_checks_or_coverage"
     )
     summary_payload.update(
         {

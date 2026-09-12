@@ -296,7 +296,18 @@ def ensure_post_docking_compat_shim(project_root: Path) -> Dict[str, object]:
                 stacklevel=2,
             )
     else:
-        legacy.symlink_to(canonical, target_is_directory=True)
+        try:
+            legacy.symlink_to(canonical, target_is_directory=True)
+        except OSError as exc:
+            # Windows without Developer Mode cannot create symlinks. Keep the
+            # canonical directory authoritative and explain the compatibility
+            # path instead of failing every project/runner construction.
+            legacy.mkdir(parents=True, exist_ok=True)
+            (legacy / "README.txt").write_text(
+                "Analysis outputs are in ../5-Analysis. This compatibility directory is not an output location.\n",
+                encoding="utf-8",
+            )
+            return {"status": "directory_fallback", "canonical_root": canonical, "legacy_root": legacy, "reason": str(exc)}
         warnings.warn(
             f"Created compatibility symlink {legacy} -> {canonical}. Use {canonical} for new analysis outputs.",
             RuntimeWarning,

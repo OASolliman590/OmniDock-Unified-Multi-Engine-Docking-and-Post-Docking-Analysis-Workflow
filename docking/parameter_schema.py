@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+import math
 from typing import Dict, List, Literal, Optional, Tuple
 
 from .models import PairlistRow
@@ -99,9 +100,9 @@ def validate_parameter_schema(schema: DockingParameterSchema, selected_engines: 
         errors.append("`num_modes` must be >= 1.")
     if common.seed is not None and common.seed < 0:
         errors.append("`seed` must be >= 0.")
-    if common.box_scale <= 0:
+    if not math.isfinite(common.box_scale) or common.box_scale <= 0:
         errors.append("`box_scale` must be > 0.")
-    if common.box_padding < 0:
+    if not math.isfinite(common.box_padding) or common.box_padding < 0:
         errors.append("`box_padding` must be >= 0.")
 
     if schema.mode == "basic" and schema.preset not in BASIC_PRESETS:
@@ -144,10 +145,8 @@ def transform_pairlist_rows(rows: List[PairlistRow], schema: DockingParameterSch
     transformed: List[PairlistRow] = []
     for row in rows:
         transformed.append(
-            PairlistRow(
-                receptor=row.receptor,
-                site_id=row.site_id,
-                ligand=row.ligand,
+            replace(
+                row,
                 center_x=float(row.center_x),
                 center_y=float(row.center_y),
                 center_z=float(row.center_z),
@@ -157,3 +156,16 @@ def transform_pairlist_rows(rows: List[PairlistRow], schema: DockingParameterSch
             )
         )
     return transformed
+
+
+def validate_pairlist_geometry(rows: List[PairlistRow]) -> List[str]:
+    errors = []
+    seen = set()
+    for row in rows:
+        values = [row.center_x, row.center_y, row.center_z, row.size_x, row.size_y, row.size_z]
+        if not all(math.isfinite(float(value)) for value in values) or any(float(value) <= 0 for value in values[3:]):
+            errors.append(f"{row.tag}: box centers must be finite and sizes must be finite and > 0.")
+        if row.tag in seen:
+            errors.append(f"Duplicate docking pair tag: {row.tag}")
+        seen.add(row.tag)
+    return errors

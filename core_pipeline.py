@@ -207,9 +207,18 @@ class MolecularDockingPipeline:
         suffix = structure_path.suffix.lower()
         if suffix in {".cif", ".mmcif"}:
             parser = MMCIFParser(QUIET=True)
+            structure = parser.get_structure(structure_id, str(structure_path))
         else:
+            from io import StringIO
+            from docking.preparation.structure_contract import select_pdb_lines
             parser = PDBParser(QUIET=True)
-        return parser.get_structure(structure_id, str(structure_path))
+            lines = structure_path.read_text(encoding="utf-8").splitlines()
+            if any(line.startswith(("ATOM  ", "HETATM")) for line in lines):
+                lines, _ = select_pdb_lines(lines)
+            structure = parser.get_structure(structure_id, StringIO("\n".join(lines) + "\n"))
+        if len(list(structure)) > 1:
+            raise ValueError("Multiple models: select one explicit model before preparation")
+        return structure
 
     @staticmethod
     def _normalize_structure_for_pdbio(structure):
@@ -430,436 +439,97 @@ class MolecularDockingPipeline:
 
         return groups
 
-    def save_hetatm_as_pdb(self, pdb_file: str, selected_hetatm: str, 
-                          chain_id: str, res_id: int, 
+    def save_hetatm_as_pdb(self, pdb_file: str, selected_hetatm: str,
+                          chain_id: str, res_id: int,
                           pdb_id: Optional[str] = None,
-                          output_filename: Optional[str] = None) -> Optional[str]:
-        """
-        Save a specific HETATM residue as a separate PDB file.
-        
-        Args:
-            pdb_file (str): Path to source PDB file
-            selected_hetatm (str): HETATM residue name
-            chain_id (str): Chain identifier
-            res_id (int): Residue ID
-            pdb_id (str, optional): PDB ID to include in filename
-            output_filename (str, optional): Output filename
-            
-        Returns:
-            Optional[str]: Path to saved ligand PDB file, or None if failed
-        """
-        print(f"🔄 Saving HETATM {selected_hetatm}_{chain_id}_{res_id} as separate PDB...")
-        
-        try:
-            structure = self._load_structure('protein', pdb_file)
-            
-            # Create new structure containing only the selected HETATM
-            new_structure = Structure('ligand')
-            new_model = Model(0)
-            output_chain_id = chain_id[0] if len(str(chain_id)) > 1 else chain_id
-            new_chain = Chain(output_chain_id)
-            
-            # Find and copy the specific HETATM residue
-            found_residue = None
-            for model in structure:
-                for chain in model:
-                    if chain.get_id() == chain_id:
-                        for residue in chain:
-                            if (residue.get_resname() == selected_hetatm and 
-                                residue.get_id()[1] == res_id and
-                                residue.get_id()[0] != ' '):
-                                found_residue = residue
-                                break
-            
-            if found_residue:
-                new_chain.add(found_residue.copy())
-                new_model.add(new_chain)
-                new_structure.add(new_model)
-                
-                # Save as PDB
-                if output_filename is None:
-                    if pdb_id:
-                        output_filename = self.output_dir / f"{pdb_id}_ligand_{selected_hetatm}_{chain_id}_{res_id}.pdb"
-                    else:
-                        output_filename = self.output_dir / f"ligand_{selected_hetatm}_{chain_id}_{res_id}.pdb"
-                
-                io = PDBIO()
-                io.set_structure(self._normalize_structure_for_pdbio(new_structure))
-                io.save(str(output_filename))
-                from docking.preparation.ligand_quality import sanitize_ligand_pdb_file
+                          output_filename: Optional[str] = None,
+                          insertion_code: Optional[str] = None) -> str:
+        """Extract one unambiguous ligand instance without inventing chemistry."""
+        from docking.preparation.structure_contract import write_selection, residue_key
+        import json
+        source = Path(pdb_file)
+        if source.suffix.lower() not in {".pdb", ".ent"}:
+            raise ValueError("Use an authoritative instance SDF for mmCIF ligand extraction; PDB conversion loses chemical identity.")
+        lines = source.read_text(encoding="utf-8").splitlines()
+        candidates = {residue_key(line) for line in lines if line.startswith("HETATM") and line[17:20].strip() == selected_hetatm and line[21:22].strip() == str(chain_id).strip() and line[22:26].strip() == str(res_id)}
+        if insertion_code is not None:
+            candidates = {key for key in candidates if key[2] == insertion_code.strip()}
+        if len(candidates) != 1:
+            raise ValueError("Ligand instance is missing or ambiguous; specify chain, residue number and insertion code")
+        key = next(iter(candidates))
+        destination = Path(output_filename) if output_filename else self.output_dir / f"{pdb_id + '_' if pdb_id else ''}ligand_{selected_hetatm}_{chain_id}_{res_id}{key[2]}.pdb"
+        metadata = write_selection(source, destination, residue=key)
+        metadata.update({"reference_source": "cocrystal" if pdb_id else "unverified", "reference_pdb_id": pdb_id or "", "selected_instance": list(key), "reference_pose_file": str(destination.resolve())})
+        destination.with_suffix(destination.suffix + ".preparation.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        return str(destination)
 
-                sanitize_ligand_pdb_file(Path(output_filename), Path(output_filename))
-                print(f"✓ Ligand saved as: {output_filename}")
-                return str(output_filename)
-            else:
-                print(f"❌ Could not find HETATM {selected_hetatm}_{chain_id}_{res_id}")
-                return None
-                
-        except Exception as e:
-            print(f"❌ Error saving HETATM: {e}")
-            return None
+    def clean_pdb(self, pdb_file: str, to_remove_list: List[str],
+                  pdb_id: Optional[str] = None, output_filename: Optional[str] = None,
+                  keep_chain_id: Optional[str] = None, keep_chain_ids: Optional[List[str]] = None,
+                  remove_instances: Optional[List[Tuple[str, str, str, str]]] = None) -> str:
+        """Build a receptor from explicit residue instances, preserving atom metadata."""
+        from docking.preparation.structure_contract import write_selection, residue_key
+        import json
+        source = Path(pdb_file)
+        if source.suffix.lower() not in {".pdb", ".ent"}:
+            raise ValueError("Explicit mmCIF assembly/model selection is required before PDB receptor export")
+        lines = source.read_text(encoding="utf-8").splitlines()
+        chains = set(keep_chain_ids or [])
+        if keep_chain_id:
+            chains.add(keep_chain_id)
+        remove = {tuple(map(str, key)) for key in (remove_instances or [])}
+        for line in lines:
+            if line.startswith(("ATOM  ", "HETATM")):
+                key = residue_key(line)
+                if key[3] in to_remove_list or (chains and key[0] not in chains):
+                    remove.add(key)
+        destination = Path(output_filename) if output_filename else self.output_dir / f"{pdb_id + '_' if pdb_id else ''}cleaned.pdb"
+        metadata = write_selection(source, destination, remove_instances=remove)
+        metadata.update({"removed_instances": sorted(remove), "receptor_frame_id": metadata["reference_frame_id"], "source_accession": pdb_id or "", "assembly_status": "source_asymmetric_unit_not_verified"})
+        destination.with_suffix(destination.suffix + ".preparation.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        return str(destination)
 
-    def clean_pdb(
-        self,
-        pdb_file: str,
-        to_remove_list: List[str],
-        pdb_id: Optional[str] = None,
-        output_filename: Optional[str] = None,
-        keep_chain_id: Optional[str] = None,
-        keep_chain_ids: Optional[List[str]] = None,
-    ) -> str:
-        """
-        Clean PDB file by removing specified residues.
-        
-        Args:
-            pdb_file (str): Path to input PDB file
-            to_remove_list (List[str]): List of residue names to remove
-            pdb_id (str, optional): PDB ID to include in filename
-            output_filename (str, optional): Output filename
-            
-        Returns:
-            str: Path to cleaned PDB file
-        """
-        print(f"🔄 Cleaning PDB file...")
-        
-        try:
-            keep_chains: List[str] = []
-            if keep_chain_ids:
-                keep_chains.extend([str(chain).strip() for chain in keep_chain_ids if str(chain).strip()])
-            keep_chain = str(keep_chain_id or "").strip()
-            if keep_chain and keep_chain not in keep_chains:
-                keep_chains.append(keep_chain)
-            before_counts = self._cleaning_counts(str(pdb_file))
+    def distance_based_interaction_detection(self, pdb_file: str, ligand_name: str,
+                                             chain_id: str, res_id: int, cutoff: float = 5.0) -> List[np.ndarray]:
+        report = extract_residue_level_coordinates(pdb_file, ligand_name, chain_id, res_id, cutoff)
+        return report["all_coords"]
 
-            if output_filename is None:
-                if pdb_id:
-                    output_filename = self.output_dir / f"{pdb_id}_cleaned.pdb"
-                else:
-                    output_filename = self.output_dir / "cleaned.pdb"
-            output_filename = str(output_filename)
+    def extract_active_site_coords(self, cleaned_pdb: str, ligand_name: str,
+                                  chain_id: str, res_id: int,
+                                  method: str = "distance") -> Tuple[np.ndarray, int]:
+        # Site geometry must not depend on whether PLIP is installed.
+        report = extract_residue_level_coordinates(cleaned_pdb, ligand_name, chain_id, res_id)
+        return report["overall_center"], report["num_interacting_atoms"]
 
-            cleaned_with_pdb_tools = False
-            input_suffix = Path(pdb_file).suffix.lower()
-            detected_pdb_tools: Optional[Dict[str, List[str]]] = None
-            if input_suffix == ".pdb":
-                detected_pdb_tools = self._find_pdb_tools()
-                try:
-                    if detected_pdb_tools:
-                        cleaned_with_pdb_tools = self._clean_pdb_with_pdb_tools(
-                            pdb_file=pdb_file,
-                            output_filename=output_filename,
-                            to_remove_list=to_remove_list,
-                            keep_chain_id=keep_chain_id,
-                            keep_chain_ids=keep_chains,
-                            tool_paths=detected_pdb_tools,
-                        )
-                        if cleaned_with_pdb_tools:
-                            print("✓ Cleaning backend: pdb-tools")
-                    else:
-                        print("ℹ️  pdb-tools not found in PATH; using Biopython backend")
-                except Exception as pdb_tools_error:
-                    print(f"⚠️  pdb-tools cleaning failed, falling back to Biopython: {pdb_tools_error}")
-
-            if not cleaned_with_pdb_tools:
-                structure = self._load_structure('protein', pdb_file)
-                keep_chain_set = set(keep_chains)
-
-                # Create a selector to keep only desired residues (and optional chain filter)
-                class ResidueSelector(Select):
-                    def accept_chain(self, chain):
-                        if not keep_chain_set:
-                            return True
-                        chain_id = str(chain.get_id()).strip()
-                        original_chain_id = str(chain.xtra.get("original_chain_id", "")).strip()
-                        return chain_id in keep_chain_set or original_chain_id in keep_chain_set
-
-                    def accept_residue(self, residue):
-                        resname = residue.get_resname()
-                        return resname not in to_remove_list
-
-                io = PDBIO()
-                io.set_structure(self._normalize_structure_for_pdbio(structure))
-                io.save(str(output_filename), ResidueSelector())
-                print("✓ Cleaning backend: Biopython")
-
-            after_counts = self._cleaning_counts(str(output_filename))
-            if keep_chains:
-                print(f"✓ Chain filter applied: kept chain(s) {', '.join(keep_chains)}")
-            print(
-                "✓ Cleaning summary: "
-                f"ATOM {before_counts['ATOM']} -> {after_counts['ATOM']}, "
-                f"HETATM {before_counts['HETATM']} -> {after_counts['HETATM']}, "
-                f"TER {before_counts['TER']} -> {after_counts['TER']}"
-            )
-            
-            print(f"✓ Cleaned PDB saved as: {output_filename}")
-            return str(output_filename)
-        except Exception as e:
-            print(f"❌ Error cleaning PDB: {e}")
-            raise
-
-    def distance_based_interaction_detection(self, pdb_file: str, ligand_name: str, 
-                                          chain_id: str, res_id: int, 
-                                          cutoff: float = 5.0) -> List[np.ndarray]:
-        """
-        Detect interacting residues using distance-based approach.
-        
-        Args:
-            pdb_file (str): Path to PDB file
-            ligand_name (str): Ligand residue name
-            chain_id (str): Chain identifier
-            res_id (int): Residue ID
-            cutoff (float): Distance cutoff in Angstroms
-            
-        Returns:
-            List[np.ndarray]: List of coordinates of interacting atoms
-        """
-        try:
-            structure = self._load_structure('protein', pdb_file)
-            
-            # Find ligand atoms
-            ligand_atoms = []
-            for model in structure:
-                for chain in model:
-                    if chain.get_id() == chain_id:
-                        for residue in chain:
-                            if (residue.get_resname() == ligand_name and 
-                                residue.get_id()[1] == res_id and
-                                residue.get_id()[0] != ' '):
-                                ligand_atoms = [atom for atom in residue.get_atoms()]
-                                break
-            
-            if not ligand_atoms:
-                raise ValueError(f"Ligand {ligand_name} not found in chain {chain_id}")
-            
-            # Find interacting atoms
-            all_coords = []
-            interacting_residues = set()
-            
-            for model in structure:
-                for chain in model:
-                    for residue in chain:
-                        if residue.get_id()[0] == ' ':  # Protein residue
-                            for res_atom in residue.get_atoms():
-                                for lig_atom in ligand_atoms:
-                                    distance = res_atom - lig_atom  # BioPython distance calculation
-                                    if distance <= cutoff:
-                                        all_coords.append(res_atom.get_coord())
-                                        interacting_residues.add(residue.get_resname() + str(residue.get_id()[1]))
-                                        break
-            
-            print(f"✓ Found {len(interacting_residues)} interacting residues")
-            return all_coords
-            
-        except Exception as e:
-            raise ValueError(f"Distance-based interaction detection failed: {e}")
-
-    def extract_active_site_coords(self, cleaned_pdb: str, ligand_name: str, 
-                                 chain_id: str, res_id: int, 
-                                 method: str = 'distance') -> Tuple[np.ndarray, int]:
-        """
-        Extract active site coordinates using specified method.
-        
-        Args:
-            cleaned_pdb (str): Path to cleaned PDB file
-            ligand_name (str): Ligand residue name
-            chain_id (str): Chain identifier
-            res_id (int): Residue ID
-            method (str): Method to use ('plip' or 'distance')
-            
-        Returns:
-            Tuple[np.ndarray, int]: Active site center coordinates and number of atoms
-        """
-        print(f"🔄 Extracting active site coordinates using {method} method...")
-        
-        coords = []
-        
-        if method == 'plip' and self.plip_available:
-            try:
-                from plip.structure.preparation import PDBComplex
-                from plip.exchange.report import BindingSiteReport
-
-                my_mol = PDBComplex()
-                my_mol.load_pdb(cleaned_pdb)
-                my_mol.analyze()
-
-                interactions = my_mol.interaction_sets
-                if not interactions:
-                    print("⚠️  No interactions found with PLIP, falling back to distance method")
-                    method = 'distance'
-                else:
-                    for site in interactions.values():
-                        report = BindingSiteReport(site)
-                        all_interacting_residues = report.bs_res_interacting
-
-                        for residue in all_interacting_residues:
-                            for atom in residue.atoms:
-                                coords.append(atom.get_coord())
-
-                    print(f"✓ PLIP found {len(coords)} interacting atoms")
-            except Exception as e:
-                print(f"⚠️  PLIP failed: {e}, using distance method")
-                method = 'distance'
-        
-        if method == 'distance' or len(coords) == 0:
-            coords = self.distance_based_interaction_detection(
-                cleaned_pdb, ligand_name, chain_id, res_id
-            )
-        
-        if not coords:
-            raise ValueError("No coordinates extracted")
-        
-        # Calculate average XYZ
-        avg_xyz = np.mean(coords, axis=0)
-        print(f"✓ Active site center: X={avg_xyz[0]:.2f}, Y={avg_xyz[1]:.2f}, Z={avg_xyz[2]:.2f}")
-        
-        return avg_xyz, len(coords)
-
-    def analyze_pocket_properties(self, cleaned_pdb: str, center_coords: np.ndarray, 
-                                ligand_pdb: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Comprehensive pocket analysis using multiple approaches.
-        
-        Args:
-            cleaned_pdb (str): Path to cleaned PDB file
-            center_coords (np.ndarray): Pocket center coordinates
-            ligand_pdb (str, optional): Path to ligand PDB file
-            
-        Returns:
-            Dict[str, Any]: Dictionary containing pocket analysis results
-        """
-        print("🔄 Starting comprehensive pocket analysis...")
-        
-        results = {
-            'center_x': center_coords[0],
-            'center_y': center_coords[1], 
-            'center_z': center_coords[2]
-        }
-        
-        try:
-            structure = self._load_structure('protein', cleaned_pdb)
-            
-            # Pocket Size and Shape Analysis
-            print("📊 Analyzing pocket size and shape...")
-            try:
-                # Geometric estimation based on interaction sphere
-                results['pocket_volume_A3'] = 4/3 * np.pi * (5.0**3)  # Assume 5Å interaction sphere
-            except Exception as e:
-                print(f"⚠️  Pocket volume analysis failed: {e}")
-                results['pocket_volume_A3'] = 'N/A'
-            
-            # Electrostatic Potential Analysis
-            print("⚡ Analyzing electrostatic potential...")
-            try:
-                charged_residues = {'ARG': 1, 'LYS': 1, 'HIS': 0.5, 'ASP': -1, 'GLU': -1}
-                electrostatic_score = 0
-                nearby_charges = 0
-                
-                for model in structure:
-                    for chain in model:
-                        for residue in chain:
-                            if residue.get_id()[0] == ' ':  # Protein residue
-                                resname = residue.get_resname()
-                                if resname in charged_residues:
-                                    # Check if residue is near the pocket center
-                                    try:
-                                        ca_atom = residue['CA']
-                                        dist = np.linalg.norm(ca_atom.get_coord() - center_coords)
-                                        if dist <= 10.0:  # Within 10Å of pocket center
-                                            electrostatic_score += charged_residues[resname]
-                                            nearby_charges += 1
-                                    except:
-                                        continue
-                
-                results['electrostatic_score'] = electrostatic_score
-                results['nearby_charged_residues'] = nearby_charges
-                print(f"✓ Electrostatic analysis: {electrostatic_score:.2f} (from {nearby_charges} charged residues)")
-            except Exception as e:
-                print(f"⚠️  Electrostatic analysis failed: {e}")
-                results['electrostatic_score'] = 'N/A'
-                results['nearby_charged_residues'] = 0
-            
-            # Hydrophobic Character Analysis
-            print("🧪 Analyzing hydrophobic character...")
-            try:
-                hydrophobic_residues = {'PHE', 'TRP', 'TYR', 'LEU', 'ILE', 'VAL', 'ALA', 'MET'}
-                hydrophobic_score = 0
-                nearby_hydrophobic = 0
-                
-                for model in structure:
-                    for chain in model:
-                        for residue in chain:
-                            if residue.get_id()[0] == ' ':  # Protein residue
-                                resname = residue.get_resname()
-                                if resname in hydrophobic_residues:
-                                    try:
-                                        ca_atom = residue['CA']
-                                        dist = np.linalg.norm(ca_atom.get_coord() - center_coords)
-                                        if dist <= 8.0:  # Within 8Å of pocket center
-                                            hydrophobic_score += 1
-                                            nearby_hydrophobic += 1
-                                    except:
-                                        continue
-                
-                results['hydrophobic_score'] = hydrophobic_score
-                results['nearby_hydrophobic_residues'] = nearby_hydrophobic
-                print(f"✓ Hydrophobic analysis: {hydrophobic_score} hydrophobic residues nearby")
-            except Exception as e:
-                print(f"⚠️  Hydrophobic analysis failed: {e}")
-                results['hydrophobic_score'] = 'N/A'
-                results['nearby_hydrophobic_residues'] = 0
-            
-            # Druggability Scoring
-            print("💊 Calculating druggability score...")
-            try:
-                # Simple druggability scoring based on multiple factors
-                druggability_factors = []
-                
-                # Factor 1: Pocket volume (normalized)
-                if isinstance(results['pocket_volume_A3'], (int, float)):
-                    vol_score = min(1.0, results['pocket_volume_A3'] / 1000.0)
-                    druggability_factors.append(vol_score)
-                
-                # Factor 2: Hydrophobic character (normalized)
-                if isinstance(results['hydrophobic_score'], (int, float)):
-                    hydro_score = min(1.0, results['hydrophobic_score'] / 10.0)
-                    druggability_factors.append(hydro_score)
-                
-                # Factor 3: Electrostatic balance (absolute value, inverted and normalized)
-                if isinstance(results['electrostatic_score'], (int, float)):
-                    elec_score = max(0.0, 1.0 - abs(results['electrostatic_score']) / 5.0)
-                    druggability_factors.append(elec_score)
-                
-                if druggability_factors:
-                    druggability_score = np.mean(druggability_factors)
-                    results['druggability_score'] = round(druggability_score, 3)
-                    
-                    # Interpretation
-                    if druggability_score >= 0.7:
-                        interpretation = "Excellent"
-                    elif druggability_score >= 0.5:
-                        interpretation = "Good" 
-                    elif druggability_score >= 0.3:
-                        interpretation = "Moderate"
-                    else:
-                        interpretation = "Poor"
-                    
-                    results['druggability_interpretation'] = interpretation
-                    print(f"✓ Druggability score: {druggability_score:.3f} ({interpretation})")
-                else:
-                    results['druggability_score'] = 'N/A'
-                    results['druggability_interpretation'] = 'Unknown'
-            except Exception as e:
-                print(f"⚠️  Druggability scoring failed: {e}")
-                results['druggability_score'] = 'N/A'
-                results['druggability_interpretation'] = 'Unknown'
-            
-            print("✓ Pocket analysis completed successfully")
-            return results
-            
-        except Exception as e:
-            print(f"❌ Pocket analysis failed: {e}")
-            raise
+    def analyze_pocket_properties(self, cleaned_pdb: str, center_coords: np.ndarray,
+                                  ligand_pdb: Optional[str] = None) -> Dict[str, Any]:
+        """Report descriptive contacts; unsupported physical properties are unevaluated."""
+        center = np.asarray(center_coords, dtype=float)
+        if center.shape != (3,) or not np.isfinite(center).all():
+            raise ValueError("Pocket center must contain three finite coordinates")
+        structure = self._load_structure("protein", cleaned_pdb)
+        nearby = set()
+        hydrophobic = set()
+        for model in structure:
+            for chain in model:
+                for residue in chain:
+                    if residue.get_id()[0] != " ":
+                        continue
+                    for atom in residue.get_atoms():
+                        xyz = np.asarray(atom.get_coord(), dtype=float)
+                        if not np.isfinite(xyz).all():
+                            raise ValueError("Nonfinite receptor coordinates")
+                        if np.linalg.norm(xyz - center) <= 8.0:
+                            key = (model.id, chain.id, residue.id)
+                            nearby.add(key)
+                            if residue.get_resname() in {"PHE", "TRP", "TYR", "LEU", "ILE", "VAL", "ALA", "MET"}:
+                                hydrophobic.add(key)
+                            break
+        return {"center_x": float(center[0]), "center_y": float(center[1]), "center_z": float(center[2]),
+                "nearby_residue_count": len(nearby), "nearby_hydrophobic_residues": len(hydrophobic),
+                "descriptive_radius_A": 8.0, "pocket_volume_A3": None, "electrostatic_score": None,
+                "druggability_score": None, "druggability_interpretation": "Not evaluated",
+                "pocket_properties_status": "not_evaluated_no_validated_physical_model"}
 
     def generate_summary_report(self, results: Dict[str, Any], pdb_id: str) -> str:
         """
@@ -1039,216 +709,46 @@ def parse_plip_text_report(report_file: str, ligand_name: str, chain_id: str, re
         return None
 
 
-def extract_residue_level_coordinates(pdb_file: str, ligand_name: str, 
-                                    chain_id: str, res_id: int, cutoff: float = 5.0) -> Optional[Dict]:
-    """
-    Extract binding site coordinates at residue level using PLIP's text report.
-    This function provides reliable analysis using PLIP's text output format.
-    
-    Args:
-        pdb_file (str): Path to PDB file
-        ligand_name (str): Ligand residue name
-        chain_id (str): Chain identifier
-        res_id (int): Residue ID
-        cutoff (float): Distance cutoff in Angstroms (fallback method)
-        
-    Returns:
-        Optional[Dict]: Dictionary with coordinate analysis or None if failed
-    """
-    print(f"🔄 Extracting residue-level binding site coordinates for {ligand_name}...")
-    
-    try:
-        structure_path = Path(pdb_file)
-        structure = MolecularDockingPipeline._load_structure('protein', pdb_file)
+def extract_residue_level_coordinates(pdb_file: str, ligand_name: str,
+                                     chain_id: str, res_id: int, cutoff: float = 5.0) -> Optional[Dict]:
+    """Define a reproducible ligand envelope and minimum-distance residue contacts.
 
-        # Try PLIP text report analysis first
-        if structure_path.suffix.lower() in {".cif", ".mmcif"}:
-            print("⚠️  Skipping PLIP text analysis for mmCIF input; using distance-based fallback.")
-        else:
-            print(f"🔄 Using PLIP text report analysis...")
-        
-        # Create temporary directory for PLIP analysis
-        import tempfile
-        import subprocess
-        import os
-        
-        if structure_path.suffix.lower() not in {".cif", ".mmcif"}:
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Copy PDB file to temp directory
-                temp_pdb = os.path.join(temp_dir, os.path.basename(pdb_file))
-                import shutil
-                shutil.copy2(pdb_file, temp_pdb)
-                
-                # Run PLIP to generate text report
-                try:
-                    result = subprocess.run(['plip', '-f', temp_pdb, '-t'], 
-                                          capture_output=True, text=True, cwd=temp_dir)
-                    if result.returncode == 0:
-                        # Find the report file
-                        report_files = [f for f in os.listdir(temp_dir) if f.endswith('report.txt')]
-                        if report_files:
-                            report_file = os.path.join(temp_dir, report_files[0])
-                            
-                            # Parse the report
-                            interactions = parse_plip_text_report(report_file, ligand_name, chain_id, res_id)
-                            
-                            if interactions:
-                                interacting_residues = set()
-                                all_coords = []
-                                
-                                # Collect coordinates from all interaction types
-                                for interaction_type, interaction_list in interactions.items():
-                                    for interaction in interaction_list:
-                                        reskey = f"{interaction['restype']}_{interaction['resnr']}"
-                                        interacting_residues.add(reskey)
-                                        
-                                        # Find the residue in the structure
-                                        for model in structure:
-                                            for chain in model:
-                                                if chain.get_id() == chain_id:
-                                                    for residue in chain:
-                                                        if (residue.get_resname() == interaction['restype'] and 
-                                                            residue.get_id()[1] == interaction['resnr'] and
-                                                            residue.get_id()[0] == ' '):
-                                                            for atom in residue.get_atoms():
-                                                                all_coords.append(atom.get_coord())
-                                                            break
-                                
-                                if all_coords:
-                                    # Calculate overall center
-                                    overall_center = np.mean(all_coords, axis=0)
-                                    
-                                    # Calculate residue averages
-                                    residue_averages = {}
-                                    for reskey in interacting_residues:
-                                        res_coords = []
-                                        restype, resnr = reskey.split('_')
-                                        resnr = int(resnr)
-                                        
-                                        for model in structure:
-                                            for chain in model:
-                                                if chain.get_id() == chain_id:
-                                                    for residue in chain:
-                                                        if (residue.get_resname() == restype and 
-                                                            residue.get_id()[1] == resnr and
-                                                            residue.get_id()[0] == ' '):
-                                                            for atom in residue.get_atoms():
-                                                                res_coords.append(atom.get_coord())
-                                                            break
-                                        
-                                        if res_coords:
-                                            residue_averages[reskey] = np.mean(res_coords, axis=0)
-                                    
-                                    print(f"✓ PLIP found {len(interacting_residues)} interacting residues")
-                                    print(f"✓ Total interacting atoms: {len(all_coords)}")
-                                    print(f"✓ Binding site center: X={overall_center[0]:.2f}, Y={overall_center[1]:.2f}, Z={overall_center[2]:.2f}")
-                                    
-                                    return {
-                                        'overall_center': overall_center,
-                                        'residue_averages': residue_averages,
-                                        'all_coords': all_coords,
-                                        'ligand_center': overall_center,
-                                        'num_interacting_residues': len(interacting_residues),
-                                        'num_interacting_atoms': len(all_coords),
-                                        'plip_enhanced': True,
-                                        'interaction_types': {
-                                            'hydrophobic': len(interactions['hydrophobic']),
-                                            'hydrogen_bonds': len(interactions['hydrogen_bonds']),
-                                            'pi_stacking': len(interactions['pi_stacking']),
-                                            'salt_bridges': len(interactions['salt_bridges']),
-                                            'halogen_bonds': len(interactions['halogen_bonds']),
-                                            'water_bridges': len(interactions['water_bridges']),
-                                            'metal_complexes': len(interactions['metal_complexes']),
-                                            'pi_cation': 0
-                                        },
-                                        'detailed_interactions': {
-                                            'hydrophobic_residues': sorted(set([f"{i['restype']}_{i['resnr']}" for i in interactions['hydrophobic']])),
-                                            'hydrogen_bond_residues': sorted(set([f"{i['restype']}_{i['resnr']}" for i in interactions['hydrogen_bonds']])),
-                                            'halogen_bond_residues': sorted(set([f"{i['restype']}_{i['resnr']}" for i in interactions['halogen_bonds']])),
-                                            'pi_stacking_residues': sorted(set([f"{i['restype']}_{i['resnr']}" for i in interactions['pi_stacking']])),
-                                            'salt_bridge_residues': sorted(set([f"{i['restype']}_{i['resnr']}" for i in interactions['salt_bridges']]))
-                                        }
-                                    }
-                                else:
-                                    print(f"⚠️ No interacting atoms found for {ligand_name}:{chain_id}:{res_id}")
-                            else:
-                                print(f"⚠️ No interactions found in PLIP report for {ligand_name}:{chain_id}:{res_id}")
-                        else:
-                            print(f"⚠️ PLIP report file not found")
-                    else:
-                        print(f"⚠️ PLIP command failed: {result.stderr}")
-                except FileNotFoundError:
-                    print(f"⚠️ PLIP command not found, using fallback method")
-                except Exception as e:
-                    print(f"⚠️ PLIP analysis failed: {e}, using fallback method")
-        
-        # Fallback to distance-based method
-        print(f"🔄 Using distance-based fallback method...")
-        # Find the ligand residue
-        ligand_residue = None
-        for model in structure:
-            for chain in model:
-                if chain.get_id() == chain_id:
-                    for residue in chain:
-                        if (residue.get_resname() == ligand_name and 
-                            residue.get_id()[1] == res_id and
-                            residue.get_id()[0] != ' '):
-                            ligand_residue = residue
-                            break
-        
-        if not ligand_residue:
-            raise ValueError(f"Ligand {ligand_name} not found in chain {chain_id}")
-        
-        # Get ligand atom coordinates
-        ligand_coords = [atom.get_coord() for atom in ligand_residue.get_atoms()]
-        ligand_center = np.mean(ligand_coords, axis=0)
-        
-        # Find interacting residues within cutoff distance
-        residue_coords = {}
-        
-        for model in structure:
-            for chain in model:
-                for residue in chain:
-                    if residue.get_id()[0] == ' ':  # Protein residue
-                        resname = residue.get_resname()
-                        resnum = residue.get_id()[1]
-                        reskey = f"{resname}_{resnum}"
-                        
-                        # Check if any atom in this residue is within cutoff
-                        for atom in residue.get_atoms():
-                            dist = np.linalg.norm(atom.get_coord() - ligand_center)
-                            if dist <= cutoff:
-                                if reskey not in residue_coords:
-                                    residue_coords[reskey] = []
-                                residue_coords[reskey].append(atom.get_coord())
-                                break
-        
-        # Calculate average coordinates for each interacting residue
-        residue_averages = {}
-        all_coords = []
-        
-        for reskey, coords in residue_coords.items():
-            avg_coord = np.mean(coords, axis=0)
-            residue_averages[reskey] = avg_coord
-            all_coords.extend(coords)
-        
-        # Calculate overall average binding site center
-        overall_center = np.mean(all_coords, axis=0) if all_coords else ligand_center
-        
-        print(f"✓ Found {len(residue_averages)} interacting residues")
-        print(f"✓ Total interacting atoms: {len(all_coords)}")
-        print(f"✓ Binding site center: X={overall_center[0]:.2f}, Y={overall_center[1]:.2f}, Z={overall_center[2]:.2f}")
-        
-        return {
-            'overall_center': overall_center,
-            'residue_averages': residue_averages,
-            'all_coords': all_coords,
-            'ligand_center': ligand_center,
-            'num_interacting_residues': len(residue_averages),
-            'num_interacting_atoms': len(all_coords),
-            'plip_enhanced': False
-        }
-        
-    except Exception as e:
-        print(f"❌ Error in residue-level coordinate extraction: {e}")
-        return None
+    This is a geometric contact report, not an interaction classifier. A ligand
+    instance and one model must be unambiguous; atom order cannot change the box.
+    """
+    structure = MolecularDockingPipeline._load_structure("protein", pdb_file)
+    models = list(structure)
+    if len(models) != 1:
+        raise ValueError("Select one receptor model explicitly before site extraction")
+    ligands = [(chain, residue) for chain in models[0] for residue in chain
+               if str(chain.id).strip() == str(chain_id).strip() and residue.get_resname() == ligand_name
+               and residue.get_id()[1] == res_id and residue.get_id()[0] != " "]
+    if len(ligands) != 1:
+        raise ValueError("Reference ligand instance is missing or ambiguous")
+    def heavy_coords(residue):
+        coords = [np.asarray(atom.get_coord(), dtype=float) for atom in residue.get_atoms()
+                  if str(getattr(atom, "element", "")).strip().upper() not in {"H", "D"}]
+        if coords and not np.isfinite(np.asarray(coords)).all():
+            raise ValueError("Nonfinite structure coordinates")
+        return coords
+    ligand_coords = np.asarray(heavy_coords(ligands[0][1]))
+    if not len(ligand_coords):
+        raise ValueError("Reference ligand has no heavy atoms")
+    center = (ligand_coords.min(axis=0) + ligand_coords.max(axis=0)) / 2
+    sizes = ligand_coords.max(axis=0) - ligand_coords.min(axis=0) + 10.0
+    residue_coords = {}
+    for chain in models[0]:
+        for residue in chain:
+            if residue.get_id()[0] != " ":
+                continue
+            contacting = [xyz for xyz in heavy_coords(residue) if np.min(np.linalg.norm(ligand_coords - xyz, axis=1)) <= cutoff]
+            if contacting:
+                key = f"{chain.id}:{residue.id[1]}{residue.id[2].strip()}:{residue.get_resname()}"
+                residue_coords[key] = contacting
+    all_coords = [xyz for key in sorted(residue_coords) for xyz in residue_coords[key]]
+    return {"overall_center": center, "ligand_center": ligand_coords.mean(axis=0),
+            "residue_averages": {key: np.mean(coords, axis=0) for key, coords in residue_coords.items()},
+            "all_coords": all_coords, "num_interacting_residues": len(residue_coords),
+            "num_interacting_atoms": len(all_coords), "plip_enhanced": False,
+            "interaction_method": "minimum_heavy_atom_distance", "contact_cutoff_A": cutoff,
+            "size_x": float(sizes[0]), "size_y": float(sizes[1]), "size_z": float(sizes[2])}

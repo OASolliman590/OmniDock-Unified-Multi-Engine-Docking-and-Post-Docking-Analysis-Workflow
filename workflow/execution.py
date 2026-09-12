@@ -683,22 +683,43 @@ def run_pdb_collect(
         for ligand_pdb in sorted(layout["raw_proteins"].glob(f"{pdb_id}_ligand_*.pdb")):
             ligand_copy = layout["raw_ligands"] / ligand_pdb.name
             shutil.copy2(ligand_pdb, ligand_copy)
+            source_provenance = ligand_pdb.with_suffix(ligand_pdb.suffix + ".preparation.json")
+            copied_provenance = ligand_copy.with_suffix(ligand_copy.suffix + ".preparation.json")
+            if source_provenance.exists():
+                shutil.copy2(source_provenance, copied_provenance)
             copied_ligands.append(str(ligand_copy))
             try:
                 ligand_pdb.unlink()
             except OSError as exc:
                 warnings.append(f"Failed to remove ligand artifact from raw proteins ({ligand_pdb.name}): {exc}")
             sdf_output = layout["raw_ligands_sdf"] / f"{ligand_pdb.stem}.sdf"
-            if shutil.which("obabel"):
-                completed = subprocess.run(
-                    ["obabel", str(ligand_copy), "-O", str(sdf_output)],
-                    capture_output=True,
-                    text=True,
-                )
-                if completed.returncode != 0:
-                    warnings.append(f"Open Babel conversion failed for {ligand_pdb.name}: {completed.stderr.strip()}")
-            else:
-                warnings.append("Open Babel not found; raw ligand SDF conversion skipped.")
+            # An inferred bond graph is not a validated experimental reference.
+            # Preserve an older SDF as history, never as this collection's result.
+            if sdf_output.exists():
+                history = layout["metadata"] / "previous_ligand_references" / build_run_id("reference", suffix=uuid4().hex)
+                history.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(sdf_output), str(history / sdf_output.name))
+                sdf_meta = sdf_output.with_suffix(sdf_output.suffix + ".preparation.json")
+                if sdf_meta.exists():
+                    shutil.move(str(sdf_meta), str(history / sdf_meta.name))
+            try:
+                from workflow.reference_chemistry import retrieve_reference_sdf
+                provenance = retrieve_reference_sdf(ligand_copy, pdb_id, sdf_output)
+                copied_provenance.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
+            except Exception as exc:
+                # This invocation owns the fresh output; a partially written SDF
+                # must not be picked up by subsequent preparation directory scans.
+                sdf_output.unlink(missing_ok=True)
+                try:
+                    provenance = json.loads(copied_provenance.read_text(encoding="utf-8")) if copied_provenance.exists() else {}
+                    if not isinstance(provenance, dict):
+                        provenance = {}
+                except (OSError, ValueError):
+                    provenance = {}
+                provenance.update({"chemistry_status": "not_evaluated", "chemistry_error": str(exc),
+                                   "reference_pose_file": "", "reference_ligand_file": ""})
+                copied_provenance.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
+                warnings.append(f"Authoritative reference SDF unavailable for {ligand_pdb.name}: {exc}. Supply a verified SDF before ligand preparation.")
 
     if not workbook.sheetnames:
         ws = workbook.create_sheet("Summary")

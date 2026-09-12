@@ -63,7 +63,7 @@ class VinaRunner(DockingEngineRunner):
     def collect_normalized_scores(self, pairlist_rows: List[PairlistRow]) -> pd.DataFrame:
         pair_index: Dict[str, PairlistRow] = {row.tag: row for row in pairlist_rows}
         rows = []
-        for pose_file in sorted(self.layout["poses"].glob(f"*{self.pose_extension}")):
+        for pose_file in self.accepted_pose_files(pairlist_rows):
             tag = pose_file.stem
             parsed = parse_vina_pdbqt(pose_file)
             pair = pair_index.get(tag)

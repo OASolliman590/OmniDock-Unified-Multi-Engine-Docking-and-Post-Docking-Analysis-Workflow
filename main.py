@@ -53,6 +53,11 @@ def _normalize_legacy_args(argv: list[str]) -> list[str]:
 
 
 def main() -> int:
+    # Redirected Windows streams may use a legacy encoding. Status symbols must
+    # not prevent the scientific command from starting.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     argv = _normalize_legacy_args(sys.argv[1:])
     print("🔬 Omni-DockForge: End-to-End Docking, Consensus by Design. v4.0.0-dev")
     print("=" * 40)

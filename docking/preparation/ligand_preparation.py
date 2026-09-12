@@ -196,10 +196,10 @@ def _load_rdkit_molecule(input_path: Path) -> Any:
     suffix = input_path.suffix.lower()
     if suffix == ".sdf":
         supplier = Chem.SDMolSupplier(str(input_path), removeHs=False)
-        for mol in supplier:
-            if mol is not None:
-                return mol
-        return None
+        molecules = list(supplier)
+        if len(molecules) != 1 or molecules[0] is None:
+            raise ValueError("Each ligand artifact must contain exactly one valid molecule")
+        return molecules[0]
     if suffix == ".mol":
         return Chem.MolFromMolFile(str(input_path), removeHs=False)
     if suffix == ".mol2":
@@ -294,12 +294,19 @@ def _normalize_with_openbabel(
         temp_charged = temp_dir / f"{input_path.stem}_charged.sdf"
         temp_min = temp_dir / f"{input_path.stem}_min.sdf"
 
+        molecule = _load_rdkit_molecule(input_path)
+        if molecule is None:
+            raise ValueError("Ligand chemistry could not be parsed")
+        had_3d = _has_3d_coordinates(molecule)
         source_result = _run_command(["obabel", str(input_path), "-O", str(temp_source)])
         if _is_zero_molecule_obabel_result(source_result) or not _file_has_meaningful_content(temp_source):
             raise ValueError(f"OpenBabel could not parse ligand source into SDF: {input_path}")
-        gen3d_result = _run_command(["obabel", str(temp_source), "-O", str(temp_3d), "--gen3d"])
-        if _is_zero_molecule_obabel_result(gen3d_result) or not _file_has_meaningful_content(temp_3d):
-            raise ValueError(f"OpenBabel failed to generate 3D conformer for: {input_path}")
+        if had_3d:
+            shutil.copy2(temp_source, temp_3d)
+        else:
+            gen3d_result = _run_command(["obabel", str(temp_source), "-O", str(temp_3d), "--gen3d"])
+            if _is_zero_molecule_obabel_result(gen3d_result) or not _file_has_meaningful_content(temp_3d):
+                raise ValueError(f"OpenBabel failed to generate 3D conformer for: {input_path}")
         protonation_applied = False
         try:
             addh_result = _run_command(
@@ -308,14 +315,13 @@ def _normalize_with_openbabel(
                     str(temp_3d),
                     "-O",
                     str(temp_h),
-                    "-h",
                     "-p",
                     f"{protonation_ph:.2f}",
                 ]
             )
             protonation_applied = True
-        except subprocess.CalledProcessError:
-            addh_result = _run_command(["obabel", str(temp_3d), "-O", str(temp_h), "-h"])
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError("Required pH-dependent ligand protonation failed; simple hydrogen addition is not an equivalent fallback") from exc
         if _is_zero_molecule_obabel_result(addh_result) or not _file_has_meaningful_content(temp_h):
             raise ValueError(f"OpenBabel failed to add hydrogens for: {input_path}")
 
@@ -340,7 +346,7 @@ def _normalize_with_openbabel(
                 partial_charge_applied = False
 
         optimized_forcefield = ""
-        for forcefield in ("MMFF94", "UFF"):
+        for forcefield in (() if had_3d else ("MMFF94", "UFF")):
             try:
                 min_result = _run_command(
                     [
@@ -371,8 +377,8 @@ def _normalize_with_openbabel(
         "normalization_backend": "openbabel",
         "source_file": str(input_path),
         "normalized_sdf": str(output_sdf),
-        "had_3d_input": False,
-        "generated_3d": True,
+        "had_3d_input": had_3d,
+        "generated_3d": not had_3d,
         "protonation_ph": protonation_ph,
         "protonation_applied": protonation_applied,
         "partial_charge_model": partial_charge_model,
@@ -389,18 +395,10 @@ def normalize_ligand_to_sdf(
 ) -> Dict[str, object]:
     source = Path(input_path).expanduser().resolve()
     destination = Path(output_sdf).expanduser().resolve()
-    errors: list[str] = []
-
-    # Enforce a single OpenBabel-first 3D normalization path across engines.
-    try:
-        return _normalize_with_openbabel(source, destination, protonation_ph=protonation_ph)
-    except Exception as exc:
-        errors.append(f"openbabel:{exc}")
-
-    payload = _normalize_with_rdkit(source, destination)
-    payload["fallback_reasons"] = errors
-    payload["protonation_ph"] = protonation_ph
-    return payload
+    if source.suffix.lower() == ".pdb":
+        raise ValueError("PDB coordinates do not establish ligand chemistry; provide an authoritative SDF with bond orders, charges and stereochemistry")
+    # Failure is explicit: RDKit AddHs cannot satisfy a requested pH treatment.
+    return _normalize_with_openbabel(source, destination, protonation_ph=protonation_ph)
 
 
 def _prepare_with_meeko(input_sdf: Path, output_pdbqt: Path) -> None:
@@ -429,6 +427,17 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
     source = Path(input_path).expanduser().resolve()
     destination = Path(output_pdbqt).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.suffix.lower() == ".pdb":
+        raise ValueError("Prepare ligands from authoritative SDF chemistry, not inferred PDB connectivity")
+    from .asset_identity import sidecar
+    chemistry_status = str(sidecar(source).get("chemistry_status", ""))
+    if chemistry_status and chemistry_status.startswith("not_evaluated"):
+        raise ValueError("Ligand chemistry provenance is not evaluated; retrieve or provide a verified SDF")
+    source_molecule = _load_rdkit_molecule(source)
+    if source_molecule is None:
+        raise ValueError("Ligand chemistry is not evaluable")
+    Chem, _ = _load_rdkit()
+    source_smiles = Chem.MolToSmiles(Chem.RemoveHs(source_molecule), isomericSmiles=True)
 
     selected_profile = _selected_profile()
     selected_engines = _selected_engines()
@@ -510,6 +519,9 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
         "effective_profile": effective_profile,
         "selected_engines": list(selected_engines),
         "protonation_ph": protonation_ph,
+        "requested_ph": protonation_ph,
+        "protonation_status": "applied" if normalization.get("protonation_applied") else "input_state_not_ph_titrated",
+        "source_isomeric_smiles": source_smiles,
         "normalization": normalization,
         "compatibility": compatibility.to_dict(),
     }
@@ -528,6 +540,13 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
             summary["step_report_file"] = str(report_path)
     validation = validate_ligand_preparation_output_contract(summary)
     summary["output_contract_validation"] = validation
+    if not validation["is_valid"]:
+        raise ValueError("Prepared ligand failed its chemistry/engine contract: " + "; ".join(validation["errors"]))
+    from .asset_identity import REFERENCE_FIELDS, sidecar
+    source_metadata = sidecar(source)
+    for key in REFERENCE_FIELDS:
+        summary[key] = source_metadata.get(key, "")
+    destination.with_suffix(destination.suffix + ".preparation.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
 
 
@@ -559,6 +578,8 @@ def _validate_prepared_pdbqt_contract(output_file: Path) -> Dict[str, object]:
         errors.append(f"prepared PDBQT expected exactly one ROOT block, found {root_count}")
     if torsdof_count != 1:
         errors.append(f"prepared PDBQT expected exactly one TORSDOF record, found {torsdof_count}")
+    from .ligand_quality import validate_prepared_ligand_pdbqt
+    errors.extend(issue.details for issue in validate_prepared_ligand_pdbqt(output_file, _selected_engines()))
     return {"is_valid": not errors, "errors": errors, "warnings": warnings}
 
 
@@ -609,8 +630,8 @@ def validate_ligand_preparation_output_contract(summary: Dict[str, object]) -> D
             backend = str(normalization.get("normalization_backend") or "").strip().lower()
             if backend not in {"openbabel", "rdkit"}:
                 errors.append(f"unexpected normalization backend: {backend or 'missing'}")
-            if backend == "rdkit":
-                warnings.append("normalization used RDKit fallback instead of Open Babel")
+            if backend == "rdkit" or not normalization.get("protonation_applied", False):
+                errors.append("Requested pH-dependent normalization was not applied")
 
     output_contract = _validate_prepared_pdbqt_contract(output_file)
     if not output_contract.get("is_valid", False):
@@ -665,7 +686,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Normalize ligands to explicit-H 3D SDF and prepare AutoDock/Vina-family PDBQT output."
     )
-    parser.add_argument("--input", required=True, help="Input ligand file (.sdf, .mol, .mol2, .pdb)")
+    parser.add_argument("--input", required=True, help="Input ligand with authoritative chemistry (.sdf, .mol, .mol2)")
     parser.add_argument("--output", required=True, help="Output PDBQT path")
     parser.add_argument(
         "--backend-profile",

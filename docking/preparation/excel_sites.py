@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 
 
 REQUIRED_SUMMARY_COLUMNS = {"PDB_ID", "Property", "Value"}
@@ -43,6 +44,8 @@ def load_site_catalog_from_summary(
     frame["PDB_ID"] = frame["PDB_ID"].astype(str).str.upper().str.strip()
     frame["Property"] = frame["Property"].astype(str).str.strip()
 
+    if frame.duplicated(["PDB_ID", "Property"]).any():
+        raise ValueError("Duplicate PDB/property rows: multiple sites must have explicit separate identities")
     catalog = (
         frame.pivot_table(index="PDB_ID", columns="Property", values="Value", aggfunc="first")
         .reset_index()
@@ -55,6 +58,7 @@ def load_site_catalog_from_summary(
         "active_site_center_x": "center_x",
         "active_site_center_y": "center_y",
         "active_site_center_z": "center_z",
+        "active_site_size_x": "size_x", "active_site_size_y": "size_y", "active_site_size_z": "size_z",
     }
     for source, dest in rename_map.items():
         if source in catalog.columns:
@@ -67,7 +71,7 @@ def load_site_catalog_from_summary(
         )
 
     for axis in ("center_x", "center_y", "center_z"):
-        catalog[axis] = pd.to_numeric(catalog[axis], errors="coerce")
+        catalog[axis] = pd.to_numeric(catalog[axis], errors="coerce").replace([np.inf, -np.inf], np.nan)
     missing_coordinate_ids: list[str] = []
     if catalog[["center_x", "center_y", "center_z"]].isna().any().any():
         missing_coordinate_ids = sorted(
@@ -82,8 +86,14 @@ def load_site_catalog_from_summary(
     if "protein_display_name" not in catalog.columns:
         catalog["protein_display_name"] = ""
 
+    for axis in ("size_x", "size_y", "size_z"):
+        if axis not in catalog:
+            catalog[axis] = np.nan
+        catalog[axis] = pd.to_numeric(catalog[axis], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        if (catalog[axis].dropna() <= 0).any():
+            raise ValueError("Site box dimensions must be positive")
     result = catalog[
-        ["pdb_id", "selected_ligand", "protein_display_name", "center_x", "center_y", "center_z"]
+        ["pdb_id", "selected_ligand", "protein_display_name", "center_x", "center_y", "center_z", "size_x", "size_y", "size_z"]
     ].copy()
     if return_missing_coordinates:
         return result, missing_coordinate_ids

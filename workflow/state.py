@@ -9,17 +9,28 @@ import subprocess
 import tempfile
 import threading
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .ids import build_run_id, iso_timestamp
 from .models import CheckpointMetadataRecord, DockForgeFeatureFlags
+from .locking import file_lock
 
 WORKFLOW_DIRNAME = ".workflow"
 STATE_FILENAME = "state.json"
 STATE_BACKUP_SUFFIX = ".bak"
 _STATE_IO_LOCK = threading.RLock()
 META_DIRNAME = ".meta"
+
+
+def _state_transaction(fn):
+    """Serialize the entire read/update/write transaction, including processes."""
+    @wraps(fn)
+    def locked(root, *args, **kwargs):
+        with file_lock(Path(root).expanduser().resolve() / WORKFLOW_DIRNAME / "state.lock"):
+            return fn(root, *args, **kwargs)
+    return locked
 
 
 def _now_iso() -> str:
@@ -135,6 +146,7 @@ def _default_state(root: Path) -> Dict[str, object]:
     }
 
 
+@_state_transaction
 def ensure_state(root: Path) -> Dict[str, object]:
     root = Path(root).expanduser().resolve()
     with _STATE_IO_LOCK:
@@ -147,6 +159,7 @@ def ensure_state(root: Path) -> Dict[str, object]:
         return payload
 
 
+@_state_transaction
 def load_state(root: Path) -> Dict[str, object]:
     root = Path(root).expanduser().resolve()
     with _STATE_IO_LOCK:
@@ -180,6 +193,7 @@ def load_state(root: Path) -> Dict[str, object]:
     return payload
 
 
+@_state_transaction
 def save_state(root: Path, payload: Dict[str, object]) -> Path:
     root = Path(root).expanduser().resolve()
     with _STATE_IO_LOCK:
@@ -215,6 +229,7 @@ def get_feature_flags(root: Path) -> Dict[str, bool]:
     return merged
 
 
+@_state_transaction
 def update_feature_flags(root: Path, **kwargs: object) -> Dict[str, bool]:
     payload = ensure_state(root)
     existing = payload.setdefault("feature_flags", _default_feature_flags())
@@ -229,6 +244,7 @@ def update_feature_flags(root: Path, **kwargs: object) -> Dict[str, bool]:
     return get_feature_flags(root)
 
 
+@_state_transaction
 def update_context(root: Path, **kwargs: object) -> Dict[str, object]:
     payload = ensure_state(root)
     payload.setdefault("current_context", {}).update(
@@ -238,6 +254,7 @@ def update_context(root: Path, **kwargs: object) -> Dict[str, object]:
     return payload
 
 
+@_state_transaction
 def update_artifacts(root: Path, **kwargs: object) -> Dict[str, object]:
     payload = ensure_state(root)
     payload.setdefault("artifacts", {}).update(
@@ -247,6 +264,7 @@ def update_artifacts(root: Path, **kwargs: object) -> Dict[str, object]:
     return payload
 
 
+@_state_transaction
 def record_step(
     root: Path,
     target: str,
@@ -281,6 +299,7 @@ def list_steps(root: Path) -> Dict[str, Dict[str, object]]:
     return {}
 
 
+@_state_transaction
 def update_background_task(
     root: Path,
     task_id: str,
@@ -328,6 +347,7 @@ def list_background_tasks(root: Path, *, include_finished: bool = True) -> List[
     return rows
 
 
+@_state_transaction
 def record_checkpoint_metadata(
     root: Path,
     *,
@@ -376,7 +396,9 @@ def list_checkpoint_metadata(root: Path) -> List[Dict[str, object]]:
     records = checkpoint_store.get("records", [])
     if not isinstance(records, list):
         return []
-    cleaned = [row for row in records if isinstance(row, dict)]
+    # Stable sort then uses reverse insertion order as the tie-breaker, so
+    # multiple checkpoints recorded within one timestamp tick stay newest-first.
+    cleaned = [row for row in reversed(records) if isinstance(row, dict)]
     cleaned.sort(key=lambda row: str(row.get("created_at", "")), reverse=True)
     return cleaned
 

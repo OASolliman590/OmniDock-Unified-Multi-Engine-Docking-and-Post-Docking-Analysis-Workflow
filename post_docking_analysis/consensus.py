@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from post_docking_analysis.geometric_consensus import compute_geometric_consensus
+from post_docking_analysis.score_semantics import score_spec
 
 logger = logging.getLogger(__name__)
 
@@ -112,29 +113,35 @@ def _safe_rank_score(series: pd.Series, *, lower_is_better: bool = True) -> pd.S
 def _safe_minmax_scale(series: pd.Series) -> pd.Series:
     values = pd.to_numeric(series, errors="coerce")
     finite_mask = np.isfinite(values.to_numpy(dtype=float))
-    if finite_mask.sum() <= 1:
-        return pd.Series(np.zeros(len(series), dtype=float), index=series.index)
     valid = values[finite_mask]
+    out = pd.Series(np.nan, index=series.index, dtype=float)
+    if len(valid) <= 1:
+        out.loc[valid.index] = 0.5
+        return out
     span = float(valid.max() - valid.min())
     if span <= 0:
-        return pd.Series(np.zeros(len(series), dtype=float), index=series.index)
+        out.loc[valid.index] = 0.5
+        return out
     # Docking convention: lower affinity is better, so invert min-max.
     scaled = (float(valid.max()) - values) / span
-    return scaled.fillna(0.0)
+    return scaled.where(finite_mask)
 
 
 def _safe_zscore(series: pd.Series) -> pd.Series:
     values = pd.to_numeric(series, errors="coerce")
     finite_mask = np.isfinite(values.to_numpy(dtype=float))
-    if finite_mask.sum() <= 1:
-        return pd.Series(np.zeros(len(series), dtype=float), index=series.index)
     valid = values[finite_mask]
+    out = pd.Series(np.nan, index=series.index, dtype=float)
+    if len(valid) <= 1:
+        out.loc[valid.index] = 0.0
+        return out
     mean_value = float(valid.mean())
     std_value = float(valid.std(ddof=0))
     if std_value <= 0:
-        return pd.Series(np.zeros(len(series), dtype=float), index=series.index)
+        out.loc[valid.index] = 0.0
+        return out
     zscores = (values - mean_value) / std_value
-    return zscores.fillna(0.0)
+    return zscores.where(finite_mask)
 
 
 def normalize_engine_scores(
@@ -155,12 +162,14 @@ def normalize_engine_scores(
     working[score_column] = pd.to_numeric(working.get(score_column), errors="coerce")
 
     def _normalize_group(series: pd.Series) -> pd.Series:
+        # All normalizers operate on a lower-is-better internal score.
+        series = series if score_spec(score_column).lower_is_better else -series
         if normalized_method == "per_engine_minmax":
             return _safe_minmax_scale(series)
         if normalized_method == "per_engine_zscore":
             zscores = _safe_zscore(series)
-            # Docking z-score: lower is better; negate before [0,1] scaling.
-            return _safe_minmax_scale(-zscores)
+            # Docking z-score remains lower-is-better before inverse min-max.
+            return _safe_minmax_scale(zscores)
         # Default: rank-based normalization with 1.0 = strongest.
         return _safe_rank_score(series, lower_is_better=True)
 
@@ -179,6 +188,7 @@ def build_consensus_rankings(
     normalization_method: str = "per_engine_rank",
     score_column: str = "affinity_kcal_mol",
     normalized_column: str = "normalized_affinity_score",
+    expected_engines: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """
     Build DockBox-style consensus ranking table from one best pose per (engine, tag).
@@ -236,6 +246,8 @@ def build_consensus_rankings(
     frame["protein"] = frame["protein"].astype(str)
     frame["ligand"] = frame["ligand"].astype(str)
     frame["site_id"] = frame["site_id"].astype(str)
+    if "scoring_function" not in frame:
+        frame["scoring_function"] = frame["engine"]
     frame[score_column] = pd.to_numeric(frame[score_column], errors="coerce")
     frame = frame[np.isfinite(frame[score_column])].copy()
     if frame.empty:
@@ -246,13 +258,13 @@ def build_consensus_rankings(
         method=normalization_method,
         score_column=score_column,
         normalized_column=normalized_column,
-        group_keys=["engine", "protein"],
+        group_keys=["engine", "protein", "site_id", "scoring_function"],
     )
-    engines = sorted(frame["engine"].dropna().unique().tolist())
+    engines = sorted(set(expected_engines or frame["engine"].dropna().unique().tolist()))
     total_engines = max(len(engines), 1)
 
     frame["engine_rank_pct"] = (
-        frame.groupby(["engine", "protein"], dropna=False)[normalized_column]
+        frame.groupby(["engine", "protein", "site_id", "scoring_function"], dropna=False)[normalized_column]
         .transform(lambda s: _safe_rank_score(s, lower_is_better=False))
     )
 
@@ -268,8 +280,9 @@ def build_consensus_rankings(
         agreement_fraction = pd.Series(np.nan, index=agreement_count.index, dtype=float)
     else:
         agreement_fraction = agreement_count / float(total_engines)
-    winner_engine = affinity_matrix.idxmin(axis=1, skipna=True).fillna("").astype(str)
-    spread = affinity_matrix.max(axis=1, skipna=True) - affinity_matrix.min(axis=1, skipna=True)
+    normalized_matrix = frame.pivot_table(index="tag", columns="engine", values=normalized_column, aggfunc="max")
+    winner_engine = normalized_matrix.idxmax(axis=1, skipna=True).fillna("").astype(str)
+    spread = normalized_matrix.max(axis=1, skipna=True) - normalized_matrix.min(axis=1, skipna=True)
 
     by_tag = (
         frame.sort_values(["tag", "affinity_kcal_mol"])
@@ -311,7 +324,17 @@ def build_consensus_rankings(
         by_tag.groupby("protein", dropna=False)["best_affinity_kcal_mol"]
         .transform(lambda s: _safe_rank_score(s, lower_is_better=True))
     )
-    by_tag["spread_norm"] = by_tag.groupby("protein", dropna=False)["affinity_spread_kcal_mol"].transform(_safe_minmax_scale)
+    # Dimensionless disagreement: larger spread must never improve a score.
+    by_tag["spread_norm"] = by_tag["tag"].map(spread).fillna(0.0)
+    selected = frame.sort_values(["tag", normalized_column, "engine"], ascending=[True, False, True]).drop_duplicates("tag")
+    selected = selected.set_index("tag")
+    by_tag["best_affinity_kcal_mol"] = by_tag["tag"].map(selected["affinity_kcal_mol"])
+    by_tag["winner_scoring_function"] = by_tag["tag"].map(selected["scoring_function"])
+    for column in available_ranking_columns:
+        by_tag[column] = by_tag["tag"].map(selected[column])
+    by_tag["best_affinity_rank_pct"] = np.nan
+    # Raw means and ranges across different scoring functions have no shared scale.
+    by_tag.loc[by_tag["agreement_count"] > 1, ["mean_affinity_kcal_mol", "affinity_spread_kcal_mol"]] = np.nan
 
     by_tag["favorite_rank_pct"] = np.nan
     if favorite:
@@ -334,7 +357,8 @@ def build_consensus_rankings(
             by_tag.drop(columns=["favorite_rank_pct_fav"], inplace=True, errors="ignore")
 
     if mode == "strict_consensus" and not single_engine:
-        by_tag = by_tag[by_tag["agreement_count"] >= 2].copy()
+        favorable = normalized_matrix.ge(0.5).sum(axis=1)
+        by_tag = by_tag[(by_tag["agreement_count"] == total_engines) & by_tag["tag"].map(favorable).ge(2)].copy()
     elif mode == "strict_consensus" and single_engine:
         logger.warning(
             "strict_consensus requested in single-engine mode; agreement filtering is skipped."
@@ -352,8 +376,9 @@ def build_consensus_rankings(
 
     if mode == "dockbox_geometric":
         geometric_df = compute_geometric_consensus(
-            frame[["engine", "tag", "pose_file", "pose"]].copy(),
+            frame.copy(),
             rmsd_cutoff=2.0,
+            expected_engines=engines,
         )
         if geometric_df is not None and not geometric_df.empty:
             by_tag = by_tag.merge(geometric_df, on="tag", how="left", suffixes=("", "_geom"))
@@ -387,15 +412,13 @@ def build_consensus_rankings(
         by_tag["consensus_score"] = base_favorite - guardrail_penalty
     elif mode == "strict_consensus":
         by_tag["consensus_score"] = (
-            by_tag["mean_rank_pct"].fillna(0.0) * 0.65
-            + by_tag["best_affinity_rank_pct"].fillna(0.0) * 0.25
+            by_tag["mean_rank_pct"].fillna(0.0) * 0.90
             + (1.0 - by_tag["spread_norm"].fillna(0.0)) * 0.10
         )
     else:
         agreement_component = pd.to_numeric(by_tag["agreement_fraction"], errors="coerce").fillna(1.0)
         by_tag["consensus_score"] = (
-            by_tag["mean_rank_pct"].fillna(0.0) * 0.55
-            + by_tag["best_affinity_rank_pct"].fillna(0.0) * 0.30
+            by_tag["mean_rank_pct"].fillna(0.0) * 0.85
             + agreement_component * 0.10
             + (1.0 - by_tag["spread_norm"].fillna(0.0)) * 0.05
         )
@@ -403,12 +426,13 @@ def build_consensus_rankings(
     by_tag["consensus_mode"] = mode
     by_tag["normalization_method"] = normalize_normalization_method(normalization_method)
     by_tag.sort_values(
-        ["protein", "consensus_score", "best_affinity_kcal_mol", "tag"],
-        ascending=[True, False, True, True],
+        ["protein", "consensus_score", "tag"],
+        ascending=[True, False, True],
         inplace=True,
     )
     by_tag["consensus_rank_within_protein"] = by_tag.groupby("protein", dropna=False).cumcount() + 1
-    by_tag["consensus_rank_global"] = np.arange(1, len(by_tag) + 1, dtype=int)
+    global_order = by_tag.sort_values(["consensus_score", "tag"], ascending=[False, True]).index
+    by_tag["consensus_rank_global"] = pd.Series(np.arange(1, len(by_tag) + 1), index=global_order)
 
     ordered_columns = [
         "tag",
@@ -423,6 +447,7 @@ def build_consensus_rankings(
         "agreement_fraction",
         "single_engine",
         "winner_engine",
+        "winner_scoring_function",
         "best_affinity_kcal_mol",
         "mean_affinity_kcal_mol",
         "mean_normalized_affinity_score",
@@ -464,8 +489,8 @@ def select_rescoring_candidates(
 
     frame = consensus_df.copy()
     frame = frame.sort_values(
-        ["consensus_score", "best_affinity_kcal_mol", "tag"],
-        ascending=[False, True, True],
+        ["consensus_score", "tag"],
+        ascending=[False, True],
     )
     if scope == "top_n_global":
         selected = frame.head(top_n).copy()
@@ -516,8 +541,8 @@ def build_consensus_explainability(
             if "mean_normalized_affinity_score" in group.columns
             else None,
             "top_tags": group.sort_values(
-                ["consensus_score", "best_affinity_kcal_mol", "tag"],
-                ascending=[False, True, True],
+                ["consensus_score", "tag"],
+                ascending=[False, True],
             )["tag"].astype(str).head(5).tolist(),
         }
 
@@ -630,22 +655,29 @@ def classify_hits_target_aware(
         baseline_df = pd.DataFrame(columns=["protein", "reference_affinity", "reference_tag", "redocking_classification"])
         if reference_baselines is not None and not reference_baselines.empty:
             baseline_df = reference_baselines.copy()
-        for required in ("protein", "reference_affinity", "reference_tag", "redocking_classification"):
+        for required in ("protein", "engine", "scoring_function", "reference_affinity", "reference_tag", "redocking_classification"):
             if required not in baseline_df.columns:
                 if required == "reference_affinity":
                     baseline_df[required] = np.nan
                 else:
                     baseline_df[required] = ""
-        baseline_df = baseline_df[["protein", "reference_affinity", "reference_tag", "redocking_classification"]].copy()
+        baseline_df = baseline_df[["protein", "engine", "scoring_function", "reference_affinity", "reference_tag", "redocking_classification"]].copy()
         baseline_df["reference_affinity"] = pd.to_numeric(baseline_df["reference_affinity"], errors="coerce")
         baseline_df["redocking_classification"] = baseline_df["redocking_classification"].fillna("").astype(str).str.lower()
-        baseline_df = baseline_df.drop_duplicates("protein")
+        keys = ["protein", "engine", "scoring_function"]
+        if baseline_df.duplicated(keys).any():
+            raise ValueError("Reference baselines must be unique per target, engine and scoring function")
+        for column in ("winner_engine", "winner_scoring_function"):
+            if column not in frame:
+                frame[column] = ""
 
         frame = frame.merge(
             baseline_df,
-            on="protein",
+            left_on=["protein", "winner_engine", "winner_scoring_function"],
+            right_on=keys,
             how="left",
             suffixes=("", "_baseline"),
+            validate="many_to_one",
         )
         if "reference_affinity_baseline" in frame.columns:
             frame["reference_affinity"] = pd.to_numeric(frame.get("reference_affinity_baseline"), errors="coerce")
@@ -696,7 +728,9 @@ def classify_hits_target_aware(
     frame.loc[insufficient_n_mask, "docking_quality_class"] = "Unclassified"
     frame.loc[insufficient_n_mask, "classification_basis"] = "insufficient_n"
 
-    frame["qc_status"] = "pass"
+    frame["qc_status"] = "not_evaluated_physical_validity"
+    frame["physical_validity_status"] = "not_evaluated"
+    frame["interpretation"] = "relative_docking_prioritization_not_binding_evidence"
     warn_low_engine = (~frame["single_engine"]) & (frame["agreement_count"] < 2)
     frame.loc[warn_low_engine, "qc_status"] = "warn_low_engine_agreement"
     frame.loc[frame["best_affinity_kcal_mol"] > 0, "qc_status"] = "fail_positive_affinity"
