@@ -89,10 +89,12 @@ Review the diff and focused test output. Commit message: `test: add repository i
 - Delete: `autodock/prep_ligands_custom.sh`
 - Create: `audit/verification-history.md`
 - Create: `specs/README.md`
+- Create: `CONTRIBUTING.md`
 - Modify: `audit/postdocking-audit.md`
 - Modify: `docs/correctness-update.md`
 - Modify: `docs/dockforge_migration_notes.md`
 - Modify: `README.md`
+- Modify: `PDB_PREPARATION_USAGE.md`
 - Modify: `.gitignore`
 - Modify: `.github/workflows/correctness.yml`
 - Move: root Sertraline `.docx` files to `closing_thesis/manuscripts/`
@@ -114,7 +116,7 @@ Remove the unreferenced dangling private symlink and generated logs/XML. Retire 
 
 - [ ] **Step 3: Repair historical links and labels**
 
-Replace links to deleted generated artifacts with the curated history. Change the missing probe-artifact link in `audit/postdocking-audit.md` to plain historical text that states the artifact was not tracked. Add an explicit historical-snapshot index for every numbered spec directory.
+Replace links to deleted generated artifacts with the curated history. Change the missing probe-artifact link in `audit/postdocking-audit.md` to plain historical text that states the artifact was not tracked. Repair stale preparation-guide links by routing them to the canonical preparation documents. Add an explicit historical-snapshot index for every numbered spec directory, and add an accurate contributor guide so existing repository links resolve before CI enables the checker.
 
 - [ ] **Step 4: Tighten ignore rules**
 
@@ -248,7 +250,7 @@ Commit message: `refactor: separate CLI declaration from dispatch`.
 - Create: `docs/README.md`
 - Create: `docs/architecture.md`
 - Create: `docs/testing.md`
-- Create: `CONTRIBUTING.md`
+- Modify: `CONTRIBUTING.md`
 - Modify: `README.md`
 - Modify: `INSTALLATION_GUIDE.md`
 - Modify: `DEPENDENCIES.md`

@@ -5,8 +5,8 @@
 
 | Batch | Status | Commit | Verification |
 | --- | --- | --- | --- |
-| Repository checker | queued | — | — |
-| Evidence-preserving hygiene | queued | — | — |
+| Repository checker | complete | `968b36d` | 9 passed, 1 native-symlink capability skip; compile/diff clean; 11 expected base findings |
+| Evidence-preserving hygiene | in progress | — | deletion/move evidence captured; implementation pending |
 | Docking deployment refactor | queued | — | — |
 | CLI parser extraction | queued | — | — |
 | Documentation consolidation | queued | — | — |
