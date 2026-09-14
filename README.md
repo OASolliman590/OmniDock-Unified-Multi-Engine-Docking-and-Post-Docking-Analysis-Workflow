@@ -800,7 +800,7 @@ For issues and questions:
 ## 📚 Documentation
 
 - [Installation Guide](INSTALLATION_GUIDE.md) - Complete setup and installation instructions
-- [AutoDock Preparation Guide](AUTODOCK_PREPARATION_GUIDE.md) - Comprehensive guide for AutoDock Vina preparation
+- [PDBQT Preparation Guide](PDBQT_PREPARATION_EXPLAINED.md) - Canonical AutoDock/PDBQT preparation guide
 - [Post-Docking Analysis Guide](POST_DOCKING_ANALYSIS_GUIDE.md) - Complete guide for analyzing docking results
 - [PLIP Interaction Types Guide](PLIP_INTERACTION_TYPES_GUIDE.md) - Understanding PLIP interaction analysis
 - [Changelog](CHANGELOG.md) - Version history and changes
@@ -820,8 +820,7 @@ pdb-prepare-wizard/
 │   ├── affinity_analyzer.py    # Binding affinity analysis
 │   ├── rmsd_analyzer.py         # RMSD and clustering analysis
 │   └── ...
-├── autodock/                    # AutoDock preparation scripts
-│   └── prep_autodock.sh         # Basic bash script
+├── prep_autodock_enhanced.sh    # Supported AutoDock/PDBQT preparation adapter
 ├── requirements.txt             # Python dependencies
 ├── environment.yml              # Conda environment
 └── setup.py                     # Package installation

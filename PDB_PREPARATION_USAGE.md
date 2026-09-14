@@ -577,7 +577,7 @@ filtered_pdb = pipeline.filter_chains(pdb_file, chains=['A', 'B'])
 ## 📚 Related Documentation
 
 - [Installation Guide](INSTALLATION_GUIDE.md) - Setup instructions
-- [AutoDock Preparation Guide](AUTODOCK_PREPARATION_GUIDE.md) - Preparing for docking
+- [PDBQT Preparation Guide](PDBQT_PREPARATION_EXPLAINED.md) - Preparing for docking
 - [PLIP Interaction Types Guide](PLIP_INTERACTION_TYPES_GUIDE.md) - Understanding interactions
 
 ---

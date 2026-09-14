@@ -141,9 +141,10 @@ of this local correction.
 ### Local verification record — 2026-09-12
 
 - Windows, Python 3.12.10: **225 passed, 1 skipped, 0 failures** across the full
-  226-test suite (209.78 seconds). See the [test log](../audit/correctness-tests.log)
-  and [JUnit results](../audit/correctness-tests.xml). The run emitted 586 warnings;
-  their details are retained in the log.
+  226-test suite (209.78 seconds). See the [historical verification record](../audit/verification-history.md).
+  The raw test log and JUnit XML were generated artifacts; they are recoverable
+  from the fixed base `8d4434d3a33eb83b1e12cad82944b02c83270e47`. The run emitted
+  586 warnings; their details are retained in those recoverable artifacts.
 - The skipped real Meeko macrocycle export test could not load RDKit's
   `rdDetermineBonds` DLL because Windows Application Control blocked it. This
   integration remains unverified in this environment.

@@ -71,3 +71,18 @@ This metadata is designed to support future lineage and reproducibility reports.
 - Feature flags in workflow state allow staged rollout for new subsystems.
 - Deprecated aliases remain available for migration windows and scripts.
 - Stage-level delegation emits explicit run notes so users can see when canonical stage targets are executed through unified favorite-engine continuation.
+
+## Retired AutoDock shell helpers
+
+`autodock/prep_autodock.sh` and `autodock/prep_ligands_custom.sh` are retired.
+They failed Bash parsing, were neither packaged nor called by active code, and
+predated (and bypassed) the supported authoritative-graph / fail-closed
+preparation path. Removing them is repository hygiene; it is not a scientific
+validation of historical or current preparation results.
+
+Use:
+
+- `prep_autodock_enhanced.sh` — packaged, syntax-valid shell adapter
+- the Python preparation workflow (`autodock_preparation.py` / `python main.py prep`)
+
+Do not resurrect the retired scripts as an alternative chemistry path.
