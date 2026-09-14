@@ -250,6 +250,12 @@ def _validate_consensus_input(
         engines = sorted(normalized["engine"].unique().tolist())
     else:
         raw_engines = [expected_engines] if isinstance(expected_engines, str) else list(expected_engines)
+        # Existing pipeline callers use [] as the legacy sentinel meaning
+        # "infer the observed engine scope". Keep that compatibility while
+        # validating every declared, non-empty scope below.
+        if not raw_engines:
+            engines = sorted(normalized["engine"].unique().tolist())
+            return normalized, engines
         engines = []
         for value in raw_engines:
             if pd.isna(value):

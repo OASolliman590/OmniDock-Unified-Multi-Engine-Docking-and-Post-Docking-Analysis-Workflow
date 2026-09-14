@@ -22,3 +22,9 @@ Positive and negative fixtures cover source identity, a real chiral protonation 
 Receptor checks conserve represented atom identities/elements and coordinates while distinguishing upstream titration from final pH validation. Methods documentation does not claim biological protonation correctness, physical pose validation, calibrated affinity, or a complete replicate policy. Symmetric mapping choice remains conservative and may reject otherwise equivalent ambiguous inputs. Public summary validation checks supplied assertions and artifact hashes; it is not an independent re-execution of chemistry from an untrusted summary.
 
 Final handoff inspection confirmed the backend-failure fixture preserves both preexisting PDBQT and normalized SDF bytes after successful staged normalization and a backend exception. git diff --check returned exit code 0 (line-ending warnings only). No further material findings.
+
+## Full-suite compatibility follow-up
+
+The subsequent full filtered suite exposed three existing smoke cases that pass `expected_engines=[]` to request inferred engine scope. The initial independent source review missed this established default-call compatibility; the new empty-scope rejection was a regression.
+
+Reviewed the bounded correction: `None` and an empty engine collection infer the observed normalized engine scope, while every nonempty declared scope still rejects malformed tokens, duplicate normalized engines and engines outside that scope. The added two-engine positive fixture checks agreement count 2 and fraction 1.0. The preceding row-identity, scoring-function and duplicate-row guards are still executed before inference. No new scientific denominator claim is introduced, and no remaining material finding was identified in this correction. Execution results belong to the independent tester's verification record; chemistry CI remains required.

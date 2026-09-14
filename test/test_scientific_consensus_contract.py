@@ -74,6 +74,24 @@ def test_expected_engine_scope_is_normalized_and_extras_are_rejected() -> None:
         build_consensus_rankings(frame, expected_engines=["gnina"])
 
 
+def test_empty_expected_engine_scope_infers_observed_engines() -> None:
+    frame = pd.DataFrame(
+        [
+            _row(engine="vina"),
+            _row(engine="gnina"),
+        ]
+    )
+
+    result = build_consensus_rankings(
+        frame,
+        consensus_mode="weighted_hybrid",
+        expected_engines=[],
+    )
+
+    assert result.iloc[0].agreement_count == 2
+    assert result.iloc[0].agreement_fraction == pytest.approx(1.0)
+
+
 def test_duplicate_expected_engines_are_rejected() -> None:
     with pytest.raises(ValueError, match="duplicate_expected_engines"):
         build_consensus_rankings(pd.DataFrame([_row()]), expected_engines=["vina", "VINA"])

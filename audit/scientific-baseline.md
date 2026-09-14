@@ -135,7 +135,7 @@ It was created with `python -m venv --system-site-packages` outside the sandbox 
 The filtered nonchemistry command was:
 
 ```powershell
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & verification-venv\Scripts\python.exe -m pytest test -q `
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; & ..\verification-venv\Scripts\python.exe -m pytest test -q `
   --ignore=test/test_postdocking_correctness.py `
   --ignore=test/test_preparation_correctness.py `
   --ignore=test/test_reference_chemistry.py
@@ -152,13 +152,13 @@ The two failures were `test/test_dockforge_smoke.py::_smoke_redocking_multi_pose
 Using the same venv interpreter, the build command was rerun outside the sandbox:
 
 ```text
-verification-venv\Scripts\python.exe -m build
+..\verification-venv\Scripts\python.exe -m build
 ```
 
 It exited `0` and built `pdb_prepare_wizard-3.0.1.tar.gz` and `pdb_prepare_wizard-3.0.1-py3-none-any.whl`. The earlier sandbox attempt with this interpreter failed only while creating `build`'s temporary isolated environment under `%TEMP%` (`WinError 5`). The wheel checker was then run outside the sandbox:
 
 ```text
-verification-venv\Scripts\python.exe scripts/check_wheel.py
+..\verification-venv\Scripts\python.exe scripts/check_wheel.py
 ```
 
 It exited `0` and reported `Imported every console entrypoint from the extracted wheel outside the checkout` and `Verified runtime files and console entrypoints: pdb_prepare_wizard-3.0.1-py3-none-any.whl`.
