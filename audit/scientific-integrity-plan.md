@@ -35,11 +35,13 @@ checkout and benchmark artifacts are read-only; the benchmark task stays paused.
 - [x] Clone current main, pin SHA, inspect branches/PRs, coordinate cleanup.
 - [x] Trace current paths and cite primary scientific/backend sources.
 - [x] Reproduce high-priority failures and select bounded corrections.
-- [ ] Implement with targeted positive and negative chemistry fixtures.
-- [ ] Separate tester verifies baseline failures and corrected behavior.
-- [ ] Independent Astra review; resolve material findings.
-- [ ] Run full regression, build, wheel, shell syntax and diff gates.
-- [ ] Commit reviewed changes and publish a draft PR if access permits.
+- [x] Implement with targeted positive and negative chemistry fixtures.
+- [x] Separate tester verifies available baseline failures and corrected behavior.
+- [x] Independent Astra review; resolve material findings.
+- [x] Execute local full-regression attempt, filtered regression, build, wheel,
+  shell syntax and diff gates; record unavailable chemistry separately.
+- [x] Commit reviewed implementation changes.
+- [ ] Publish the branch, execute mandatory chemistry CI and open a draft PR.
 
 Tests blocked by host policy will be recorded separately from code assertions.
 No tests will be weakened to manufacture pass rates. No remote benchmark or
@@ -88,3 +90,24 @@ with no missing-symbol collection failures. The corrected checkout passed all
 52 tests. Exact commands and per-module results are in
 [the verification record](scientific-verification.md). This checkpoint does not
 certify the remaining chemistry fixtures, full regression or packaging gates.
+
+## Final local checkpoint and publication boundary
+
+At source commit `48c0771`, the final filtered regression passed 199 tests and
+failed only the two known RDKit-limited redocking smoke cases. Build, extracted
+wheel verification and diff checks passed. Strict full collection remains
+blocked in five chemistry modules by Windows Application Control. The two
+inherited legacy shell parse errors remain; their retirement is coordinated in
+the separate cleanup task, which reports reviewed commit `3c1cb00`.
+
+The initial full filtered run revealed three empty-list consensus-scope
+compatibility failures. The worker restored the established inference default,
+the reviewer inspected that correction, and the final full filtered rerun
+confirmed all three were resolved. See the complete verification record.
+
+GitHub pushes were rejected by automatic approval review because retrieved task
+history was not accepted as direct user authorization for publishing the source
+payload. The repository is public and the account has administrator access,
+but no push succeeded. Branch publication, chemistry CI and draft-PR creation
+therefore remain pending direct user approval. No alternate upload route was
+used and no merge was attempted.
