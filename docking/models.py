@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 from typing import Dict, List, Literal, Optional
 
 
@@ -26,6 +27,17 @@ LIGAND_PREPARATION_PROFILES: List[str] = [
     "openbabel_autodocktools",
     "engine_aware_full",
 ]
+
+_LIGAND_PREPARATION_PROFILE_ALIASES = {
+    "": "engine_aware_full",
+    "auto": "engine_aware_full",
+    "default": "engine_aware_full",
+    "obabel": "openbabel_only",
+    "openbabel": "openbabel_only",
+    "meeko": "meeko_only",
+    "autodocktools": "autodocktools_only",
+    "adt": "autodocktools_only",
+}
 
 VINA_FAMILY_ENGINES = {"gnina", "vina", "smina"}
 AD4_ENGINES = {"autodock4"}
@@ -188,17 +200,7 @@ def normalize_engine_names(engines: Optional[List[str]]) -> List[str]:
 
 def normalize_ligand_preparation_profile(raw: str) -> str:
     token = str(raw or "").strip().lower()
-    alias_map = {
-        "": "engine_aware_full",
-        "auto": "engine_aware_full",
-        "default": "engine_aware_full",
-        "obabel": "openbabel_only",
-        "openbabel": "openbabel_only",
-        "meeko": "meeko_only",
-        "autodocktools": "autodocktools_only",
-        "adt": "autodocktools_only",
-    }
-    normalized = alias_map.get(token, token)
+    normalized = _LIGAND_PREPARATION_PROFILE_ALIASES.get(token, token)
     if normalized in LIGAND_PREPARATION_PROFILES:
         return normalized
     return "engine_aware_full"
@@ -219,10 +221,21 @@ def validate_ligand_preparation_profile(
     selected_engines: Optional[List[str]] = None,
 ) -> LigandPreparationCompatibility:
     engines = normalize_engine_names(selected_engines)
+    raw_profile = str(profile or "").strip().lower()
     requested_profile = normalize_ligand_preparation_profile(profile)
     effective_profile = resolve_effective_ligand_preparation_profile(requested_profile, engines)
     errors: List[str] = []
     warnings: List[str] = []
+
+    # ``normalize_ligand_preparation_profile`` intentionally retains its
+    # historical fallback for configuration/UI compatibility.  The validator
+    # is the strict public protocol seam: an unrecognised token must not turn
+    # into a different preparation procedure.
+    if raw_profile not in _LIGAND_PREPARATION_PROFILE_ALIASES and raw_profile not in LIGAND_PREPARATION_PROFILES:
+        errors.append(
+            f"Unknown ligand preparation profile '{profile}'. Accepted profiles: "
+            + ", ".join(LIGAND_PREPARATION_PROFILES)
+        )
 
     unknown = [engine for engine in engines if engine not in (VINA_FAMILY_ENGINES | AD4_ENGINES)]
     if unknown:
@@ -268,10 +281,15 @@ def validate_preparation_ph(raw: object) -> tuple[bool, float, str]:
     tuple[bool, float, str]
         (is_valid, normalized_ph, error_message)
     """
+    if isinstance(raw, bool):
+        return False, float(DEFAULT_PREPARATION_PH), "pH must be numeric, not a boolean."
     try:
         value = float(raw)
     except Exception:
         return False, float(DEFAULT_PREPARATION_PH), "pH must be numeric."
+
+    if not math.isfinite(value):
+        return False, float(DEFAULT_PREPARATION_PH), "pH must be finite."
 
     if value < float(MIN_PREPARATION_PH) or value > float(MAX_PREPARATION_PH):
         return (

@@ -181,6 +181,95 @@ def normalize_engine_scores(
     return working
 
 
+def _validate_consensus_input(
+    frame: pd.DataFrame,
+    *,
+    score_column: str,
+    expected_engines: Optional[List[str]],
+) -> tuple[pd.DataFrame, List[str]]:
+    """Validate the one-row-per-engine/tag consensus boundary.
+
+    Consensus receives one already-selected pose per engine and biological tag.
+    Duplicate rows are ambiguous because they can represent seeds, retries,
+    modes, or incompatible score records; silently selecting or pivoting one
+    would create an undeclared scientific aggregation. The caller may still
+    provide an expected engine that has no row, which remains a missing engine
+    in the denominator.
+    """
+    required = {"engine", "tag", "protein", "ligand", "site_id", score_column}
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(f"missing_consensus_columns: {','.join(missing)}")
+
+    normalized = frame.copy()
+    for column in ("engine", "tag", "protein", "ligand", "site_id"):
+        values = []
+        for value in normalized[column].tolist():
+            if pd.isna(value):
+                raise ValueError(f"missing_consensus_identity: {column}")
+            token = str(value).strip()
+            if not token or token.lower() in {"nan", "none", "null"}:
+                raise ValueError(f"missing_consensus_identity: {column}")
+            values.append(token.lower() if column == "engine" else token)
+        normalized[column] = values
+
+    if "scoring_function" not in normalized.columns:
+        normalized["scoring_function"] = normalized["engine"]
+    else:
+        scoring_values = []
+        for engine, value in zip(normalized["engine"], normalized["scoring_function"]):
+            if pd.isna(value) or not str(value).strip():
+                scoring_values.append(engine)
+            else:
+                scoring_values.append(str(value).strip().lower())
+        normalized["scoring_function"] = scoring_values
+
+    duplicate_mask = normalized.duplicated(subset=["engine", "tag"], keep=False)
+    if duplicate_mask.any():
+        duplicate_keys = sorted(
+            {
+                (str(row.engine), str(row.tag))
+                for row in normalized.loc[duplicate_mask, ["engine", "tag"]].itertuples(index=False)
+            }
+        )
+        raise ValueError(f"duplicate_engine_tag_rows: {duplicate_keys}")
+
+    identity_counts = normalized.groupby("tag", dropna=False)[
+        ["protein", "ligand", "site_id"]
+    ].nunique(dropna=False)
+    if (identity_counts > 1).any().any():
+        raise ValueError("inconsistent_tag_identity")
+
+    scoring_counts = normalized.groupby(
+        ["engine", "protein", "site_id"], dropna=False
+    )["scoring_function"].nunique(dropna=False)
+    if (scoring_counts > 1).any():
+        raise ValueError("mixed_scoring_functions")
+
+    if expected_engines is None:
+        engines = sorted(normalized["engine"].unique().tolist())
+    else:
+        raw_engines = [expected_engines] if isinstance(expected_engines, str) else list(expected_engines)
+        engines = []
+        for value in raw_engines:
+            if pd.isna(value):
+                raise ValueError("invalid_expected_engine_scope")
+            token = str(value).strip().lower()
+            if not token or token in {"nan", "none", "null"}:
+                raise ValueError("invalid_expected_engine_scope")
+            engines.append(token)
+        if not engines:
+            raise ValueError("empty_expected_engine_scope")
+        if len(set(engines)) != len(engines):
+            raise ValueError("duplicate_expected_engines")
+        extras = sorted(set(normalized["engine"]) - set(engines))
+        if extras:
+            raise ValueError(f"engine_outside_expected_scope: {extras}")
+    if not engines:
+        raise ValueError("empty_consensus_engine_scope")
+    return normalized, engines
+
+
 def build_consensus_rankings(
     best_by_engine: pd.DataFrame,
     consensus_mode: str = "dockbox_geometric",
@@ -240,14 +329,11 @@ def build_consensus_rankings(
             ]
         )
 
-    frame = best_by_engine.copy()
-    frame["engine"] = frame["engine"].astype(str).str.strip().str.lower()
-    frame["tag"] = frame["tag"].astype(str)
-    frame["protein"] = frame["protein"].astype(str)
-    frame["ligand"] = frame["ligand"].astype(str)
-    frame["site_id"] = frame["site_id"].astype(str)
-    if "scoring_function" not in frame:
-        frame["scoring_function"] = frame["engine"]
+    frame, engines = _validate_consensus_input(
+        best_by_engine,
+        score_column=score_column,
+        expected_engines=expected_engines,
+    )
     frame[score_column] = pd.to_numeric(frame[score_column], errors="coerce")
     frame = frame[np.isfinite(frame[score_column])].copy()
     if frame.empty:
@@ -260,7 +346,6 @@ def build_consensus_rankings(
         normalized_column=normalized_column,
         group_keys=["engine", "protein", "site_id", "scoring_function"],
     )
-    engines = sorted(set(expected_engines or frame["engine"].dropna().unique().tolist()))
     total_engines = max(len(engines), 1)
 
     frame["engine_rank_pct"] = (
@@ -268,19 +353,14 @@ def build_consensus_rankings(
         .transform(lambda s: _safe_rank_score(s, lower_is_better=False))
     )
 
-    affinity_matrix = frame.pivot_table(
-        index="tag",
-        columns="engine",
-        values=score_column,
-        aggfunc="min",
-    )
+    affinity_matrix = frame.pivot(index="tag", columns="engine", values=score_column)
     agreement_count = affinity_matrix.notna().sum(axis=1).astype(int)
     single_engine = total_engines <= 1
     if single_engine:
         agreement_fraction = pd.Series(np.nan, index=agreement_count.index, dtype=float)
     else:
         agreement_fraction = agreement_count / float(total_engines)
-    normalized_matrix = frame.pivot_table(index="tag", columns="engine", values=normalized_column, aggfunc="max")
+    normalized_matrix = frame.pivot(index="tag", columns="engine", values=normalized_column)
     winner_engine = normalized_matrix.idxmax(axis=1, skipna=True).fillna("").astype(str)
     spread = normalized_matrix.max(axis=1, skipna=True) - normalized_matrix.min(axis=1, skipna=True)
 
