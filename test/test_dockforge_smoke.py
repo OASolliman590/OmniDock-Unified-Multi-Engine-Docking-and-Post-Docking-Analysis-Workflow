@@ -737,8 +737,23 @@ def _smoke_artifact_graph_full_parallel_execution_contract() -> None:
             rmsd_workers=4,
         )
         _stub_dag_optional_interactions(pipeline, sleep_s=0.15)
-        _assert(pipeline.run() is True, "default full unified run should succeed through DAG execution")
+        run_succeeded = pipeline.run()
         report = pipeline.dag_execution_report
+        failed_or_blocked_nodes = {
+            str(node_name): {
+                "status": str((node_payload or {}).get("status") or ""),
+                "details": str((node_payload or {}).get("details") or ""),
+            }
+            for node_name, node_payload in (report.get("nodes") or {}).items()
+            if str((node_payload or {}).get("status") or "") in {"failed", "blocked_by_failure"}
+        }
+        _assert(
+            run_succeeded is True,
+            "default full unified run should succeed through DAG execution; "
+            f"status_counts={report.get('status_counts')!r}; "
+            f"failed_or_blocked_nodes={failed_or_blocked_nodes!r}; "
+            f"report_file={getattr(pipeline, 'dag_execution_report_file', '')}",
+        )
         _assert(
             report.get("artifact_requested_key") == "reports",
             "default full unified run should request reports artifact",

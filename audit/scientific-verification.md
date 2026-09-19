@@ -240,3 +240,22 @@ performance.
 The published branch is represented by [draft PR #2](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/pull/2).
 It has not been merged; remote `main` remains at the recorded baseline
 `8d4434d3a33eb83b1e12cad82944b02c83270e47`.
+
+## Historical final-head intermittent evidence — 2026-09-19
+
+For final head `1cf6492`, push run
+[35433642487](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/actions/runs/35433642487)
+passed all four matrix jobs. The same-head PR run
+[35433644917](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/actions/runs/35433644917)
+had one failure and three passing jobs: Ubuntu Python 3.10 failed
+`full_parallel_execution_contract` after `304 passed, 1 failed`.
+
+An independent Luna replay of archived `1cf6492` on Windows Python 3.12.10
+found four passing and one failing valid runs (02–06). In run 06,
+`polypharmacology` failed with the exact detail `bad allocation`; reports
+were blocked, with `9 completed, 1 failed, 1 blocked_by_failure`.
+Run 01 is excluded because its wrapper hit a CP1252 print
+error although its DAG succeeded. Captures are retained at
+`work/repro-105872532281-captures/run06`. These observations are historical
+evidence of an intermittent issue under investigation; no cause or fix is
+claimed here.
