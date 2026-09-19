@@ -41,7 +41,10 @@ checkout and benchmark artifacts are read-only; the benchmark task stays paused.
 - [x] Execute local full-regression attempt, filtered regression, build, wheel,
   shell syntax and diff gates; record unavailable chemistry separately.
 - [x] Commit reviewed implementation changes.
-- [ ] Publish the branch, execute mandatory chemistry CI and open a draft PR.
+- [x] Publish the reviewed branch at `f5760bf45c69d42a4420a866c77aa8f6e74875cc`.
+- [x] Execute the mandatory chemistry CI matrix on Ubuntu and Windows, for
+  Python 3.10 and 3.12.
+- [x] Open [draft PR #2](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/pull/2).
 
 Tests blocked by host policy will be recorded separately from code assertions.
 No tests will be weakened to manufacture pass rates. No remote benchmark or
@@ -105,9 +108,19 @@ compatibility failures. The worker restored the established inference default,
 the reviewer inspected that correction, and the final full filtered rerun
 confirmed all three were resolved. See the complete verification record.
 
-GitHub pushes were rejected by automatic approval review because retrieved task
-history was not accepted as direct user authorization for publishing the source
-payload. The repository is public and the account has administrator access,
-but no push succeeded. Branch publication, chemistry CI and draft-PR creation
-therefore remain pending direct user approval. No alternate upload route was
-used and no merge was attempted.
+Earlier publication attempts were rejected by automatic approval review because
+retrieved task history was not accepted as direct user authorization. That
+historical rejection is resolved: the user subsequently authorized publication,
+and the reviewed branch was pushed at
+`f5760bf45c69d42a4420a866c77aa8f6e74875cc`.
+
+The required GitHub Actions run completed successfully on Ubuntu and Windows
+with Python 3.10 and 3.12. Every matrix job completed its chemistry extra
+installation, full pytest (`305 passed` per job), build and wheel checks
+successfully. See
+[run 34876658350](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/actions/runs/34876658350).
+This CI result resolves the local RDKit limitation for the CI environment; it
+does not add a real-backend or benchmark validation claim. Publication is
+represented by [draft PR #2](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/pull/2),
+with remote `main` still at the baseline commit
+`8d4434d3a33eb83b1e12cad82944b02c83270e47`. No merge was attempted.

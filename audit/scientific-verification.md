@@ -220,3 +220,23 @@ After that source state, the sibling interpreter build command
 sdist and wheel. `..\verification-venv\Scripts\python.exe
 scripts/check_wheel.py` also exited `0`. Existing setuptools license
 classifier and package-discovery warnings were emitted during the build.
+
+## Published CI verification — 2026-09-19
+
+The reviewed branch was subsequently published at
+`f5760bf45c69d42a4420a866c77aa8f6e74875cc`. The mandatory GitHub Actions
+matrix then completed successfully on Ubuntu and Windows with Python 3.10 and
+3.12. In every job, chemistry extras installed, full pytest reported `305
+passed`, and the build and wheel checks passed. The authoritative job record is
+[GitHub Actions run 34876658350](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/actions/runs/34876658350).
+
+This supersedes no local result above: Windows Application Control still
+prevented RDKit loading in the independent local environment, and the earlier
+filtered failures and collection limits remain historical evidence for that
+environment. The successful CI matrix verifies its declared full-suite and
+packaging gates; it does not establish real-backend execution or benchmark
+performance.
+
+The published branch is represented by [draft PR #2](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/pull/2).
+It has not been merged; remote `main` remains at the recorded baseline
+`8d4434d3a33eb83b1e12cad82944b02c83270e47`.

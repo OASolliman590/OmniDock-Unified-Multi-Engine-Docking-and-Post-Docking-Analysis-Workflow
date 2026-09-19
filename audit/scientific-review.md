@@ -4,7 +4,20 @@ Reviewed the scientific-integrity working diff against baseline `8d4434d3a33eb83
 
 ## Result
 
-No unresolved material P1/P2 findings in the inspected final implementation. This is a bounded source review, not a chemistry-runtime validation or approval to merge without CI. Windows Application Control prevents local RDKit execution; chemistry-required fixtures must run in the declared CI environment. Independent tester results are recorded separately in `scientific-verification.md`.
+No unresolved material P1/P2 findings in the inspected final implementation.
+This remains a bounded source review. At the time of local review, Windows
+Application Control prevented RDKit execution, so chemistry-required fixtures
+needed the declared CI environment. That required CI is now verified: the
+published commit `f5760bf45c69d42a4420a866c77aa8f6e74875cc` passed the full
+Ubuntu/Windows Python 3.10/3.12 matrix, including chemistry extra installation,
+full pytest (`305 passed` per job), build and wheel checks. See [GitHub Actions run
+34876658350](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/actions/runs/34876658350).
+Independent tester results, including the historical local limitations, are
+recorded separately in `scientific-verification.md`.
+
+The published branch is under [draft PR #2](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/pull/2);
+it is unmerged, and remote `main` remains at baseline
+`8d4434d3a33eb83b1e12cad82944b02c83270e47`.
 
 ## Findings resolved during review
 
@@ -27,4 +40,4 @@ Final handoff inspection confirmed the backend-failure fixture preserves both pr
 
 The subsequent full filtered suite exposed three existing smoke cases that pass `expected_engines=[]` to request inferred engine scope. The initial independent source review missed this established default-call compatibility; the new empty-scope rejection was a regression.
 
-Reviewed the bounded correction: `None` and an empty engine collection infer the observed normalized engine scope, while every nonempty declared scope still rejects malformed tokens, duplicate normalized engines and engines outside that scope. The added two-engine positive fixture checks agreement count 2 and fraction 1.0. The preceding row-identity, scoring-function and duplicate-row guards are still executed before inference. No new scientific denominator claim is introduced, and no remaining material finding was identified in this correction. Execution results belong to the independent tester's verification record; chemistry CI remains required.
+Reviewed the bounded correction: `None` and an empty engine collection infer the observed normalized engine scope, while every nonempty declared scope still rejects malformed tokens, duplicate normalized engines and engines outside that scope. The added two-engine positive fixture checks agreement count 2 and fraction 1.0. The preceding row-identity, scoring-function and duplicate-row guards are still executed before inference. No new scientific denominator claim is introduced, and no remaining material finding was identified in this correction. Execution results belong to the independent tester's verification record. The required chemistry CI is now fulfilled by the successful published matrix; this review still makes no real-backend or benchmark claim.
