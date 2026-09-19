@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -155,9 +157,23 @@ def test_forced_comparative_rerun_refreshes_owned_source_bundles(tmp_path):
 def test_matplotlib_critical_section_is_reentrant_and_exception_safe():
     from post_docking_analysis.plotting_lock import matplotlib_critical_section
 
-    with matplotlib_critical_section():
-        with matplotlib_critical_section():
-            pass
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from post_docking_analysis.plotting_lock import matplotlib_critical_section\n"
+                "with matplotlib_critical_section():\n"
+                "    with matplotlib_critical_section():\n"
+                "        pass\n"
+            ),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
 
     with pytest.raises(RuntimeError, match="controlled failure"):
         with matplotlib_critical_section():
