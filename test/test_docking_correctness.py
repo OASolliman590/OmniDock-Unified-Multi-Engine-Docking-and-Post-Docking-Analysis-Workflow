@@ -149,6 +149,68 @@ def test_cli_returns_failure_for_failed_engine(project):
         assert dock_main(["--project-dir", str(project[0]), "--engines", "vina"]) == 1
 
 
+COMMON_DEPLOYMENT_CONTEXT_KEYS = (
+    "generation_project_root",
+    "project_root",
+    "execution_project_root",
+    "layout_profile",
+    "round_id",
+    "docking_mode",
+    "engines",
+    "pair_count",
+    "pair_source_file",
+    "rerun_manifest_file",
+    "generation_stage_root",
+    "stage_root",
+    "hpc_profile",
+    "engine_jobs",
+    "deployment_manifest",
+)
+
+
+@pytest.mark.parametrize(
+    ("factory", "scheduler", "options"),
+    [
+        (generate_slurm_deployment, "slurm", {"slurm_options": {"partition": "test"}}),
+        (generate_condor_deployment, "condor", {}),
+    ],
+)
+def test_deployment_manifests_identify_scheduler_and_common_context(project, factory, scheduler, options):
+    root, pair = project
+    result = factory(
+        project_root=root,
+        engines=["vina"],
+        pairlist_rows=[pair],
+        runtime_by_engine={"vina": {"seed": 42}},
+        round_id="r1",
+        docking_mode="screen",
+        **options,
+    )
+    persisted_path = root / "deployments" / "r1" / "screen" / "deployment_manifest.json"
+    persisted = json.loads(persisted_path.read_text(encoding="utf-8"))
+    stage_root = str((root / "deployments" / "r1" / "screen").resolve())
+    expected_root = str(root.resolve())
+    for manifest in (result, persisted):
+        assert manifest["scheduler"] == scheduler
+        assert manifest["generation_project_root"] == expected_root
+        assert manifest["project_root"] == expected_root
+        assert manifest["execution_project_root"] == expected_root
+        assert manifest["layout_profile"] == "canonical"
+        assert manifest["round_id"] == "r1"
+        assert manifest["docking_mode"] == "screen"
+        assert manifest["engines"] == ["vina"]
+        assert manifest["pair_count"] == 1
+        assert manifest["pair_source_file"] == ""
+        assert manifest["rerun_manifest_file"] == ""
+        assert manifest["generation_stage_root"] == stage_root
+        assert manifest["stage_root"] == stage_root
+        assert manifest["hpc_profile"] == {"name": "", "source": ""}
+        assert "vina" in manifest["engine_jobs"]
+        assert manifest["deployment_manifest"] == str(Path(stage_root) / "deployment_manifest.json")
+        assert [key for key in COMMON_DEPLOYMENT_CONTEXT_KEYS if key not in manifest] == []
+    assert result == persisted
+
+
 @pytest.mark.parametrize("factory,options", [(generate_slurm_deployment, {"slurm_options": {"partition": "test"}}), (generate_condor_deployment, {})])
 def test_portable_deployment_uses_shared_executor_and_posix_paths(project, factory, options):
     root, pair = project
