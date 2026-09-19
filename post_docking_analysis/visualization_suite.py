@@ -16,6 +16,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from post_docking_analysis.plotting_lock import serialized_matplotlib
 from post_docking_analysis.protein_naming import format_protein_label
 
 try:
@@ -185,6 +186,7 @@ def _validation_state(validation_gate: Mapping[str, object]) -> Tuple[str, bool]
     return state or "unknown", passed
 
 
+@serialized_matplotlib
 def _apply_suite_style() -> None:
     if not _PLOTTING_AVAILABLE:
         return
@@ -196,6 +198,7 @@ def _apply_suite_style() -> None:
     )
 
 
+@serialized_matplotlib
 def _save_placeholder(path: Path, title: str, message: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not _PLOTTING_AVAILABLE:
@@ -454,6 +457,7 @@ def _build_plot_context(
     )
 
 
+@serialized_matplotlib
 def _run_plot_function(
     ctx: PlotContext,
     *,
@@ -481,6 +485,7 @@ def _run_plot_function(
         runner = fn
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        _apply_suite_style()
         runner(ctx, path)
         generated = bool(path.exists())
         return FigureResult(
@@ -1232,7 +1237,9 @@ def _plot_engine_agreement_per_complex(ctx: PlotContext, output: Path) -> None:
     plt.close(fig)
 
 
+@serialized_matplotlib
 def _plot_per_protein_cross_engine_batches(ctx: PlotContext, output_dir: Path) -> None:
+    _apply_suite_style()
     output_dir.mkdir(parents=True, exist_ok=True)
     best = _best_scored_frame(ctx, include_engine=True)
     if best.empty:
@@ -1518,6 +1525,7 @@ def _plot_rmsd_per_complex(ctx: PlotContext, output: Path) -> None:
     plt.close(fig)
 
 
+@serialized_matplotlib
 def _plot_per_engine_affinity_heatmaps(ctx: PlotContext, output_dir: Path) -> List[FigureResult]:
     """
     Generate one affinity heatmap per engine (protein × ligand).
@@ -1525,6 +1533,7 @@ def _plot_per_engine_affinity_heatmaps(ctx: PlotContext, output_dir: Path) -> Li
     Returns a list of FigureResult entries, one per engine, for manifest registration.
     Uses engine_affinity_matrix which has columns: tag, {engine1}, {engine2}, ...
     """
+    _apply_suite_style()
     results: List[FigureResult] = []
     em = ctx.engine_affinity_matrix
     if em is None or em.empty or "tag" not in em.columns:
@@ -1714,8 +1723,6 @@ def generate_visualization_suite(
             engine_name=ctx.engine_name,
             figures=figures,
         )
-
-    _apply_suite_style()
 
     figures.append(
         _run_plot_function(

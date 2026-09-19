@@ -82,6 +82,7 @@ from post_docking_analysis.top_pose_selector import (
     write_top_pose_atlas,
 )
 from post_docking_analysis.artifact_graph import ArtifactGraph, ArtifactNode
+from post_docking_analysis.plotting_lock import serialized_matplotlib
 from post_docking_analysis.visualization_suite import generate_visualization_suite
 from post_docking_analysis.score_import import read_explicit_score_import
 from post_docking_analysis.score_semantics import score_spec, sort_value, explicit_true
@@ -1223,24 +1224,14 @@ class MultiEngineAnalysisPipeline:
             if source.exists():
                 shutil.copy2(source, destination / source.name)
                 copied += 1
-        return {"details": f"comparative_reports_copied={copied}"}
-
-    def _dag_compute_polypharmacology_node(self, paths: Dict[str, Path]) -> Dict[str, object]:
-        source = self.output_dir / "reports" / "polypharmacology"
-        if not source.exists():
-            scores = self._load_or_build_scores()
-            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope, preserve_dag_atlas=True)
-        copied = self._copy_matching_files(source, paths["polypharmacology"])
-        return {"details": f"polypharmacology_files_copied={copied}"}
-
-    def _dag_compute_biology_correlation_node(self, paths: Dict[str, Path]) -> Dict[str, object]:
-        destination = paths["biology_correlation"]
-        destination.mkdir(parents=True, exist_ok=True)
-        reports_dir = self.output_dir / "reports"
-        if not (reports_dir / "biology_mapping_report.json").exists():
-            scores = self._load_or_build_scores()
-            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope, preserve_dag_atlas=True)
-        copied = 0
+        polypharmacology_source = destination / "polypharmacology_source"
+        biology_correlation_source = destination / "biology_correlation_source"
+        polypharmacology_copied = self._copy_matching_files(
+            reports_dir / "polypharmacology",
+            polypharmacology_source,
+        )
+        biology_correlation_source.mkdir(parents=True, exist_ok=True)
+        biology_correlation_copied = 0
         for candidate in (
             "biology_correlation_global.csv",
             "biology_correlation_per_protein.csv",
@@ -1248,8 +1239,37 @@ class MultiEngineAnalysisPipeline:
         ):
             source = reports_dir / candidate
             if source.exists():
-                shutil.copy2(source, destination / source.name)
-                copied += 1
+                shutil.copy2(source, biology_correlation_source / source.name)
+                biology_correlation_copied += 1
+        if polypharmacology_copied <= 0:
+            raise RuntimeError("comparative producer generated no polypharmacology source artifacts")
+        if biology_correlation_copied <= 0:
+            raise RuntimeError("comparative producer generated no biology-correlation source artifacts")
+        return {
+            "details": (
+                f"comparative_reports_copied={copied}; "
+                f"polypharmacology_source_files={polypharmacology_copied}; "
+                f"biology_correlation_source_files={biology_correlation_copied}"
+            )
+        }
+
+    def _dag_compute_polypharmacology_node(self, paths: Dict[str, Path]) -> Dict[str, object]:
+        source = paths["comparative"] / "polypharmacology_source"
+        if not source.is_dir():
+            raise FileNotFoundError(f"missing comparative-owned polypharmacology_source bundle: {source}")
+        copied = self._copy_matching_files(source, paths["polypharmacology"])
+        if copied <= 0:
+            raise RuntimeError(f"comparative-owned polypharmacology_source bundle is empty: {source}")
+        return {"details": f"polypharmacology_files_copied={copied}"}
+
+    def _dag_compute_biology_correlation_node(self, paths: Dict[str, Path]) -> Dict[str, object]:
+        destination = paths["biology_correlation"]
+        source = paths["comparative"] / "biology_correlation_source"
+        if not source.is_dir():
+            raise FileNotFoundError(f"missing comparative-owned biology_correlation_source bundle: {source}")
+        copied = self._copy_matching_files(source, destination)
+        if copied <= 0:
+            raise RuntimeError(f"comparative-owned biology_correlation_source bundle is empty: {source}")
         return {"details": f"biology_correlation_files_copied={copied}"}
 
     def _dag_compute_visualizations_node(self, paths: Dict[str, Path]) -> Dict[str, object]:
@@ -3419,6 +3439,7 @@ class MultiEngineAnalysisPipeline:
             encoding="utf-8",
         )
 
+    @serialized_matplotlib
     def _write_cross_engine_visualizations(
         self,
         best_by_engine: pd.DataFrame,
@@ -3801,6 +3822,7 @@ class MultiEngineAnalysisPipeline:
         return labelled
 
     @staticmethod
+    @serialized_matplotlib
     def _save_cross_engine_placeholder(output_file: Path, title: str, message: str) -> None:
         import matplotlib.pyplot as plt
 
@@ -3817,6 +3839,7 @@ class MultiEngineAnalysisPipeline:
         slug = re.sub(r"[^A-Za-z0-9]+", "_", str(value)).strip("_")
         return slug[:80] or "plot"
 
+    @serialized_matplotlib
     def _plot_cross_engine_pair_heatmap(self, matrix_df: pd.DataFrame, output_file: Path) -> None:
         import matplotlib.pyplot as plt
         import seaborn as sns
@@ -3850,6 +3873,7 @@ class MultiEngineAnalysisPipeline:
         plt.savefig(output_file, dpi=300, bbox_inches="tight")
         plt.close(fig)
 
+    @serialized_matplotlib
     def _plot_cross_engine_distribution(
         self,
         paired_rows: pd.DataFrame,
@@ -3912,6 +3936,7 @@ class MultiEngineAnalysisPipeline:
         plt.savefig(output_file, dpi=300, bbox_inches="tight")
         plt.close(fig)
 
+    @serialized_matplotlib
     def _plot_cross_engine_disagreement(
         self,
         wide: pd.DataFrame,
@@ -3941,6 +3966,7 @@ class MultiEngineAnalysisPipeline:
         plt.savefig(output_file, dpi=300, bbox_inches="tight")
         plt.close(fig)
 
+    @serialized_matplotlib
     def _plot_cross_engine_per_protein_batches(
         self,
         wide: pd.DataFrame,
@@ -3994,6 +4020,7 @@ class MultiEngineAnalysisPipeline:
             count += 1
         return count
 
+    @serialized_matplotlib
     def _plot_gnina_cnn_profiles(self, gnina_rows: pd.DataFrame, output_file: Path) -> None:
         import matplotlib.pyplot as plt
         import numpy as np
