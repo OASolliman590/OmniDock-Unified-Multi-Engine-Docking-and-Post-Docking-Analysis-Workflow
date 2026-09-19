@@ -7,7 +7,7 @@
 | --- | --- | --- | --- |
 | Repository checker | complete | `968b36d` | 9 passed, 1 native-symlink capability skip; compile/diff clean; 11 expected base findings |
 | Evidence-preserving hygiene | complete | `3c1cb00` | checker/compile/diff clean; 9 passed, 1 native-symlink skip; two remaining shell scripts parse; five assets are 100% renames |
-| Docking deployment refactor | in progress | — | baseline functions: Condor 217 lines, Slurm 208 lines |
+| Docking deployment refactor | complete | `b7cb01f` | 34 correctness + 7 scheduler/HPC smoke tests passed; 9 repository-contract tests passed with 1 native-symlink capability skip; checker/compile/diff clean |
 | CLI parser extraction | queued | — | — |
 | Documentation consolidation | queued | — | — |
 | Final review/distribution | queued | — | — |
