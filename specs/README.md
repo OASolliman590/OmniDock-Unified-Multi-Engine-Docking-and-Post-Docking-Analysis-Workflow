@@ -13,12 +13,9 @@ rewritten as current product requirements or as current scientific validation.
 
 - Current repository-cleanup work lives under `docs/superpowers/` (plan, design
   specification, and progress notes).
-- Active user documentation currently lives in the repository-root guides
-  (`README.md`, `INSTALLATION_GUIDE.md`, `USAGE.md`, `PDB_PREPARATION_USAGE.md`,
-  `PDBQT_PREPARATION_EXPLAINED.md`, `HPC_DEPLOYMENT_GUIDE.md`,
-  `POST_DOCKING_ANALYSIS_GUIDE.md`, and related files) plus `docs/` historical
-  notes. A later cleanup batch will add a documentation index; this file does
-  not link to a path that does not exist yet.
+- Active user documentation is indexed in [`docs/README.md`](../docs/README.md),
+  which routes to the repository-root guides and separates current guidance
+  from historical records and specialized research material.
 
 ## Numbered historical snapshots (`001`–`029`)
 
