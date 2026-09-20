@@ -1,88 +1,48 @@
-# Omni-DockForge Migration Notes
+# DockForge migration and compatibility notes
 
-This guide maps legacy surfaces to the Omni-DockForge workflow model and clarifies compatibility behavior during the transition.
+This is a compatibility record, not the current usage manual. Follow the
+[documentation index](README.md), [CLI recipes](../USAGE.md), and live
+`python main.py ... --help` output for current operation.
 
-## Naming migration
+## Names and entrypoints
 
-- Old platform label: `PDB Prepare Wizard`
-- New platform label: `Omni-DockForge`
-- New tagline: `End-to-End Docking, Consensus by Design.`
-- Old workflow concept: `maturation`
-- New workflow concept: `Checkpoint & Revise`
+The project is documented as OmniDock/DockForge while the Python distribution
+and console entrypoints retain legacy `pdb-prepare-wizard` and `pdb-wizard-*`
+names. In particular, `pdb-wizard-workflow` is declared as
+`workflow.cli:main`. Existing installed commands remain compatibility surfaces;
+new repository examples use `python main.py`.
 
-## Command surface mapping
+## Layout seams
 
-- Legacy top-level `python main.py interactive`
-  - Mapped to: `python main.py workflow interactive`
-- Legacy top-level `python main.py cli ...`
-  - Mapped to: `python main.py pdb run ...`
-- Legacy top-level `python main.py batch ...`
-  - Mapped to: `python main.py pdb batch ...`
-- Legacy alias `workflow clone-maturation`
-  - Supported as deprecated alias of `workflow clone-checkpoint`
+The canonical project uses `project_manifest.json`, `pairlist.csv`, per-engine
+directories, numbered working/analysis/visualization/report roots, and workflow
+state. `docking_legacy`, raw GNINA adapters, and
+`5-Post_Docking_Analysis` are compatibility paths. New analysis writes to the
+canonical `5-Analysis` root; on systems without symlink support the old path may
+be a directory containing a routing notice.
 
-## Post-docking migration (legacy -> unified)
+Do not move or rename generated data solely to imitate an older tree. Initialize
+or stage a canonical project, retain source/provenance records, and let the
+layout/adapters resolve supported inputs.
 
-- Canonical project post-docking commands now resolve to the unified pipeline path:
-  - `analyze.comparative`
-  - `analyze.favorite_engine`
-  - canonical stage targets (`analyze.stage.*`, interactions, visuals) via unified favorite-engine delegation
-- Workflow stage targets no longer execute legacy non-canonical fallbacks; they require canonical project context.
-- `post_docking_analysis.simplified_cli` remains available as a compatibility wrapper:
-  - manifest-backed canonical projects auto-delegate to unified execution
-  - legacy-only toggles (`--no-rmsd`, `--no-visualizations`) are ignored in manifest wrapper mode
-- User-facing RMSD scope contract is now `per_complex` only:
-  - global/per-protein RMSD scope toggles were removed from CLI surfaces
+## Behavioral compatibility changes
 
-## Layout/profile migration
+Current correctness checks intentionally reject or mark unevaluable cases that
+older flows accepted permissively. Resume binds input contents, executable
+identity, protocol, and validated outputs. Preparation requires authoritative
+chemistry/mappings. Cross-engine comparison preserves score directions and
+normalizes like evidence. RMSD uses the native receptor frame. Missing mappings,
+poses, provenance, or comparisons remain `not_evaluable` and reduce coverage.
 
-- Canonical multi-engine profile: `canonical`
-  - Uses numbered output structure with unified project manifest.
-- Backward-compatible profile: `docking_legacy`
-  - Preserves historical tree semantics where needed.
+These changes can make an old project incomplete or unevaluable rather than
+reproducing an unsupported result. Preserve the original project, restage from
+authoritative inputs, rerun affected stages, and compare provenance. See the
+[correctness update](correctness-update.md) and
+[post-docking guide](../POST_DOCKING_ANALYSIS_GUIDE.md).
 
-During initialization, existing projects are inspected and either:
+## Historical documents
 
-1. recognized as canonical, or
-2. backfilled with workflow state/manifest metadata without destructive re-layout.
-
-## Interactive behavior migration
-
-- Universal back behavior is now part of all prompt helpers.
-- Long-running operations can run in background task mode.
-- Timeline and session state are recorded in `.workflow/state.json`.
-
-## Checkpoint & Revise metadata
-
-Each checkpoint clone now writes lineage metadata in workflow state:
-
-- `checkpoint_id`
-- `source_project_dir`
-- `target_project_dir`
-- `layout_profile`
-- `marker_file`
-- `created_at`
-
-This metadata is designed to support future lineage and reproducibility reports.
-
-## Compatibility guardrails
-
-- Legacy prompts still work where possible, but new commands are preferred.
-- Feature flags in workflow state allow staged rollout for new subsystems.
-- Deprecated aliases remain available for migration windows and scripts.
-- Stage-level delegation emits explicit run notes so users can see when canonical stage targets are executed through unified favorite-engine continuation.
-
-## Retired AutoDock shell helpers
-
-`autodock/prep_autodock.sh` and `autodock/prep_ligands_custom.sh` are retired.
-They failed Bash parsing, were neither packaged nor called by active code, and
-predated (and bypassed) the supported authoritative-graph / fail-closed
-preparation path. Removing them is repository hygiene; it is not a scientific
-validation of historical or current preparation results.
-
-Use:
-
-- `prep_autodock_enhanced.sh` — packaged, syntax-valid shell adapter
-- the Python preparation workflow (`autodock_preparation.py` / `python main.py prep`)
-
-Do not resurrect the retired scripts as an alternative chemistry path.
+Numbered specs, audit records, dated release checklists, and
+[archived post-docking documents](../post_docking_analysis/docs/_archive/README.md)
+describe earlier states. They remain useful migration evidence but do not
+override active guides or current code.

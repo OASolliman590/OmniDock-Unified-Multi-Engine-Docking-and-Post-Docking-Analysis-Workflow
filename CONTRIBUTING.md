@@ -1,91 +1,59 @@
 # Contributing
 
-Python **3.10+** is the supported package contract (`python_requires`, CI).
-Older README/installation text that mentions Python 3.8 or 3.9 is historical.
-
-Optional chemistry extras, interaction extras, docking engines, Open Babel,
-cluster schedulers, CUDA, and ProLIF are **not** assumed to work on every
-developer machine. Do not claim a local checkout exercises all of them.
-
-## Development install
+Use Python 3.10+ and an isolated environment. Install development and chemistry
+dependencies with:
 
 ```bash
 python -m pip install -e '.[dev,chemistry]'
 ```
 
-Use `.[dev]` when chemistry wheels cannot load on the host. Installing an extra
-does not install external binaries.
-
-## Tests
-
-Always disable plugin autoload.
-
-Focused:
+Read the [architecture](docs/architecture.md) before changing module boundaries
+and follow the complete [testing/evidence guide](docs/testing.md). Set the POSIX
+or PowerShell CI-parity environment shown there before running pytest. Then run
+the focused tests for the change plus the documented full gate, including:
 
 ```bash
-# POSIX
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest test/test_repository_contracts.py -q
-
-# PowerShell
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
-python -m pytest test/test_repository_contracts.py -q
-```
-
-Full suite (requires an environment where RDKit can load; some hosts block it):
-
-```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest test -q
-```
-
-## Repository checker
-
-```bash
+python -m pytest test -q
 python scripts/check_repository.py
-```
-
-Exit code `0` means no findings. Do not weaken the checker to hide drift.
-
-## Build and wheel
-
-```bash
 python -m build
 python scripts/check_wheel.py
+git diff --check
 ```
 
-## Shell syntax
+Run `bash -n` on changed shell scripts in Bash/WSL/Linux. Do not claim current
+CI, engine, GPU, scheduler, or scientific validation from a historical log or a
+dry run.
 
-On Linux or Git Bash, syntax-check every tracked `*.sh` file:
+## Compatibility boundaries
 
-```bash
-bash -n prep_autodock_enhanced.sh
-bash -n install_vina_dock_dependencies.sh
-```
+Preserve documented console entrypoints, project manifests, `pairlist.csv`,
+engine output contracts, workflow state, and migration seams unless the change
+explicitly includes a compatibility plan. New behavior should enter through the
+unified `main.py` command tree and canonical project topology. Update active
+guides and live help together; label dated design/release records as historical
+rather than rewriting their claims.
 
-## Public interfaces
+## Scientific boundaries
 
-Preserve public CLI flags, defaults, console-script names, and deployment
-function signatures unless a written specification names an additive,
-compatibility-safe change. The installed distribution name remains
-`pdb-prepare-wizard` until a later, explicit naming migration.
+Scientific changes require explicit provenance and fail-closed behavior. Do not
+infer graph identity from coordinates, compare unlike raw scoring functions,
+hide ligand displacement through superposition, convert missing evidence into a
+pass, or omit `not_evaluable`/coverage accounting. Document engine score
+direction, reference frame, mappings, exclusions, and failure semantics.
 
-## Scientific invariants
+Regression tests are not prospective validation. Do not add claims about
+affinity accuracy, enrichment, efficacy, production readiness, or clinical use
+without versioned evidence and a separately reviewed scientific scope. Preserve
+the limitations in [docs/correctness-update.md](docs/correctness-update.md).
 
-Do not regress authoritative chemical graphs and atom mappings; native
-receptor-frame RMSD (no ligand superposition that hides displacement); explicit
-score direction; explicit `not_evaluable` status and coverage accounting;
-reference provenance; fail-closed execution and QC gates; or content-verified
-resume/cache identity. Do not invent benchmark, affinity, efficacy, or
-production-readiness claims.
+## Repository hygiene and security
 
-## Historical documents
-
-Numbered trees under `specs/` (`001`–`029` and `_archive/`), curated `audit/`
-reports, and dated files under `docs/` are historical snapshots. Preserve their
-claims; do not rewrite them as current validation. Current cleanup work is in
-`docs/superpowers/`.
-
-## Secrets and private HPC details
-
-Do not commit credentials, private host/account/path facts, or filled cluster
-profiles. Public-safe templates live in `examples/hpc_profiles/`. Keep real
-site settings in ignored local configuration such as `.workflow/hpc_profiles/`.
+- keep generated data, caches, logs, environments, and build artifacts out of
+  version control;
+- use public-safe profile templates and never commit credentials, private hosts,
+  usernames, account IDs, keys, or personal absolute paths;
+- keep links relative and run the repository checker;
+- include exact commands, environment, commit/tree, skips, and coverage when
+  recording evidence;
+- keep pull requests focused and explain behavior, compatibility, scientific
+  implications, tests, and remaining limitations.

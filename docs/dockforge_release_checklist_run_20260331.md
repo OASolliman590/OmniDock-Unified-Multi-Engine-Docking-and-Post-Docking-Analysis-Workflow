@@ -1,3 +1,9 @@
+# Historical snapshot — 2026-03-31
+
+This record preserves a checklist run made on the date shown. It is not current
+CI, build, engine, benchmark, production-readiness, or scientific-validation
+evidence. Use [docs/testing.md](testing.md) for current evidence requirements.
+
 # DockForge Release Checklist Run - 2026-03-31
 
 Source template: `docs/dockforge_release_checklist.md`
