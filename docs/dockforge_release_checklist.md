@@ -1,3 +1,9 @@
+# Historical release-checklist snapshot
+
+This checklist records an earlier release process. Unchecked or checked items do
+not describe the current tree, and historical completion claims have not been
+rerun. Use [docs/testing.md](testing.md) for current gates.
+
 # DockForge Release Checklist (Feature-Flag Rollout + Fallback)
 
 Use this checklist before cutting a release branch/tag for Omni-DockForge.

@@ -1,79 +1,59 @@
 # Dependencies
 
-This file documents required and optional dependencies for OmniDock.
+## Core Python environment
 
-## Python
+`requirements.txt` supplies the default runtime libraries: NumPy, pandas,
+Biopython, Matplotlib, seaborn, openpyxl, questionary, pdb-tools, SciPy,
+PyYAML, requests, and scikit-learn. Package metadata requires Python 3.10+.
+Builds use setuptools and wheel through `pyproject.toml`.
 
-- Python: `3.9+` (tested on `3.9`)
+## Optional Python extras
 
-## Required Python Packages
+Declared extras in `setup.py` are:
 
-From `requirements.txt`:
+- `chemistry`: RDKit, Meeko, and gemmi;
+- `interactions`: RDKit, PLIP, ProLIF, and MDAnalysis;
+- `dev`: pytest, build, and wheel;
+- `notebooks`: Jupyter.
 
-- `numpy>=1.21.0`
-- `pandas>=1.3.0`
-- `biopython>=1.79`
-- `matplotlib>=3.5.0`
-- `seaborn>=0.11.0`
-- `openpyxl>=3.0.0`
-- `questionary>=2.0.1`
-- `pdb-tools>=2.5.0`
-
-## Analysis Packages
-
-- `plip>=2.2.0` (interaction analysis)
-- `scipy` (statistical utilities)
-- `scikit-learn` (clustering/model helpers)
-
-## External Tools
-
-- `openbabel` / `obabel` (structure conversions and chemistry prep)
-- `LigPlot+` (optional)
-- `PyMOL` (optional)
-- `Apptainer`/`Singularity` (HPC container runs, optional)
-
-## Optional Python Packages
-
-- `prolif` (optional interaction maps)
-- `py3Dmol` (optional 3D visualization)
-- `jupyter>=1.0.0` (optional notebook workflows)
-
-## Environment Setup
-
-Quick one-liner (Conda):
+Example:
 
 ```bash
-conda env create -f environment.yml && conda activate pdb-prepare-wizard && pip install -e .
+python -m pip install -e '.[chemistry,interactions,dev]'
 ```
 
-Quick one-liner (pip fallback):
+Optional imports fail or skip their stage when absent; installing an extra does
+not install every external executable used by that stage.
 
-```bash
-python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && pip install -e .
-```
+## External preparation and docking tools
 
-Recommended:
+Choose tools that match the selected commands and engine profile:
 
-```bash
-conda env create -f environment.yml
-conda activate pdb-prepare-wizard
-pip install -e .
-```
+- Open Babel and/or AutoDockTools (`prepare_ligand4.py`,
+  `prepare_receptor4.py`) for backends that explicitly use them;
+- GNINA for GNINA docking and CNN scores;
+- AutoDock Vina for Vina docking;
+- Smina for Smina docking;
+- AutoDock4 and AutoGrid4, including the required parameter file, for AD4.
 
-Alternative:
+Engine binaries, containers, GPU drivers, and force-field/parameter assets are
+not bundled. Record the actual executable identity and parameters; resume is
+disabled when identity cannot be verified.
 
-```bash
-pip install -r requirements.txt
-pip install -e .
-```
+## Analysis and visualization tools
 
-## Runtime Environment Variables
+PLIP and ProLIF are optional interaction backends. LigPlot+, PoseView, PyMOL,
+py3Dmol, and other visual tools are optional and stage-specific. Their outputs
+do not replace source structures, score provenance, coverage accounting, or
+manual inspection.
 
-- `DOCKFORGE_CLEAN_INTERACTION_DATASET_ROOT` (optional dataset root for clean interaction pipeline)
-- `DOCKFORGE_RESEARCH_BASE_PATH` (optional base path for research adapter)
-- `LIGPLUS_ROOT` or `LIGPLUS_HOME` (optional LigPlot root)
+## Deployment tools
 
-## Security Note
+Local generation works through Python. Remote execution additionally needs a
+Unix environment, SSH/file synchronization, the selected Slurm or HTCondor
+worker commands, and any engine runtime described by the profile. Start from the
+public-safe templates in `examples/hpc_profiles/`; never commit credentials or
+private paths.
 
-- Do not commit local runtime config under `.workflow/` (SSH targets, local paths, state files).
-- Commit templates only (for example `examples/hpc_profiles/ssh_systems.template.yaml`).
+See [installation](INSTALLATION_GUIDE.md), [HPC deployment](HPC_DEPLOYMENT_GUIDE.md),
+and [testing](docs/testing.md).

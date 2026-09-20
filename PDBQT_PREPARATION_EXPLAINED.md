@@ -1,116 +1,55 @@
-# DockForge PDBQT Preparation Explained
+# PDBQT preparation and atom identity
 
-## Quick Summary
+PDBQT is an engine input format, not an authoritative chemical graph. It adds
+partial charges and docking atom types to a coordinate representation, but a
+legacy or coordinate-only PDBQT may not preserve enough bond-order,
+stereochemistry, macrocycle, or atom-identity information for scientific
+geometry comparisons.
 
-DockForge has three preparation entry points:
-1. `autodock_preparation.py` (Python orchestrator)
-2. `prep_autodock_enhanced.sh` (shell runner for orchestrated prep)
-3. `docking/preparation/ligand_preparation.py` (ligand-focused preparation module)
+## Data contract
 
-All produce docking-ready PDBQT assets.
-Preparation is decoupled from PLIP and other interaction-analysis tools.
+Begin with a verified chemical graph (for example SDF/SMILES plus provenance),
+then export an engine-aware PDBQT while retaining a reversible atom map. Meeko
+SMILES/IDX metadata is an accepted mapping source. Preserve:
 
-## Why PDBQT
+- original and prepared structure hashes;
+- canonical atom identifiers and output atom order;
+- bond orders, formal charges, stereochemistry, protonation, and tautomer state;
+- preparation tool/version/options and pH;
+- macrocycle closure/glue metadata;
+- receptor/reference coordinate-frame provenance.
 
-PDBQT extends PDB by adding:
-- atom typing for AutoDock-family workflows
-- partial charges used by docking engines
+AutoDockTools paths can be supplied through the `pdb prepare-*` options when the
+selected backend uses them. Do not assume output from one preparation tool is
+interchangeable with another.
 
-## Current Ligand Preparation Design
+## Engine-aware outputs
 
-Ligand preparation is profile-driven and engine-aware.
+GNINA, Vina, and Smina use PDBQT-like ligand/receptor inputs but may differ in
+supported atom types and runtime requirements. AutoDock4 additionally requires
+AutoGrid4/grid maps and a consistent parameter file. Unsupported macrocycle or
+atom-type features must fail rather than be erased to make a file parse.
 
-### Core enrichment (Open Babel path)
+## Geometry and redocking
 
-When Open Babel normalization is used, DockForge applies:
-- hydrogen addition
-- protonation at chosen pH (default `7.4`)
-- 3D conformer generation
-- minimization
-- partial charge assignment (best effort)
+RMSD requires graph identity/symmetry and an authoritative atom correspondence.
+It is measured after placing predicted and reference ligands in their common
+native receptor frame; fitting the ligand onto the reference would hide spatial
+displacement and is not used. Multi-pose records must select the requested pose
+exactly, without substituting pose one, merging models, or truncating atoms.
 
-### Supported profiles
+SDF/MOL and mapped Meeko macrocycles can be evaluable. Coordinate-only
+PDB/PDBQT and legacy AD4 DLG geometry remain `not_evaluable` when the required
+graph/mapping is absent. That outcome must reduce coverage; it is not a failed
+RMSD threshold and not a pass.
 
-- `engine_aware_full`
-- `openbabel_only`
-- `meeko_only`
-- `autodocktools_only`
-- `openbabel_meeko`
-- `openbabel_meeko_autodock`
-- `openbabel_autodocktools`
+## User verification
 
-### Engine-aware behavior
+Inspect the prepared molecule in a chemically aware viewer, compare heavy-atom
+coordinates and graph/charges to the authoritative input, confirm expected
+rotatable bonds and macrocycle treatment, and run an engine dry-run. Retain all
+sidecars with the project. No format conversion alone establishes protonation
+accuracy, pose validity, or affinity prediction quality.
 
-`engine_aware_full` resolves automatically:
-- with `autodock4` selected: `openbabel_meeko_autodock`
-- without `autodock4`: `openbabel_meeko`
-
-Invalid profile/engine combinations are blocked before preparation starts.
-
-## Receptor Preparation Design
-
-Receptor preparation builds PDBQT outputs for docking.
-The pipeline prefers stronger tools when available and falls back safely if optional tools are missing.
-
-## CLI Examples
-
-```bash
-# Create default config snapshot
-python autodock_preparation.py --create-config
-
-# Engine-aware prep for multi-engine run
-python autodock_preparation.py \
-  --ligands-input ./ligands_raw \
-  --receptors-input ./receptors_raw \
-  --ligands-output ./ligands_prep \
-  --receptors-output ./receptors_prep \
-  --ligand-profile engine_aware_full \
-  --selected-engines gnina,vina,smina,autodock4
-
-# Open Babel -> Meeko only
-python autodock_preparation.py \
-  --ligands-input ./ligands_raw \
-  --receptors-input ./receptors_raw \
-  --ligands-output ./ligands_prep \
-  --receptors-output ./receptors_prep \
-  --ligand-profile openbabel_meeko \
-  --selected-engines gnina,vina,smina
-```
-
-## AutoDockTools Resolution
-
-When profile logic requires AutoDockTools, DockForge resolves `prepare_ligand4.py` from:
-- explicit CLI path
-- environment variables (`AUTODOCKTOOLS_PREPARE_LIGAND4`, `ADT_PREPARE_LIGAND4`)
-- PATH lookup
-- known bundled/local fallback locations
-
-Optional companion settings:
-- `--autodocktools-prepare-receptor4`
-- `--autodocktools-python`
-
-## Output Artifacts
-
-Typical outputs:
-- prepared ligand PDBQT files
-- prepared receptor PDBQT files
-- preparation summary report
-- ligand validation report for malformed/invalid PDBQT outputs
-
-## Troubleshooting
-
-### Dependency missing
-
-If preparation reports missing dependencies, verify:
-- `obabel`
-- `jq`
-- AutoDockTools script path (if profile needs it)
-
-### Profile/engine incompatibility
-
-If you see compatibility blocking, switch to:
-- `engine_aware_full`
-- `openbabel_meeko_autodock`
-- `openbabel_autodocktools`
-- `autodocktools_only`
-for workflows that include `autodock4`.
+See [preparation usage](PDB_PREPARATION_USAGE.md) and
+[post-docking analysis](POST_DOCKING_ANALYSIS_GUIDE.md).

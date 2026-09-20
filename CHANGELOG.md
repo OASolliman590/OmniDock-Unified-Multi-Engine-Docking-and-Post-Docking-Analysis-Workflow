@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — repository cleanup
+
+- Consolidated current documentation behind `docs/README.md` and replaced the
+  mixed legacy/current landing page with a compact, source-backed overview.
+- Added architecture and testing/evidence guides; corrected installation,
+  dependency, CLI, preparation, deployment, and post-docking documentation.
+- Archived five superseded post-docking design/usage records without rewriting
+  their historical claims and labeled dated release/checklist records as
+  snapshots.
+- Retained legacy distribution names, console entrypoints, and project layout
+  seams as documented compatibility surfaces.
+
+Older release and roadmap entries below are historical records. They do not
+promise current readiness or constitute current test/scientific evidence.
+
 All notable changes to Omni-DockForge (formerly PDB Prepare Wizard) will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),

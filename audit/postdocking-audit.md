@@ -12,7 +12,12 @@ The canonical route is `workflow/execution.py` → `UnifiedPostDockingPipeline` 
 
 Run `python audit/postdocking_probes.py` from the repository root. Requires NumPy and pandas only. The script uses real module functions; the GNINA selector is executed from its unchanged AST method bodies to avoid importing optional visualization/docking stacks. Synthetic point sets isolate mathematical invariants; they are not molecular benchmark cases.
 
-Results: [results.json](postdocking-probe-artifacts/results.json).
+Results: the probe script `audit/postdocking_probes.py` is tracked. Its
+`postdocking-probe-artifacts/results.json` output was not tracked at the audited
+commit or at the fixed review base `8d4434d3a33eb83b1e12cad82944b02c83270e47`, so
+those JSON bytes are not recoverable from Git history of this checkout. The table
+below is the historical probe record written into this audit; it is not a newly
+invented results file.
 
 | Probe | Observed result | Scientific consequence |
 |---|---|---|

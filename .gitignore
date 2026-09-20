@@ -79,6 +79,26 @@ closing_thesis/*manifest*.json
 4-Docking/
 5-Post_Docking_Analysis/
 
+# Canonical generated runtime roots
+0-Input/
+5-Analysis/
+6-Visualizations/
+7-Reports/
+.meta/
+sessions/
+
+# Generated verification artifacts (recover from Git history; do not track)
+/audit/build-correctness.log
+/audit/correctness-tests.log
+/audit/correctness-tests.xml
+/audit/docking-dry-run.log
+/audit/wheel-verification.log
+
+# Local HPC profiles/configuration. Public templates under examples/hpc_profiles/
+# (including nmrbox-condor.template.json) remain tracked.
+.workflow/hpc_profiles/
+.codex/hpc_profiles/
+
 # AutoDock preparation logs
 autodock_prep_*.log
 logs/

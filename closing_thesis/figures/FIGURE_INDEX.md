@@ -14,6 +14,14 @@
 - `mcs_coverage_option2_serthcl.csv`
 - `enzyme_query_summary_option2_serthcl.csv`
 
+## Relocated multiscale overlay
+
+Moved from the repository root into this directory without changing bytes:
+
+- `multiscale_overlapped_experimental_vs_triple_engine.(png|svg)`: overlapped experimental versus triple-engine comparison figure pair.
+
+Original fixed-base blob hashes: png `1666b829fa38e5d44392bb52c6308f90c8b2711e`, svg `858514b5471c66e96a3e4fb64ae33d1d304889dd`.
+
 ## Added Comparator-Name + MCS Figures
 - `fig00_comparator_name_key.(png|svg)`: enzyme-level comparator naming key (biology/docking/anchor).
 - `fig01b_similarity_heatmap_named_comparators.(png|svg)`: similarity heatmaps with explicit comparator names in axis labels.

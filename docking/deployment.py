@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import re
 import shlex
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .engine_registry import build_runner
 from .hpc_profiles import merge_condor_with_profile, merge_slurm_with_profile
@@ -474,6 +475,228 @@ def _render_single_job_condor_script(
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class _DeploymentContext:
+    root: Path
+    execution_root: Path | PurePosixPath
+    layout_profile: str
+    stage_root: Path
+    execution_stage_root: Path | PurePosixPath
+    round_id: str
+    docking_mode: str
+    hpc_profile: Dict[str, str]
+    remote_project_root: str
+    skip_completed: bool
+    pair_source_file: str
+    rerun_manifest_file: str
+    pairlist_rows: List[PairlistRow]
+
+
+@dataclass(frozen=True)
+class _EngineWorkspace:
+    engine: str
+    runtime: Dict[str, object]
+    mapped_runtime: Dict[str, object]
+    jobs: List[object]
+    engine_root: Path
+    execution_engine_root: Path | PurePosixPath
+    scripts_dir: Path
+    manifest_dir: Path
+    logs_dir: Path
+    execution_logs_dir: Path | PurePosixPath
+
+
+def _open_deployment_context(
+    project_root: Path,
+    remote_project_root: str,
+    round_id: str,
+    docking_mode: str,
+    hpc_profile: Optional[Dict[str, object]],
+    skip_completed: bool,
+    pair_source_file: str,
+    rerun_manifest_file: str,
+    pairlist_rows: List[PairlistRow],
+) -> _DeploymentContext:
+    root = Path(project_root).expanduser().resolve()
+    execution_root = _execution_root(root, remote_project_root)
+    layout_profile = detect_layout_profile(root)
+    ensure_project_layout(root, layout_profile)
+    stage_root = deployment_root(root, layout_profile) / _sanitize_token(round_id) / _sanitize_token(docking_mode)
+    execution_stage_root = _mapped_path(stage_root, root, execution_root)
+    stage_root.mkdir(parents=True, exist_ok=True)
+    return _DeploymentContext(
+        root=root,
+        execution_root=execution_root,
+        layout_profile=layout_profile,
+        stage_root=stage_root,
+        execution_stage_root=execution_stage_root,
+        round_id=round_id,
+        docking_mode=docking_mode,
+        hpc_profile={
+            "name": str((hpc_profile or {}).get("name", "")),
+            "source": str((hpc_profile or {}).get("source", "")),
+        },
+        remote_project_root=remote_project_root or "",
+        skip_completed=skip_completed,
+        pair_source_file=pair_source_file,
+        rerun_manifest_file=rerun_manifest_file,
+        pairlist_rows=pairlist_rows,
+    )
+
+
+def _base_deployment_manifest(
+    ctx: _DeploymentContext,
+    scheduler: str,
+    engines: List[str],
+) -> Dict[str, object]:
+    return {
+        "generation_project_root": str(ctx.root),
+        "project_root": str(ctx.execution_root),
+        "execution_project_root": str(ctx.execution_root),
+        "layout_profile": ctx.layout_profile,
+        "round_id": ctx.round_id,
+        "docking_mode": ctx.docking_mode,
+        "engines": engines,
+        "pair_count": len(ctx.pairlist_rows),
+        "pair_source_file": _map_project_path(ctx.pair_source_file, ctx.root, ctx.execution_root) if ctx.pair_source_file else "",
+        "rerun_manifest_file": _map_project_path(ctx.rerun_manifest_file, ctx.root, ctx.execution_root) if ctx.rerun_manifest_file else "",
+        "generation_stage_root": str(ctx.stage_root),
+        "stage_root": str(ctx.execution_stage_root),
+        "scheduler": scheduler,
+        "hpc_profile": ctx.hpc_profile,
+        "engine_jobs": {},
+    }
+
+
+def _prepare_engine_workspace(
+    ctx: _DeploymentContext,
+    engine: str,
+    runtime_by_engine: Dict[str, Dict[str, object]],
+    settings_for_engine: Callable[[str, Dict[str, object]], Dict[str, object]],
+    cpu_key: str,
+    log_dir_name: str,
+) -> Tuple[_EngineWorkspace, Dict[str, object]]:
+    runtime = dict(runtime_by_engine.get(engine, {}))
+    runtime["round_id"] = ctx.round_id
+    runtime["docking_mode"] = ctx.docking_mode
+    if ctx.rerun_manifest_file:
+        runtime["rerun_manifest_file"] = _map_project_path(ctx.rerun_manifest_file, ctx.root, ctx.execution_root)
+    engine_settings = settings_for_engine(engine, runtime)
+    _apply_allocated_resources(engine, runtime, engine_settings, cpu_key)
+    runner = build_runner(engine, ctx.root, runtime)
+    jobs = runner.plan_jobs(ctx.pairlist_rows, skip_completed=ctx.skip_completed and not ctx.remote_project_root)
+    for job in jobs:
+        job.skip_completed = ctx.skip_completed
+    engine_root = ctx.stage_root / engine
+    execution_engine_root = ctx.execution_stage_root / engine
+    scripts_dir = engine_root / "job_scripts"
+    manifest_dir = engine_root / "manifest"
+    logs_dir = engine_root / log_dir_name
+    execution_logs_dir = execution_engine_root / log_dir_name
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    _write_job_executor(scripts_dir)
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    mapped_runtime = {
+        key: _map_project_path(value, ctx.root, ctx.execution_root) if isinstance(value, str) else value
+        for key, value in runtime.items()
+    }
+    return (
+        _EngineWorkspace(
+            engine=engine,
+            runtime=runtime,
+            mapped_runtime=mapped_runtime,
+            jobs=jobs,
+            engine_root=engine_root,
+            execution_engine_root=execution_engine_root,
+            scripts_dir=scripts_dir,
+            manifest_dir=manifest_dir,
+            logs_dir=logs_dir,
+            execution_logs_dir=execution_logs_dir,
+        ),
+        engine_settings,
+    )
+
+
+def _engine_payload(
+    ctx: _DeploymentContext,
+    workspace: _EngineWorkspace,
+    settings_key: str,
+    engine_settings: Dict[str, object],
+) -> Dict[str, object]:
+    return {
+        "engine": workspace.engine,
+        "generation_project_root": str(ctx.root),
+        "project_root": str(ctx.execution_root),
+        "execution_project_root": str(ctx.execution_root),
+        "round_id": ctx.round_id,
+        "docking_mode": ctx.docking_mode,
+        "runtime": workspace.mapped_runtime,
+        settings_key: engine_settings,
+        "hpc_profile": ctx.hpc_profile,
+        "jobs": [],
+    }
+
+
+def _planned_job_payloads(
+    ctx: _DeploymentContext,
+    workspace: _EngineWorkspace,
+    engine_settings: Dict[str, object],
+    script_field: str,
+    execution_script_path: Path | PurePosixPath,
+) -> Tuple[List[str], int, List[Dict[str, object]]]:
+    planned_rows: List[str] = []
+    planned_count = 0
+    job_payloads: List[Dict[str, object]] = []
+    for index, job in enumerate(workspace.jobs, start=1):
+        pair_job_name = _sanitize_token(f"{engine_settings['job_name_prefix']}-{workspace.engine}-{ctx.round_id}-{index:03d}")
+        mapped_command = _map_command(job.command, ctx.root, ctx.execution_root)
+        wrapper_command = [
+            str(workspace.runtime.get("job_python") or "python3"),
+            str(workspace.execution_engine_root / "job_scripts" / "execute_job.py"),
+            str(workspace.execution_engine_root / "manifest" / "deployment_manifest.json"),
+            str(index - 1),
+        ]
+        mapped_pose_file = _map_project_path(job.pose_file, ctx.root, ctx.execution_root)
+        mapped_log_file = _map_project_path(job.log_file, ctx.root, ctx.execution_root)
+        array_index = None
+        if job.status == "planned":
+            planned_count += 1
+            array_index = planned_count
+            planned_rows.append(
+                "\t".join(
+                    [
+                        pair_job_name,
+                        job.tag,
+                        shlex.join(wrapper_command),
+                        mapped_log_file,
+                    ]
+                )
+            )
+        job_payloads.append(
+            {
+                **{
+                    **_map_job(job, ctx.root, ctx.execution_root),
+                    "command": mapped_command,
+                    "pose_file": mapped_pose_file,
+                    "log_file": mapped_log_file,
+                },
+                "job_name": pair_job_name,
+                "array_index": array_index,
+                script_field: str(execution_script_path),
+            }
+        )
+    return planned_rows, planned_count, job_payloads
+
+
+def _write_project_manifest(ctx: _DeploymentContext, deployment_manifest: Dict[str, object]) -> Dict[str, object]:
+    project_manifest_path = ctx.stage_root / "deployment_manifest.json"
+    deployment_manifest["deployment_manifest"] = str(ctx.execution_stage_root / "deployment_manifest.json")
+    with open(project_manifest_path, "w", encoding="utf-8") as handle:
+        json.dump(deployment_manifest, handle, indent=2)
+    return deployment_manifest
+
+
 def generate_condor_deployment(
     project_root: Path,
     engines: List[str],
@@ -488,139 +711,61 @@ def generate_condor_deployment(
     pair_source_file: str = "",
     rerun_manifest_file: str = "",
 ) -> Dict[str, object]:
-    root = Path(project_root).expanduser().resolve()
-    execution_root = _execution_root(root, remote_project_root)
-    profile = detect_layout_profile(root)
-    ensure_project_layout(root, profile)
-    stage_root = deployment_root(root, profile) / _sanitize_token(round_id) / _sanitize_token(docking_mode)
-    execution_stage_root = _mapped_path(stage_root, root, execution_root)
-    stage_root.mkdir(parents=True, exist_ok=True)
-    deployment_manifest: Dict[str, object] = {
-        "generation_project_root": str(root),
-        "project_root": str(execution_root),
-        "execution_project_root": str(execution_root),
-        "layout_profile": profile,
-        "round_id": round_id,
-        "docking_mode": docking_mode,
-        "engines": engines,
-        "pair_count": len(pairlist_rows),
-        "pair_source_file": _map_project_path(pair_source_file, root, execution_root) if pair_source_file else "",
-        "rerun_manifest_file": _map_project_path(rerun_manifest_file, root, execution_root) if rerun_manifest_file else "",
-        "generation_stage_root": str(stage_root),
-        "stage_root": str(execution_stage_root),
-        "scheduler": "condor",
-        "hpc_profile": {
-            "name": str((hpc_profile or {}).get("name", "")),
-            "source": str((hpc_profile or {}).get("source", "")),
-        },
-        "engine_jobs": {},
-    }
+    ctx = _open_deployment_context(
+        project_root,
+        remote_project_root,
+        round_id,
+        docking_mode,
+        hpc_profile,
+        skip_completed,
+        pair_source_file,
+        rerun_manifest_file,
+        pairlist_rows,
+    )
+    deployment_manifest = _base_deployment_manifest(ctx, "condor", engines)
+
+    def settings_for_engine(engine: str, runtime: Dict[str, object]) -> Dict[str, object]:
+        settings = _condor_settings_for_engine(engine, runtime, condor_options or {}, profile=hpc_profile)
+        _validate_condor_settings(engine, settings, profile=hpc_profile)
+        return settings
 
     for engine in engines:
-        runtime = dict(runtime_by_engine.get(engine, {}))
-        runtime["round_id"] = round_id
-        runtime["docking_mode"] = docking_mode
-        if rerun_manifest_file:
-            runtime["rerun_manifest_file"] = _map_project_path(rerun_manifest_file, root, execution_root)
-        engine_settings = _condor_settings_for_engine(engine, runtime, condor_options or {}, profile=hpc_profile)
-        _validate_condor_settings(engine, engine_settings, profile=hpc_profile)
-        _apply_allocated_resources(engine, runtime, engine_settings, "cpus")
-        runner = build_runner(engine, root, runtime)
-        jobs = runner.plan_jobs(pairlist_rows, skip_completed=skip_completed and not remote_project_root)
-        for job in jobs:
-            job.skip_completed = skip_completed
-        engine_root = stage_root / engine
-        execution_engine_root = execution_stage_root / engine
-        scripts_dir = engine_root / "job_scripts"
-        manifest_dir = engine_root / "manifest"
-        condor_logs_dir = engine_root / "condor_logs"
-        execution_logs_dir = execution_engine_root / "condor_logs"
-        scripts_dir.mkdir(parents=True, exist_ok=True)
-        _write_job_executor(scripts_dir)
-        manifest_dir.mkdir(parents=True, exist_ok=True)
-        condor_logs_dir.mkdir(parents=True, exist_ok=True)
-        mapped_runtime = {
-            key: _map_project_path(value, root, execution_root) if isinstance(value, str) else value
-            for key, value in runtime.items()
-        }
-
-        engine_payload = {
-            "engine": engine,
-            "generation_project_root": str(root),
-            "project_root": str(execution_root),
-            "execution_project_root": str(execution_root),
-            "round_id": round_id,
-            "docking_mode": docking_mode,
-            "runtime": mapped_runtime,
-            "condor": engine_settings,
-            "hpc_profile": deployment_manifest["hpc_profile"],
-            "jobs": [],
-        }
-
+        workspace, engine_settings = _prepare_engine_workspace(
+            ctx, engine, runtime_by_engine, settings_for_engine, "cpus", "condor_logs"
+        )
+        engine_payload = _engine_payload(ctx, workspace, "condor", engine_settings)
         submit_lines = [
             "#!/bin/bash",
             "set -euo pipefail",
             'script_dir="$(cd "$(dirname "$0")" && pwd)"',
             "",
         ]
-        planned_rows: List[str] = []
-        planned_count = 0
         submit_mode = str(engine_settings.get("submit_mode") or "condor_array").strip() or "condor_array"
-        job_name = _sanitize_token(f"{engine_settings['job_name_prefix']}-{engine}-{round_id}")
         script_suffix = "array" if submit_mode == "condor_array" else "batch"
         condor_script_name = f"{engine}_{script_suffix}.sh"
-        condor_script_path = scripts_dir / condor_script_name
-        execution_condor_script_path = execution_engine_root / "job_scripts" / condor_script_name
-        condor_submit_path = scripts_dir / "job.sub"
-        execution_condor_submit_path = execution_engine_root / "job_scripts" / "job.sub"
+        condor_script_path = workspace.scripts_dir / condor_script_name
+        execution_condor_script_path = workspace.execution_engine_root / "job_scripts" / condor_script_name
+        condor_submit_path = workspace.scripts_dir / "job.sub"
+        execution_condor_submit_path = workspace.execution_engine_root / "job_scripts" / "job.sub"
         manifest_file_name = "job_array.tsv" if submit_mode == "condor_array" else "job_manifest.tsv"
-        manifest_path = manifest_dir / manifest_file_name
-        execution_manifest_path = execution_engine_root / "manifest" / manifest_path.name
-
-        for index, job in enumerate(jobs, start=1):
-            pair_job_name = _sanitize_token(f"{engine_settings['job_name_prefix']}-{engine}-{round_id}-{index:03d}")
-            mapped_command = _map_command(job.command, root, execution_root)
-            wrapper_command = [str(runtime.get("job_python") or "python3"), str(execution_engine_root / "job_scripts" / "execute_job.py"), str(execution_engine_root / "manifest" / "deployment_manifest.json"), str(index - 1)]
-            mapped_pose_file = _map_project_path(job.pose_file, root, execution_root)
-            mapped_log_file = _map_project_path(job.log_file, root, execution_root)
-            array_index = None
-            if job.status == "planned":
-                planned_count += 1
-                array_index = planned_count
-                planned_rows.append(
-                    "\t".join([
-                        pair_job_name,
-                        job.tag,
-                        shlex.join(wrapper_command),
-                        mapped_log_file,
-                    ])
-                )
-            engine_payload["jobs"].append(
-                {
-                    **{
-                        **_map_job(job, root, execution_root),
-                        "command": mapped_command,
-                        "pose_file": mapped_pose_file,
-                        "log_file": mapped_log_file,
-                    },
-                    "job_name": pair_job_name,
-                    "array_index": array_index,
-                    "condor_script": str(execution_condor_script_path),
-                }
-            )
+        manifest_path = workspace.manifest_dir / manifest_file_name
+        execution_manifest_path = workspace.execution_engine_root / "manifest" / manifest_path.name
+        planned_rows, planned_count, engine_payload["jobs"] = _planned_job_payloads(
+            ctx, workspace, engine_settings, "condor_script", execution_condor_script_path
+        )
 
         if planned_rows:
             manifest_path.write_text("\n".join(planned_rows) + "\n", encoding="utf-8")
             if submit_mode == "condor_array":
                 script_text = _render_array_condor_script(
-                    execution_root,
+                    ctx.execution_root,
                     engine,
                     execution_manifest_path,
-                    preamble_lines=list(runtime.get("deployment_preamble") or []),
+                    preamble_lines=list(workspace.runtime.get("deployment_preamble") or []),
                 )
                 submit_file_text = _render_condor_submit_file(
                     execution_condor_script_path,
-                    execution_logs_dir,
+                    workspace.execution_logs_dir,
                     engine_settings,
                     job_count=planned_count,
                     array_mode=True,
@@ -631,14 +776,14 @@ def generate_condor_deployment(
                 ])
             else:
                 script_text = _render_single_job_condor_script(
-                    execution_root,
+                    ctx.execution_root,
                     engine,
                     execution_manifest_path,
-                    preamble_lines=list(runtime.get("deployment_preamble") or []),
+                    preamble_lines=list(workspace.runtime.get("deployment_preamble") or []),
                 )
                 submit_file_text = _render_condor_submit_file(
                     execution_condor_script_path,
-                    execution_logs_dir,
+                    workspace.execution_logs_dir,
                     engine_settings,
                     job_count=1,
                     array_mode=False,
@@ -653,10 +798,10 @@ def generate_condor_deployment(
         else:
             submit_lines.append(f"echo \"No planned {engine} jobs to submit\"")
 
-        submit_path = engine_root / "submit_all.sh"
+        submit_path = workspace.engine_root / "submit_all.sh"
         submit_path.write_text("\n".join(submit_lines) + "\n", encoding="utf-8")
         submit_path.chmod(0o755)
-        engine_payload["submit_script"] = str(execution_engine_root / "submit_all.sh")
+        engine_payload["submit_script"] = str(workspace.execution_engine_root / "submit_all.sh")
         engine_payload["submit_mode"] = submit_mode
         engine_payload["job_count"] = planned_count
         engine_payload["job_manifest"] = str(execution_manifest_path)
@@ -668,14 +813,14 @@ def generate_condor_deployment(
             engine_payload["array_manifest"] = str(execution_manifest_path)
             engine_payload["array_script"] = str(execution_condor_script_path)
 
-        engine_manifest_path = manifest_dir / "deployment_manifest.json"
+        engine_manifest_path = workspace.manifest_dir / "deployment_manifest.json"
         with open(engine_manifest_path, "w", encoding="utf-8") as handle:
             json.dump(engine_payload, handle, indent=2)
         deployment_manifest["engine_jobs"][engine] = {
             "planned": planned_count,
-            "skipped": sum(1 for job in jobs if job.status == "skipped"),
-            "manifest": str(execution_engine_root / "manifest" / "deployment_manifest.json"),
-            "submit_script": str(execution_engine_root / "submit_all.sh"),
+            "skipped": sum(1 for job in workspace.jobs if job.status == "skipped"),
+            "manifest": str(workspace.execution_engine_root / "manifest" / "deployment_manifest.json"),
+            "submit_script": str(workspace.execution_engine_root / "submit_all.sh"),
             "submit_mode": submit_mode,
             "condor_script": str(execution_condor_script_path),
             "condor_submit": str(execution_condor_submit_path),
@@ -686,11 +831,7 @@ def generate_condor_deployment(
             deployment_manifest["engine_jobs"][engine]["array_manifest"] = str(execution_manifest_path)
             deployment_manifest["engine_jobs"][engine]["array_parallelism"] = int(engine_settings.get("parallelism") or 0)
 
-    project_manifest_path = stage_root / "deployment_manifest.json"
-    deployment_manifest["deployment_manifest"] = str(execution_stage_root / "deployment_manifest.json")
-    with open(project_manifest_path, "w", encoding="utf-8") as handle:
-        json.dump(deployment_manifest, handle, indent=2)
-    return deployment_manifest
+    return _write_project_manifest(ctx, deployment_manifest)
 
 
 def generate_slurm_deployment(
@@ -707,137 +848,60 @@ def generate_slurm_deployment(
     pair_source_file: str = "",
     rerun_manifest_file: str = "",
 ) -> Dict[str, object]:
-    root = Path(project_root).expanduser().resolve()
-    execution_root = _execution_root(root, remote_project_root)
-    profile = detect_layout_profile(root)
-    ensure_project_layout(root, profile)
-    stage_root = deployment_root(root, profile) / _sanitize_token(round_id) / _sanitize_token(docking_mode)
-    execution_stage_root = _mapped_path(stage_root, root, execution_root)
-    stage_root.mkdir(parents=True, exist_ok=True)
-    deployment_manifest: Dict[str, object] = {
-        "generation_project_root": str(root),
-        "project_root": str(execution_root),
-        "execution_project_root": str(execution_root),
-        "layout_profile": profile,
-        "round_id": round_id,
-        "docking_mode": docking_mode,
-        "engines": engines,
-        "pair_count": len(pairlist_rows),
-        "pair_source_file": _map_project_path(pair_source_file, root, execution_root) if pair_source_file else "",
-        "rerun_manifest_file": _map_project_path(rerun_manifest_file, root, execution_root) if rerun_manifest_file else "",
-        "generation_stage_root": str(stage_root),
-        "stage_root": str(execution_stage_root),
-        "hpc_profile": {
-            "name": str((hpc_profile or {}).get("name", "")),
-            "source": str((hpc_profile or {}).get("source", "")),
-        },
-        "engine_jobs": {},
-    }
+    ctx = _open_deployment_context(
+        project_root,
+        remote_project_root,
+        round_id,
+        docking_mode,
+        hpc_profile,
+        skip_completed,
+        pair_source_file,
+        rerun_manifest_file,
+        pairlist_rows,
+    )
+    deployment_manifest = _base_deployment_manifest(ctx, "slurm", engines)
+
+    def settings_for_engine(engine: str, runtime: Dict[str, object]) -> Dict[str, object]:
+        settings = _slurm_settings_for_engine(engine, runtime, slurm_options or {}, profile=hpc_profile)
+        _validate_slurm_settings(engine, settings, profile=hpc_profile)
+        return settings
 
     for engine in engines:
-        runtime = dict(runtime_by_engine.get(engine, {}))
-        runtime["round_id"] = round_id
-        runtime["docking_mode"] = docking_mode
-        if rerun_manifest_file:
-            runtime["rerun_manifest_file"] = _map_project_path(rerun_manifest_file, root, execution_root)
-        engine_settings = _slurm_settings_for_engine(engine, runtime, slurm_options or {}, profile=hpc_profile)
-        _validate_slurm_settings(engine, engine_settings, profile=hpc_profile)
-        _apply_allocated_resources(engine, runtime, engine_settings, "cpus_per_task")
-        runner = build_runner(engine, root, runtime)
-        jobs = runner.plan_jobs(pairlist_rows, skip_completed=skip_completed and not remote_project_root)
-        for job in jobs:
-            job.skip_completed = skip_completed
-        engine_root = stage_root / engine
-        execution_engine_root = execution_stage_root / engine
-        scripts_dir = engine_root / "job_scripts"
-        manifest_dir = engine_root / "manifest"
-        slurm_logs_dir = engine_root / "slurm_logs"
-        execution_logs_dir = execution_engine_root / "slurm_logs"
-        scripts_dir.mkdir(parents=True, exist_ok=True)
-        _write_job_executor(scripts_dir)
-        manifest_dir.mkdir(parents=True, exist_ok=True)
-        slurm_logs_dir.mkdir(parents=True, exist_ok=True)
-        mapped_runtime = {
-            key: _map_project_path(value, root, execution_root) if isinstance(value, str) else value
-            for key, value in runtime.items()
-        }
-
-        engine_payload = {
-            "engine": engine,
-            "generation_project_root": str(root),
-            "project_root": str(execution_root),
-            "execution_project_root": str(execution_root),
-            "round_id": round_id,
-            "docking_mode": docking_mode,
-            "runtime": mapped_runtime,
-            "slurm": engine_settings,
-            "hpc_profile": deployment_manifest["hpc_profile"],
-            "jobs": [],
-        }
+        workspace, engine_settings = _prepare_engine_workspace(
+            ctx, engine, runtime_by_engine, settings_for_engine, "cpus_per_task", "slurm_logs"
+        )
+        engine_payload = _engine_payload(ctx, workspace, "slurm", engine_settings)
         submit_lines = [
             "#!/bin/bash",
             "set -euo pipefail",
             'script_dir="$(cd "$(dirname "$0")" && pwd)"',
             "",
         ]
-        planned_rows: List[str] = []
-        planned_count = 0
         submit_mode = str(engine_settings.get("submit_mode") or "slurm_array").strip() or "slurm_array"
         if submit_mode not in {"slurm_array", "single_job"}:
             raise ValueError(f"Unsupported slurm submit_mode for {engine}: {submit_mode}")
         job_name = _sanitize_token(f"{engine_settings['job_name_prefix']}-{engine}-{round_id}")
         script_suffix = "array" if submit_mode == "slurm_array" else "batch"
-        slurm_script_path = scripts_dir / f"{engine}_{script_suffix}.slurm"
-        execution_slurm_script_path = execution_engine_root / "job_scripts" / slurm_script_path.name
+        slurm_script_path = workspace.scripts_dir / f"{engine}_{script_suffix}.slurm"
+        execution_slurm_script_path = workspace.execution_engine_root / "job_scripts" / slurm_script_path.name
         manifest_file_name = "job_array.tsv" if submit_mode == "slurm_array" else "job_manifest.tsv"
-        manifest_path = manifest_dir / manifest_file_name
-        execution_manifest_path = execution_engine_root / "manifest" / manifest_path.name
-
-        for index, job in enumerate(jobs, start=1):
-            pair_job_name = _sanitize_token(f"{engine_settings['job_name_prefix']}-{engine}-{round_id}-{index:03d}")
-            mapped_command = _map_command(job.command, root, execution_root)
-            wrapper_command = [str(runtime.get("job_python") or "python3"), str(execution_engine_root / "job_scripts" / "execute_job.py"), str(execution_engine_root / "manifest" / "deployment_manifest.json"), str(index - 1)]
-            mapped_pose_file = _map_project_path(job.pose_file, root, execution_root)
-            mapped_log_file = _map_project_path(job.log_file, root, execution_root)
-            array_index = None
-            if job.status == "planned":
-                planned_count += 1
-                array_index = planned_count
-                planned_rows.append(
-                    "\t".join(
-                        [
-                            pair_job_name,
-                            job.tag,
-                            shlex.join(wrapper_command),
-                            mapped_log_file,
-                        ]
-                    )
-                )
-            engine_payload["jobs"].append(
-                {
-                    **{
-                        **_map_job(job, root, execution_root),
-                        "command": mapped_command,
-                        "pose_file": mapped_pose_file,
-                        "log_file": mapped_log_file,
-                    },
-                    "job_name": pair_job_name,
-                    "array_index": array_index,
-                    "slurm_script": str(execution_slurm_script_path),
-                }
-            )
+        manifest_path = workspace.manifest_dir / manifest_file_name
+        execution_manifest_path = workspace.execution_engine_root / "manifest" / manifest_path.name
+        planned_rows, planned_count, engine_payload["jobs"] = _planned_job_payloads(
+            ctx, workspace, engine_settings, "slurm_script", execution_slurm_script_path
+        )
         if planned_rows:
             manifest_path.write_text("\n".join(planned_rows) + "\n", encoding="utf-8")
             if submit_mode == "slurm_array":
                 slurm_script_text = _render_array_slurm_script(
-                    execution_root,
+                    ctx.execution_root,
                     engine,
                     job_name,
                     execution_manifest_path,
-                    execution_logs_dir,
+                    workspace.execution_logs_dir,
                     engine_settings,
                     job_count=planned_count,
-                    preamble_lines=list(runtime.get("deployment_preamble") or []),
+                    preamble_lines=list(workspace.runtime.get("deployment_preamble") or []),
                 )
                 submit_lines.extend(
                     [
@@ -847,13 +911,13 @@ def generate_slurm_deployment(
                 )
             else:
                 slurm_script_text = _render_single_job_slurm_script(
-                    execution_root,
+                    ctx.execution_root,
                     engine,
                     job_name,
                     execution_manifest_path,
-                    execution_logs_dir,
+                    workspace.execution_logs_dir,
                     engine_settings,
-                    preamble_lines=list(runtime.get("deployment_preamble") or []),
+                    preamble_lines=list(workspace.runtime.get("deployment_preamble") or []),
                 )
                 submit_lines.extend(
                     [
@@ -865,10 +929,10 @@ def generate_slurm_deployment(
             slurm_script_path.chmod(0o755)
         else:
             submit_lines.append(f"echo \"No planned {engine} jobs to submit\"")
-        submit_path = engine_root / "submit_all.sh"
+        submit_path = workspace.engine_root / "submit_all.sh"
         submit_path.write_text("\n".join(submit_lines) + "\n", encoding="utf-8")
         submit_path.chmod(0o755)
-        engine_payload["submit_script"] = str(execution_engine_root / "submit_all.sh")
+        engine_payload["submit_script"] = str(workspace.execution_engine_root / "submit_all.sh")
         engine_payload["submit_mode"] = submit_mode
         engine_payload["job_count"] = planned_count
         engine_payload["job_manifest"] = str(execution_manifest_path)
@@ -879,14 +943,14 @@ def generate_slurm_deployment(
             engine_payload["array_manifest"] = str(execution_manifest_path)
             engine_payload["array_script"] = str(execution_slurm_script_path)
 
-        engine_manifest_path = manifest_dir / "deployment_manifest.json"
+        engine_manifest_path = workspace.manifest_dir / "deployment_manifest.json"
         with open(engine_manifest_path, "w", encoding="utf-8") as handle:
             json.dump(engine_payload, handle, indent=2)
         deployment_manifest["engine_jobs"][engine] = {
             "planned": planned_count,
-            "skipped": sum(1 for job in jobs if job.status == "skipped"),
-            "manifest": str(execution_engine_root / "manifest" / "deployment_manifest.json"),
-            "submit_script": str(execution_engine_root / "submit_all.sh"),
+            "skipped": sum(1 for job in workspace.jobs if job.status == "skipped"),
+            "manifest": str(workspace.execution_engine_root / "manifest" / "deployment_manifest.json"),
+            "submit_script": str(workspace.execution_engine_root / "submit_all.sh"),
             "submit_mode": submit_mode,
             "slurm_script": str(execution_slurm_script_path),
             "job_manifest": str(execution_manifest_path),
@@ -896,11 +960,7 @@ def generate_slurm_deployment(
             deployment_manifest["engine_jobs"][engine]["array_manifest"] = str(execution_manifest_path)
             deployment_manifest["engine_jobs"][engine]["array_parallelism"] = int(engine_settings.get("array_parallelism") or 0)
 
-    project_manifest_path = stage_root / "deployment_manifest.json"
-    deployment_manifest["deployment_manifest"] = str(execution_stage_root / "deployment_manifest.json")
-    with open(project_manifest_path, "w", encoding="utf-8") as handle:
-        json.dump(deployment_manifest, handle, indent=2)
-    return deployment_manifest
+    return _write_project_manifest(ctx, deployment_manifest)
 
 
 def auto_execute_rerun_manifest(

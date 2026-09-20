@@ -1,3 +1,10 @@
+# Historical snapshot — 2026-03-31
+
+This record preserves a release-candidate assessment made on the date shown.
+Its claims were not rerun for the current tree and are not current readiness,
+test, benchmark, or scientific-validation evidence. Use [docs/README.md](README.md)
+and live CLI help for current guidance.
+
 # Omni-DockForge Release Candidate Summary
 
 Date: 2026-03-31  
