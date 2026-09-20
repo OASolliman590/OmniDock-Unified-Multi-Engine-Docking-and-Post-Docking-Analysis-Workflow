@@ -268,3 +268,12 @@ def test_dangling_symlink_when_supported(tmp_path):
     run_git(os_root, "add", "--", "os-dangling")
     os_findings = check_repository(os_root)
     assert any(item.code == "dangling-symlink" and item.path == "os-dangling" for item in os_findings)
+
+
+def test_cli_parser_module_accepts_representative_public_commands():
+    from workflow.cli_parser import build_parser
+
+    parser = build_parser()
+    assert parser.parse_args(["workflow", "status", "--project-dir", "p"]).workflow_command == "status"
+    assert parser.parse_args(["dock", "run", "--project-dir", "p"]).dock_command == "run"
+    assert parser.parse_args(["analyze", "comparative", "--project-dir", "p"]).analyze_command == "comparative"
