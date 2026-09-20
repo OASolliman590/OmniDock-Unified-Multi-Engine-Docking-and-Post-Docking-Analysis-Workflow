@@ -5,12 +5,12 @@
 
 | Batch | Status | Commit | Verification |
 | --- | --- | --- | --- |
-| Repository checker | complete | `968b36d` | 9 passed, 1 native-symlink capability skip; compile/diff clean; 11 expected base findings |
-| Evidence-preserving hygiene | complete | `3c1cb00` | checker/compile/diff clean; 9 passed, 1 native-symlink skip; two remaining shell scripts parse; five assets are 100% renames |
-| Docking deployment refactor | complete | `b7cb01f` | 34 correctness + 7 scheduler/HPC smoke tests passed; 9 repository-contract tests passed with 1 native-symlink capability skip; checker/compile/diff clean |
-| CLI parser extraction | complete | `5c9ff96` | recursive 759-action signature identical; 10 repository-contract tests passed with 1 native-symlink skip; 15 workflow-correctness and 7 CLI/workflow smoke tests passed; checker/compile/help/diff clean |
-| Documentation consolidation | complete | `391bd66` | 125 Markdown files audited with 0 broken relative links; 7/7 help surfaces and repository checker passed; cached diff clean; five archived documents preserved as exact 100% renames |
-| Final review/distribution | queued | — | — |
+| Repository checker | complete | `968b36d` | 9 passed, 1 native-symlink capability skip; 11 expected base findings; see [exact final evidence](2026-09-14-repository-cleanup-verification.md) |
+| Evidence-preserving hygiene | complete | `3c1cb00` | checker/static gates clean; two shell scripts parse; five research assets are exact renames; see [evidence](2026-09-14-repository-cleanup-verification.md) |
+| Docking deployment refactor | complete | `b7cb01f` | deployment/correctness contracts pass with expected compatibility warnings; see [evidence](2026-09-14-repository-cleanup-verification.md) |
+| CLI parser extraction | complete | `5c9ff96` | parser/workflow and representative CLI/deployment smoke checks pass; see [evidence](2026-09-14-repository-cleanup-verification.md) |
+| Documentation consolidation | complete | `391bd66` | 125 Markdown files, 0 broken relative links, 7/7 help surfaces, and five exact archive renames; see [evidence](2026-09-14-repository-cleanup-verification.md) |
+| Final review/distribution | active | — | local static/build/wheel gates complete; independent fix re-review and draft PR/CI pending; see [evidence](2026-09-14-repository-cleanup-verification.md) |
 
 ## Needs your eyes
 
