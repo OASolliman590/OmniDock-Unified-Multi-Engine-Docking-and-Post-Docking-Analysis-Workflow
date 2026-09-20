@@ -9,7 +9,7 @@
 | Evidence-preserving hygiene | complete | `3c1cb00` | checker/compile/diff clean; 9 passed, 1 native-symlink skip; two remaining shell scripts parse; five assets are 100% renames |
 | Docking deployment refactor | complete | `b7cb01f` | 34 correctness + 7 scheduler/HPC smoke tests passed; 9 repository-contract tests passed with 1 native-symlink capability skip; checker/compile/diff clean |
 | CLI parser extraction | complete | `5c9ff96` | recursive 759-action signature identical; 10 repository-contract tests passed with 1 native-symlink skip; 15 workflow-correctness and 7 CLI/workflow smoke tests passed; checker/compile/help/diff clean |
-| Documentation consolidation | queued | — | — |
+| Documentation consolidation | complete | `391bd66` | 125 Markdown files audited with 0 broken relative links; 7/7 help surfaces and repository checker passed; cached diff clean; five archived documents preserved as exact 100% renames |
 | Final review/distribution | queued | — | — |
 
 ## Needs your eyes
