@@ -124,3 +124,31 @@ does not add a real-backend or benchmark validation claim. Publication is
 represented by [draft PR #2](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/pull/2),
 with remote `main` still at the baseline commit
 `8d4434d3a33eb83b1e12cad82944b02c83270e47`. No merge was attempted.
+
+## Frozen parallel DAG kit closeout — 2026-09-22
+
+The `parallel-dag-integrity-v1.0` kit (2026-09-19, starting at `a51ad07`)
+is implemented at immutable revision
+`09bb9f0a157c2aaee6702454b9507f3f054c0a71` (I).
+
+- DAG-01: shared reentrant plotting serialization, comparative-owned source
+  bundles, pure materializing consumers, and six bounded regressions complete.
+  Public schemas and DAG topology are unchanged.
+- DAG-02: independent Luna verification on I passed all six focused tests,
+  ten consecutive fresh-process parallel smokes, build and extracted-wheel
+  checks. The completed filtered local suite recorded 205 passes and only the
+  two established RDKit host-policy failures; these are not counted as passes.
+- DAG-03: independent Astra static audit on I passed with no actionable
+  findings after the nested-lock probe was bounded by a subprocess timeout.
+- Required CI on I: both push and PR four-job Ubuntu/Windows × Python
+  3.10/3.12 matrices passed, including chemistry, full tests, build and wheel
+  checks. Each PR job reported 311 passed.
+- DAG-04: this documentation-only closeout preserves all earlier failures.
+  Final-head CI and the baseline-to-closeout patch receipt belong in the
+  external output report and existing draft PR #2. No source/test changes
+  follow I in this closeout.
+
+Native `bad allocation` failures on earlier attempts remain unexplained;
+passing later runs do not prove eradication or establish a lock-related cause.
+No merge, benchmark, real-backend validation, NMRBox run, or unrelated cleanup
+is included. Detailed evidence remains in the verification and review records.

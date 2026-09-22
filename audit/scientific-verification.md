@@ -259,3 +259,96 @@ error although its DAG succeeded. Captures are retained at
 `work/repro-105872532281-captures/run06`. These observations are historical
 evidence of an intermittent issue under investigation; no cause or fix is
 claimed here.
+
+## Independent frozen DAG-02 verification — 2026-09-22
+
+This packet was run against immutable commit
+`09bb9f0a157c2aaee6702454b9507f3f054c0a71` from the repository checkout with
+the sibling `verification-venv` interpreter, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`,
+and `MPLBACKEND=Agg`. Full command transcripts are retained in
+`C:\Users\salma\Documents\Codex\2026-09-22\omnidock-dag02-sep22-replay\work\dag02-logs`.
+No source or test file was changed.
+
+The parallel DAG regression gate passed: `6 passed`. Its initial sandboxed
+attempt could not scan `%TEMP%\pytest-of-salma` (`PermissionError: [WinError
+5]`); the identical command passed when rerun with normal escalation. The
+fresh-process smoke gate passed all ten consecutive pytest processes, each
+reporting `1 passed`.
+
+The specified filtered suite completed naturally with `205 passed, 2 failed,
+523 warnings` (exit `1`). Its only failures were the already documented
+host-chemistry-limited redocking contracts:
+
+- `test/test_dockforge_smoke.py::_smoke_redocking_multi_pose_sdf_parser_contract`
+  reports `rdkit_required_for_chemical_mapping` for the valid second SDF record.
+- `test/test_dockforge_smoke.py::_smoke_redocking_validation_multi_pose_end_to_end_contract`
+  returns classification `not_evaluable` for the same multi-pose SDF path.
+
+These are environment-limited failures under this host's Windows Application
+Control block on RDKit's `rdinchi` DLL; they are recorded as failures, not
+passes, under the existing host-policy exclusion allowance. The first suite
+invocation was interrupted after pytest displayed two failures at 34%; the
+complete replay above retained the exact exception details. No other filtered
+suite failure occurred in the completed replay.
+
+The build gate exited `0`, producing
+`pdb_prepare_wizard-3.0.1.tar.gz` and
+`pdb_prepare_wizard-3.0.1-py3-none-any.whl` (with the existing setuptools
+license-classifier and package-discovery warnings). The wheel check exited `0`
+and imported every console entrypoint from the extracted wheel outside the
+checkout.
+
+### Earlier attempts on the same implementation
+
+An earlier independent attempt on `09bb9f0` failed the first full-parallel
+smoke; pytest traceback rendering raised `MemoryError`, obscuring the original
+exception. A later attempt passed runs 1–3 and failed run 4: comparative
+reported `bad allocation`, blocking biology correlation, polypharmacology,
+and reports. Several visualization figures also reported `bad allocation`.
+The run-2 log from that attempt contains a Windows native `0x8007000e`
+exception in `platform._wmi_query` during pandas import, before the DAG ran;
+that test subsequently passed. Its logs remain at
+`C:\Users\salma\Documents\Codex\2026-09-22\omnidock-dag02-luna-final\work\dag02-logs`.
+
+Sol investigated without changing source or tests. Twenty fresh-process
+instrumented probes passed, including ten with normal pytest capture and
+exception-only instrumentation. Renderer sizes were ordinary and sampled
+available commit memory was approximately 9–10 GB. These probes did not
+reproduce or establish a cause for the allocation failure and do not replace
+the independent ten-process gate above. The WMI exception is evidence of
+environment instability, not proof of the cause of the later plotting error.
+
+The latest successful DAG gates do not erase these failed attempts. The cause
+of the native allocation failures remains unresolved; no eradication claim is
+made by this correction.
+
+### Commands for the latest independent pass
+
+All commands ran from the repository root with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`
+and `MPLBACKEND=Agg`, using the sibling verification interpreter:
+
+```text
+..\verification-venv\Scripts\python.exe -m pytest test/test_parallel_dag_regressions.py -q -p no:cacheprovider
+..\verification-venv\Scripts\python.exe -m pytest test/test_dockforge_smoke.py::_smoke_artifact_graph_full_parallel_execution_contract -q -p no:cacheprovider --tb=native --assert=plain
+..\verification-venv\Scripts\python.exe -m pytest test -q -p no:cacheprovider --ignore=test/test_postdocking_correctness.py --ignore=test/test_preparation_correctness.py --ignore=test/test_reference_chemistry.py --ignore=test/test_scientific_pose_chemistry.py --ignore=test/test_scientific_ligand_contract.py
+..\verification-venv\Scripts\python.exe -m build
+..\verification-venv\Scripts\python.exe scripts/check_wheel.py
+```
+
+The smoke command was executed ten consecutive times, each in a new process.
+
+### Immutable implementation CI
+
+Implementation `09bb9f0a157c2aaee6702454b9507f3f054c0a71` passed both the
+[push matrix](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/actions/runs/35745189639)
+and the [PR matrix](https://github.com/OASolliman590/OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow/actions/runs/35745194540)
+on 2026-09-22. Each matrix covered Ubuntu and Windows with Python 3.10 and
+3.12, installed `.[dev,chemistry]`, and completed full pytest, build and wheel
+verification. The PR logs report `311 passed` in each of the four jobs;
+chemistry tests were not excluded. This resolves the chemistry gate in CI,
+not the local host policy restriction or the unexplained historical allocation
+failures. Non-blocking runner/action deprecation annotations remain.
+
+The subsequent closeout commit is documentation-only. Its final-head CI
+receipt is recorded externally in the delivered `REPORT.md` and draft PR #2,
+so this canonical record does not require a self-referential commit loop.

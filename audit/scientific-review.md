@@ -36,6 +36,29 @@ Receptor checks conserve represented atom identities/elements and coordinates wh
 
 Final handoff inspection confirmed the backend-failure fixture preserves both preexisting PDBQT and normalized SDF bytes after successful staged normalization and a backend exception. git diff --check returned exit code 0 (line-ending warnings only). No further material findings.
 
+## Parallel DAG source review — 2026-09-19
+
+The independent Astra source/spec audit evaluated implementation commit
+`09bb9f0a157c2aaee6702454b9507f3f054c0a71` against `a51ad07` under the
+frozen `parallel-dag-integrity-v1.0` acceptance. The reviewer did not run
+tests or inspect execution logs.
+
+The first audit identified one P2 in the regression harness: nested lock
+acquisition ran in the pytest parent and could hang if the lock became
+non-reentrant. Commit `09bb9f0` moved that probe into a subprocess with a
+five-second timeout. The fresh audit of the replacement implementation
+returned PASS with no actionable findings in the frozen scope.
+
+The audit covered the shared RLock and nested plotting wrappers, style and
+figure lifecycle coverage, exception-safe release, distinct comparative-owned
+source bundles, pure materializing consumers, explicit missing/empty bundle
+failures, producer rerun freshness, bounded overlap tests, unchanged public
+schemas and DAG topology, and the four-file implementation boundary.
+
+This is static review evidence. It establishes neither universal deadlock
+freedom nor the cause of historical native allocation failures. Execution
+evidence and residual uncertainty belong in `scientific-verification.md`.
+
 ## Full-suite compatibility follow-up
 
 The subsequent full filtered suite exposed three existing smoke cases that pass `expected_engines=[]` to request inferred engine scope. The initial independent source review missed this established default-call compatibility; the new empty-scope rejection was a regression.
