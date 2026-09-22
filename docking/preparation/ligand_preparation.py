@@ -22,10 +22,21 @@ from docking.models import (
     validate_preparation_ph,
     validate_ligand_preparation_profile,
 )
+from .ligand_identity import (
+    LigandIdentityError,
+    build_identity_ledger,
+    ensure_single_component,
+    require_finite_3d_coordinates,
+    sha256_file,
+    validate_mapped_pdbqt,
+)
 
 
 def _resolve_profile_alias(raw: str) -> str:
     normalized = normalize_ligand_preparation_profile(raw)
+    validation = validate_ligand_preparation_profile(raw, [])
+    if not validation.is_valid:
+        raise ValueError("; ".join(validation.errors))
     return normalized if normalized in LIGAND_PREPARATION_PROFILES else "engine_aware_full"
 
 
@@ -55,9 +66,9 @@ def _selected_profile() -> str:
 
 def _selected_ph() -> float:
     raw = str(os.environ.get("PDBWIZARD_LIGAND_PREP_PH", str(DEFAULT_PREPARATION_PH)) or "").strip()
-    ok, normalized, _ = validate_preparation_ph(raw)
+    ok, normalized, error = validate_preparation_ph(raw)
     if not ok:
-        return float(DEFAULT_PREPARATION_PH)
+        raise ValueError(f"Invalid ligand preparation pH: {error}")
     return float(normalized)
 
 
@@ -199,14 +210,22 @@ def _load_rdkit_molecule(input_path: Path) -> Any:
         molecules = list(supplier)
         if len(molecules) != 1 or molecules[0] is None:
             raise ValueError("Each ligand artifact must contain exactly one valid molecule")
-        return molecules[0]
-    if suffix == ".mol":
-        return Chem.MolFromMolFile(str(input_path), removeHs=False)
-    if suffix == ".mol2":
-        return Chem.MolFromMol2File(str(input_path), removeHs=False)
-    if suffix == ".pdb":
-        return Chem.MolFromPDBFile(str(input_path), removeHs=False)
-    raise ValueError(f"Unsupported ligand format for RDKit normalization: {input_path.suffix}")
+        molecule = molecules[0]
+    elif suffix == ".mol":
+        molecule = Chem.MolFromMolFile(str(input_path), removeHs=False)
+    elif suffix == ".mol2":
+        molecule = Chem.MolFromMol2File(str(input_path), removeHs=False)
+    elif suffix == ".pdb":
+        molecule = Chem.MolFromPDBFile(str(input_path), removeHs=False)
+    else:
+        raise ValueError(f"Unsupported ligand format for RDKit normalization: {input_path.suffix}")
+    if molecule is None:
+        raise ValueError(f"RDKit could not parse ligand file: {input_path}")
+    try:
+        ensure_single_component(molecule, context=f"ligand '{input_path.name}'")
+    except LigandIdentityError as exc:
+        raise ValueError(str(exc)) from exc
+    return molecule
 
 
 def _has_3d_coordinates(mol: Any) -> bool:
@@ -246,10 +265,11 @@ def _normalize_with_rdkit(input_path: Path, output_sdf: Path) -> Dict[str, objec
     if Chem is None or all_chem is None:
         raise ImportError("RDKit is not available")
 
-    molecule = _load_rdkit_molecule(input_path)
-    if molecule is None:
+    source_molecule = _load_rdkit_molecule(input_path)
+    if source_molecule is None:
         raise ValueError(f"RDKit could not parse ligand file: {input_path}")
 
+    molecule = Chem.Mol(source_molecule)
     Chem.SanitizeMol(molecule)
     had_3d = _has_3d_coordinates(molecule)
     molecule = Chem.AddHs(molecule, addCoords=had_3d)
@@ -260,19 +280,51 @@ def _normalize_with_rdkit(input_path: Path, output_sdf: Path) -> Dict[str, objec
 
     molecule.SetProp("_Name", molecule.GetProp("_Name") if molecule.HasProp("_Name") else input_path.stem)
     output_sdf.parent.mkdir(parents=True, exist_ok=True)
-    writer = Chem.SDWriter(str(output_sdf))
+    # Keep the staged candidate recognizable by the suffix-dispatch parser.
+    # A name ending only in ``.candidate`` is rejected before chemistry can be
+    # checked by ``_load_rdkit_molecule``.
+    candidate_output = output_sdf.parent / f".{output_sdf.stem}.candidate.sdf"
     try:
-        writer.write(molecule)
+        writer = Chem.SDWriter(str(candidate_output))
+        try:
+            writer.write(molecule)
+        finally:
+            writer.close()
+
+        normalized_molecule = _load_rdkit_molecule(candidate_output)
+        require_finite_3d_coordinates(normalized_molecule, context="RDKit normalized ligand")
+        identity_ledger = build_identity_ledger(
+            source_molecule,
+            normalized_molecule,
+            allow_hydrogen_changes=True,
+            allow_formal_charge_changes=False,
+            preserve_coordinates=True,
+        )
+        if not identity_ledger["is_valid"]:
+            raise ValueError(
+                "RDKit normalization changed ligand identity: "
+                + "; ".join(str(error) for error in identity_ledger["errors"])
+            )
+        output_sdf.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(candidate_output, output_sdf)
     finally:
-        writer.close()
+        try:
+            candidate_output.unlink()
+        except OSError:
+            pass
 
     return {
         "normalization_backend": "rdkit",
         "source_file": str(input_path),
         "normalized_sdf": str(output_sdf),
+        "source_sha256": sha256_file(input_path),
+        "normalized_sdf_sha256": sha256_file(output_sdf),
         "had_3d_input": had_3d,
         "generated_3d": not had_3d,
         "optimized_forcefield": optimized_forcefield,
+        "identity_ledger": identity_ledger,
+        "normalized_isomeric_smiles": identity_ledger.get("normalized_isomeric_smiles", ""),
+        "coordinate_provenance": "source_3d_preserved" if had_3d else "rdkit_generated_seeded",
     }
 
 
@@ -283,6 +335,10 @@ def _normalize_with_openbabel(
     protonation_ph: float = 7.4,
     partial_charge_model: str = "gasteiger",
 ) -> Dict[str, object]:
+    ph_ok, normalized_ph, ph_error = validate_preparation_ph(protonation_ph)
+    if not ph_ok:
+        raise ValueError(f"Invalid ligand preparation pH: {ph_error}")
+    protonation_ph = normalized_ph
     if not shutil.which("obabel"):
         raise FileNotFoundError("Open Babel (obabel) is required for ligand normalization fallback")
 
@@ -297,6 +353,7 @@ def _normalize_with_openbabel(
         molecule = _load_rdkit_molecule(input_path)
         if molecule is None:
             raise ValueError("Ligand chemistry could not be parsed")
+        ensure_single_component(molecule, context="source ligand")
         had_3d = _has_3d_coordinates(molecule)
         source_result = _run_command(["obabel", str(input_path), "-O", str(temp_source)])
         if _is_zero_molecule_obabel_result(source_result) or not _file_has_meaningful_content(temp_source):
@@ -368,22 +425,59 @@ def _normalize_with_openbabel(
             except subprocess.CalledProcessError:
                 continue
 
-        output_sdf.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(final_source, output_sdf)
-        if not _file_has_meaningful_content(output_sdf):
+        candidate_output = temp_dir / f"{input_path.stem}_validated.sdf"
+        shutil.copy2(final_source, candidate_output)
+        if not _file_has_meaningful_content(candidate_output):
             raise ValueError(f"OpenBabel normalization produced an empty SDF for: {input_path}")
+
+        normalized_molecule = _load_rdkit_molecule(candidate_output)
+        try:
+            require_finite_3d_coordinates(normalized_molecule, context="OpenBabel normalized ligand")
+        except LigandIdentityError as exc:
+            raise ValueError(str(exc)) from exc
+        identity_ledger = build_identity_ledger(
+            molecule,
+            normalized_molecule,
+            allow_hydrogen_changes=True,
+            allow_formal_charge_changes=protonation_applied,
+            preserve_coordinates=True,
+        )
+        if not identity_ledger["is_valid"]:
+            raise ValueError(
+                "OpenBabel normalization changed ligand identity: "
+                + "; ".join(str(error) for error in identity_ledger["errors"])
+            )
+        output_sdf.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(candidate_output, output_sdf)
 
     return {
         "normalization_backend": "openbabel",
         "source_file": str(input_path),
         "normalized_sdf": str(output_sdf),
+        "source_sha256": sha256_file(input_path),
+        "normalized_sdf_sha256": sha256_file(output_sdf),
         "had_3d_input": had_3d,
         "generated_3d": not had_3d,
         "protonation_ph": protonation_ph,
         "protonation_applied": protonation_applied,
         "partial_charge_model": partial_charge_model,
         "partial_charge_applied": partial_charge_applied,
+        "charge_state_status": (
+            "normalization_charge_applied" if partial_charge_applied else "normalization_charge_unevaluated"
+        ),
         "optimized_forcefield": optimized_forcefield,
+        "identity_ledger": identity_ledger,
+        "normalized_isomeric_smiles": identity_ledger.get("normalized_isomeric_smiles", ""),
+        "coordinate_provenance": (
+            "source_3d_preserved" if had_3d else "openbabel_generated_nondeterministic"
+        ),
+        "normalization_provenance": {
+            "procedure": "openbabel_pH_protonation",
+            "pH": float(protonation_ph),
+            "allowed_changes": ["hydrogens", "formal_charge"],
+            "heavy_atom_graph_policy": "exact",
+            "source_coordinates": "preserved_and_mapped" if had_3d else "not_present",
+        },
     }
 
 
@@ -397,8 +491,31 @@ def normalize_ligand_to_sdf(
     destination = Path(output_sdf).expanduser().resolve()
     if source.suffix.lower() == ".pdb":
         raise ValueError("PDB coordinates do not establish ligand chemistry; provide an authoritative SDF with bond orders, charges and stereochemistry")
+    ph_ok, normalized_ph, ph_error = validate_preparation_ph(protonation_ph)
+    if not ph_ok:
+        raise ValueError(f"Invalid ligand preparation pH: {ph_error}")
+    # Parse and reject disconnected input before checking or invoking any
+    # external normalizer.  This keeps every preparation profile on the same
+    # ordinary-ligand policy.
+    source_molecule = _load_rdkit_molecule(source)
+    ensure_single_component(source_molecule, context="source ligand")
     # Failure is explicit: RDKit AddHs cannot satisfy a requested pH treatment.
-    return _normalize_with_openbabel(source, destination, protonation_ph=protonation_ph)
+    # Keep the public destination staged as well as the backend's own candidate
+    # so a malformed 2D/nonfinite result cannot overwrite a prior artifact.
+    with tempfile.TemporaryDirectory(prefix=f"ligand_normalized_{source.stem}_") as staging_dir:
+        staged_output = Path(staging_dir) / f"{destination.stem}.candidate.sdf"
+        result = _normalize_with_openbabel(source, staged_output, protonation_ph=normalized_ph)
+        normalized_molecule = _load_rdkit_molecule(staged_output)
+        try:
+            require_finite_3d_coordinates(normalized_molecule, context="normalized ligand")
+        except LigandIdentityError as exc:
+            raise ValueError(str(exc)) from exc
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(staged_output, destination)
+    result = dict(result)
+    result["normalized_sdf"] = str(destination)
+    result["normalized_sdf_sha256"] = sha256_file(destination)
+    return result
 
 
 def _prepare_with_meeko(input_sdf: Path, output_pdbqt: Path) -> None:
@@ -436,6 +553,7 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
     source_molecule = _load_rdkit_molecule(source)
     if source_molecule is None:
         raise ValueError("Ligand chemistry is not evaluable")
+    ensure_single_component(source_molecule, context="source ligand")
     Chem, _ = _load_rdkit()
     source_smiles = Chem.MolToSmiles(Chem.RemoveHs(source_molecule), isomericSmiles=True)
 
@@ -446,49 +564,88 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
         raise RuntimeError("; ".join(compatibility.errors))
     effective_profile = _effective_profile(selected_profile, selected_engines)
     protonation_ph = _selected_ph()
+    input_sha256 = sha256_file(source)
 
     with tempfile.TemporaryDirectory(prefix=f"ligand_prepare_{source.stem}_") as tmp_dir:
         normalized_sdf = Path(tmp_dir) / f"{source.stem}_normalized.sdf"
+        staged_output = Path(tmp_dir) / f"{destination.name}.candidate.pdbqt"
         meeko_error = ""
         obabel_error = ""
         autodocktools_error = ""
         prep_method = ""
         autodocktools_summary: Optional[Dict[str, object]] = None
         normalization: Dict[str, object] = {}
+        prepared_input_molecule = source_molecule
 
         if effective_profile == "meeko_only":
             try:
-                _prepare_with_meeko(source, destination)
+                require_finite_3d_coordinates(source_molecule, context="source ligand")
+            except LigandIdentityError as exc:
+                raise ValueError(str(exc)) from exc
+            try:
+                _prepare_with_meeko(source, staged_output)
                 prep_method = "meeko_direct"
             except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                 meeko_error = str(exc)
                 raise RuntimeError("Ligand preparation failed in Meeko-only mode.") from exc
         elif effective_profile == "autodocktools_only":
             try:
-                autodocktools_summary = _prepare_with_autodocktools(source, destination)
+                require_finite_3d_coordinates(source_molecule, context="source ligand")
+            except LigandIdentityError as exc:
+                raise ValueError(str(exc)) from exc
+            try:
+                autodocktools_summary = _prepare_with_autodocktools(source, staged_output)
                 prep_method = "autodocktools_direct"
             except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                 autodocktools_error = str(exc)
                 raise RuntimeError("Ligand preparation failed in AutoDockTools-only mode.") from exc
         else:
             normalization = normalize_ligand_to_sdf(source, normalized_sdf, protonation_ph=protonation_ph)
+            durable_normalized_sdf = destination.with_suffix(".normalized.sdf")
+            normalization["source_sha256"] = input_sha256
+            prepared_input_molecule = _load_rdkit_molecule(normalized_sdf)
+            try:
+                require_finite_3d_coordinates(
+                    prepared_input_molecule,
+                    context="prepared normalized ligand",
+                )
+            except LigandIdentityError as exc:
+                raise ValueError(str(exc)) from exc
+            identity_ledger = build_identity_ledger(
+                source_molecule,
+                prepared_input_molecule,
+                allow_hydrogen_changes=True,
+                allow_formal_charge_changes=bool(normalization.get("protonation_applied")),
+                preserve_coordinates=True,
+            )
+            if not identity_ledger.get("is_valid"):
+                raise ValueError(
+                    "Normalized ligand failed the source identity contract: "
+                    + "; ".join(str(error) for error in identity_ledger.get("errors", []))
+                )
+            normalization["identity_ledger"] = identity_ledger
+            # Keep the durable normalized SDF staged until backend output has
+            # also passed validation.  A failed backend must leave any prior
+            # user artifact at the requested normalized path untouched.
+            normalization["normalized_sdf"] = str(durable_normalized_sdf)
+            normalization["normalized_sdf_sha256"] = sha256_file(normalized_sdf)
             if effective_profile == "openbabel_only":
                 try:
-                    _prepare_with_openbabel_pdbqt(normalized_sdf, destination)
+                    _prepare_with_openbabel_pdbqt(normalized_sdf, staged_output)
                     prep_method = "openbabel_pdbqt"
                 except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                     obabel_error = str(exc)
                     raise RuntimeError("Ligand preparation failed in OpenBabel-only mode.") from exc
             elif effective_profile == "openbabel_meeko":
                 try:
-                    _prepare_with_meeko(normalized_sdf, destination)
+                    _prepare_with_meeko(normalized_sdf, staged_output)
                     prep_method = "openbabel_then_meeko"
                 except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                     meeko_error = str(exc)
                     raise RuntimeError("Ligand preparation failed in OpenBabel->Meeko mode.") from exc
             elif effective_profile == "openbabel_autodocktools":
                 try:
-                    autodocktools_summary = _prepare_with_autodocktools(normalized_sdf, destination)
+                    autodocktools_summary = _prepare_with_autodocktools(normalized_sdf, staged_output)
                     prep_method = "openbabel_then_autodocktools"
                 except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                     autodocktools_error = str(exc)
@@ -496,12 +653,12 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
             else:
                 # openbabel_meeko_autodock
                 try:
-                    _prepare_with_meeko(normalized_sdf, destination)
+                    _prepare_with_meeko(normalized_sdf, staged_output)
                     prep_method = "openbabel_then_meeko"
                 except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                     meeko_error = str(exc)
                     try:
-                        autodocktools_summary = _prepare_with_autodocktools(normalized_sdf, destination)
+                        autodocktools_summary = _prepare_with_autodocktools(normalized_sdf, staged_output)
                         prep_method = "openbabel_then_meeko_fallback_autodocktools"
                     except (subprocess.CalledProcessError, FileNotFoundError) as adt_exc:
                         autodocktools_error = str(adt_exc)
@@ -509,10 +666,47 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
                             "Ligand preparation failed in OpenBabel->Meeko->AutoDockTools mode."
                         ) from exc
 
+        staged_contract = _validate_prepared_pdbqt_contract(staged_output)
+        if not staged_contract.get("is_valid", False):
+            raise ValueError(
+                "Prepared ligand failed its chemistry/engine contract before publication: "
+                + "; ".join(str(error) for error in staged_contract.get("errors", []))
+            )
+        output_chemistry_validation = validate_mapped_pdbqt(prepared_input_molecule, staged_output)
+        if output_chemistry_validation.get("status") == "invalid":
+            raise ValueError(
+                "Prepared PDBQT contains malformed or conflicting authoritative chemistry mapping: "
+                + "; ".join(str(error) for error in output_chemistry_validation.get("errors", []))
+            )
+        if "meeko" in prep_method and "fallback_autodocktools" not in prep_method:
+            if output_chemistry_validation.get("status") != "exact":
+                raise ValueError(
+                    "Meeko output could not be certified against the prepared input graph: "
+                    + "; ".join(str(error) for error in output_chemistry_validation.get("errors", []))
+                )
+        elif output_chemistry_validation.get("status") != "exact":
+            # Deliberate compatibility for legacy ADT/OpenBabel outputs: the
+            # syntax/engine contract is still enforced, but chemistry is
+            # limited when the backend does not emit an authoritative map.
+            output_chemistry_validation.setdefault(
+                "warnings", []
+            ).append(
+                "The selected OpenBabel/AutoDockTools output has no authoritative atom mapping; "
+                "exact output chemistry was not certified."
+            )
+        # All graph, coordinate, syntax and output-mapping checks have passed;
+        # publish the two prepared artifacts only now.
+        if normalization:
+            durable_normalized_sdf.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(normalized_sdf, durable_normalized_sdf)
+        shutil.copy2(staged_output, destination)
+
     summary = {
         "prepared_at_utc": datetime.now(timezone.utc).isoformat(),
         "input_file": str(source),
         "output_file": str(destination),
+        "input_sha256": input_sha256,
+        "output_sha256": sha256_file(destination),
         "preparation_method": prep_method,
         "requested_backend": selected_profile,
         "requested_profile": selected_profile,
@@ -523,6 +717,20 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
         "protonation_status": "applied" if normalization.get("protonation_applied") else "input_state_not_ph_titrated",
         "source_isomeric_smiles": source_smiles,
         "normalization": normalization,
+        "normalization_provenance": normalization.get("normalization_provenance", {}),
+        "prepared_input_file": normalization.get("normalized_sdf", str(source)),
+        "prepared_input_sha256": (
+            normalization.get("normalized_sdf_sha256", input_sha256)
+        ),
+        "output_chemistry_validation": output_chemistry_validation,
+        "chemistry_validation_scope": output_chemistry_validation.get("scope", ""),
+        "charge_state_status": (
+            "backend_assigned_meeko"
+            if "meeko" in prep_method and "fallback_autodocktools" not in prep_method
+            else "backend_assigned_autodocktools"
+            if "autodocktools" in prep_method
+            else "backend_assigned_openbabel_gasteiger"
+        ),
         "compatibility": compatibility.to_dict(),
     }
     if meeko_error:
@@ -533,15 +741,15 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
         summary["autodocktools_error"] = autodocktools_error
     if autodocktools_summary:
         summary["autodocktools"] = autodocktools_summary
+    validation = validate_ligand_preparation_output_contract(summary)
+    summary["output_contract_validation"] = validation
+    if not validation["is_valid"]:
+        raise ValueError("Prepared ligand failed its chemistry/engine contract: " + "; ".join(validation["errors"]))
     report_dir = str(os.environ.get("PDBWIZARD_LIGAND_PREP_REPORT_DIR", "") or "").strip()
     if report_dir:
         report_path = write_ligand_preparation_step_report(summary, report_dir=Path(report_dir))
         if report_path:
             summary["step_report_file"] = str(report_path)
-    validation = validate_ligand_preparation_output_contract(summary)
-    summary["output_contract_validation"] = validation
-    if not validation["is_valid"]:
-        raise ValueError("Prepared ligand failed its chemistry/engine contract: " + "; ".join(validation["errors"]))
     from .asset_identity import REFERENCE_FIELDS, sidecar
     source_metadata = sidecar(source)
     for key in REFERENCE_FIELDS:
@@ -587,9 +795,14 @@ def validate_ligand_preparation_output_contract(summary: Dict[str, object]) -> D
     """
     Validate mode-specific output contracts for one prepared ligand summary payload.
     """
-    requested_profile = normalize_ligand_preparation_profile(str(summary.get("requested_profile") or summary.get("requested_backend") or "engine_aware_full"))
+    raw_profile = str(
+        summary.get("requested_profile")
+        or summary.get("requested_backend")
+        or "engine_aware_full"
+    )
     selected_engines = [str(engine).strip().lower() for engine in (summary.get("selected_engines") or []) if str(engine).strip()]
-    compatibility = validate_ligand_preparation_profile(requested_profile, selected_engines)
+    compatibility = validate_ligand_preparation_profile(raw_profile, selected_engines)
+    requested_profile = compatibility.requested_profile
     effective_profile = str(summary.get("effective_profile") or compatibility.effective_profile or "")
     output_file = Path(str(summary.get("output_file") or "")).expanduser()
     errors: list[str] = []
@@ -615,15 +828,19 @@ def validate_ligand_preparation_output_contract(summary: Dict[str, object]) -> D
             f"(expected one of: {', '.join(sorted(allowed_methods))})"
         )
 
-    ph_value = _parse_float(summary.get("protonation_ph"))
-    ph_ok, normalized_ph, ph_error = validate_preparation_ph(ph_value if ph_value is not None else DEFAULT_PREPARATION_PH)
+    raw_ph = summary.get("protonation_ph", DEFAULT_PREPARATION_PH)
+    if raw_ph is None or raw_ph == "":
+        raw_ph = DEFAULT_PREPARATION_PH
+    ph_value = _parse_float(raw_ph)
+    ph_ok, normalized_ph, ph_error = validate_preparation_ph(raw_ph if ph_value is not None else raw_ph)
     if not ph_ok:
         errors.append(ph_error)
     elif ph_value is not None and abs(ph_value - normalized_ph) > 1e-6:
         warnings.append("protonation_ph was normalized to a valid range")
 
     normalization = summary.get("normalization") or {}
-    if effective_profile.startswith("openbabel_") or effective_profile == "openbabel_only":
+    uses_normalization = effective_profile.startswith("openbabel_") or effective_profile == "openbabel_only"
+    if uses_normalization:
         if not isinstance(normalization, dict) or not normalization:
             errors.append("openbabel-based profiles require normalization details in summary")
         else:
@@ -632,6 +849,52 @@ def validate_ligand_preparation_output_contract(summary: Dict[str, object]) -> D
                 errors.append(f"unexpected normalization backend: {backend or 'missing'}")
             if backend == "rdkit" or not normalization.get("protonation_applied", False):
                 errors.append("Requested pH-dependent normalization was not applied")
+            normalized_file_raw = str(normalization.get("normalized_sdf") or "").strip()
+            normalized_file = Path(normalized_file_raw).expanduser() if normalized_file_raw else None
+            normalized_hash = str(normalization.get("normalized_sdf_sha256") or "").strip().lower()
+            if not normalized_file:
+                errors.append("normalization must retain a durable normalized SDF path")
+            elif not normalized_file.exists():
+                errors.append("durable normalized SDF is missing")
+            elif not normalized_hash:
+                errors.append("normalization must retain the normalized SDF SHA-256 hash")
+            elif sha256_file(normalized_file) != normalized_hash:
+                errors.append("normalized SDF SHA-256 does not match the durable artifact")
+            identity_ledger = normalization.get("identity_ledger")
+            if not isinstance(identity_ledger, dict) or not identity_ledger.get("is_valid"):
+                errors.append("normalization identity ledger is missing or failed")
+            provenance = normalization.get("normalization_provenance")
+            if not isinstance(provenance, dict) or not provenance.get("procedure"):
+                errors.append("normalization provenance and allowed-change policy are required")
+
+    input_file = Path(str(summary.get("input_file") or "")).expanduser()
+    input_hash = str(summary.get("input_sha256") or "").strip().lower()
+    if not input_hash:
+        errors.append("input SHA-256 provenance is missing")
+    elif input_file.exists() and sha256_file(input_file) != input_hash:
+        errors.append("input SHA-256 does not match the source artifact")
+    output_hash = str(summary.get("output_sha256") or "").strip().lower()
+    if not output_hash:
+        errors.append("output SHA-256 provenance is missing")
+    elif output_file.exists() and sha256_file(output_file) != output_hash:
+        errors.append("output SHA-256 does not match the prepared artifact")
+
+    output_chemistry = summary.get("output_chemistry_validation")
+    meeko_output = "meeko" in preparation_method and "fallback_autodocktools" not in preparation_method
+    if not isinstance(output_chemistry, dict):
+        errors.append("output chemistry validation scope is missing")
+    elif meeko_output:
+        if output_chemistry.get("status") != "exact" or not output_chemistry.get("is_valid"):
+            errors.append("Meeko output requires exact authoritative chemistry/mapping validation")
+    elif output_chemistry.get("status") not in {"limited", "exact"}:
+        errors.append("OpenBabel/AutoDockTools output must declare limited chemistry validation scope")
+    elif output_chemistry.get("status") == "exact" and not output_chemistry.get("is_valid"):
+        errors.append("Exact output chemistry validation must declare is_valid=true")
+    elif output_chemistry.get("status") == "limited":
+        warnings.extend(str(item) for item in (output_chemistry.get("warnings") or []))
+
+    if not str(summary.get("charge_state_status") or "").strip():
+        errors.append("charge-state provenance is missing")
 
     output_contract = _validate_prepared_pdbqt_contract(output_file)
     if not output_contract.get("is_valid", False):
@@ -643,7 +906,10 @@ def validate_ligand_preparation_output_contract(summary: Dict[str, object]) -> D
         "effective_profile": effective_profile,
         "selected_engines": selected_engines,
         "output_file": str(output_file),
+        "input_sha256": input_hash,
+        "output_sha256": output_hash,
         "protonation_ph": float(ph_value) if ph_value is not None else float(DEFAULT_PREPARATION_PH),
+        "chemistry_validation_scope": str(summary.get("chemistry_validation_scope") or ""),
         "ph_bounds": {
             "min": float(MIN_PREPARATION_PH),
             "max": float(MAX_PREPARATION_PH),
@@ -714,7 +980,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not ph_ok:
         print(f"❌ Invalid pH value: {ph_error}", file=sys.stderr)
         return 2
-    os.environ["PDBWIZARD_LIGAND_PREP_PROFILE"] = _resolve_profile_alias(args.backend_profile)
+    profile_validation = validate_ligand_preparation_profile(
+        args.backend_profile,
+        normalize_engine_names(str(args.engines or "").split(",")),
+    )
+    if not profile_validation.is_valid:
+        print(f"❌ Invalid ligand preparation profile: {'; '.join(profile_validation.errors)}", file=sys.stderr)
+        return 2
+    os.environ["PDBWIZARD_LIGAND_PREP_PROFILE"] = profile_validation.requested_profile
     os.environ["PDBWIZARD_LIGAND_PREP_PH"] = str(normalized_ph)
     if args.engines:
         os.environ["PDBWIZARD_SELECTED_ENGINES"] = args.engines

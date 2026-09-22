@@ -322,15 +322,23 @@ def run_redocking_validation(
         }
 
     frame = best_by_engine.copy()
+    # The validation gate consumes one selected pose per (engine, tag). A
+    # duplicate can represent a seed, retry, mode, or scoring function, and
+    # dropping it would silently change the reference denominator. Require the
+    # upstream selector to make that choice explicitly.
+    duplicate_keys = [key for key in ("tag", "engine") if key in frame.columns]
+    if len(duplicate_keys) == 2:
+        duplicate_mask = frame.duplicated(subset=duplicate_keys, keep=False)
+        if duplicate_mask.any():
+            duplicate_values = sorted(
+                {
+                    (str(row.tag), str(row.engine))
+                    for row in frame.loc[duplicate_mask, duplicate_keys].itertuples(index=False)
+                }
+            )
+            raise ValueError(f"duplicate_reference_input_rows: {duplicate_values}")
     frame["is_reference_candidate"] = frame.apply(_is_reference_candidate_row, axis=1)
     references = frame[frame["is_reference_candidate"]].copy()
-
-    # Deduplicate: one RMSD computation per unique (protein, ligand, tag, engine) tuple.
-    # best_by_engine may contain multiple score-row entries for the same pose file when
-    # the upstream frame carries per-mode rows; take one representative row per pose.
-    dedup_keys = [k for k in ("protein", "ligand", "tag", "engine") if k in references.columns]
-    if dedup_keys:
-        references = references.drop_duplicates(subset=dedup_keys, keep="first")
 
     records: List[Dict[str, object]] = []
     for _, row in references.iterrows():
