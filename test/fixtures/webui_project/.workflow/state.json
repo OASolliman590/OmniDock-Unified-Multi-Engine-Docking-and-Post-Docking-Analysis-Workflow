@@ -1,0 +1,65 @@
+{
+  "version": 2,
+  "project_root": "test/fixtures/webui_project",
+  "created_at": "2026-01-01T00:00:00+00:00",
+  "updated_at": "2026-01-01T00:00:00+00:00",
+  "current_context": {
+    "project_root": "test/fixtures/webui_project",
+    "analysis_output_dir": "",
+    "favorite_engine": "gnina",
+    "top_pose_selection_policy": "",
+    "top_pose_global_aggregation": "",
+    "selected_engines": [],
+    "enabled_panels": [],
+    "pair_mode": "",
+    "active_target": "dock.run",
+    "layout_profile": "",
+    "raw_proteins_dir": "",
+    "raw_ligands_dir": "",
+    "raw_ligands_sdf_dir": "",
+    "prepared_proteins_dir": "",
+    "prepared_ligands_dir": "",
+    "docking_root": "",
+    "post_docking_root": ""
+  },
+  "artifacts": {},
+  "steps": {
+    "pdb.collect": {
+      "status": "completed",
+      "started_at": "2026-01-01T00:00:00+00:00",
+      "finished_at": "2026-01-01T00:01:00+00:00",
+      "inputs": {},
+      "outputs": {},
+      "notes": ["synthetic fixture"]
+    },
+    "dock.run": {
+      "status": "failed",
+      "started_at": "2026-01-01T00:02:00+00:00",
+      "finished_at": "2026-01-01T00:03:00+00:00",
+      "inputs": {},
+      "outputs": {},
+      "notes": ["synthetic fixture: recorded failure"]
+    },
+    "pdb.prepare_both": {
+      "status": "pending",
+      "started_at": null,
+      "finished_at": null,
+      "inputs": {},
+      "outputs": {},
+      "notes": []
+    }
+  },
+  "background_tasks": {},
+  "feature_flags": {
+    "enable_timeline": true,
+    "enable_background_tasks": true,
+    "enable_checkpoint_revise": true,
+    "enable_execution_environment_adapters": true,
+    "enable_post_docking_first_class": true,
+    "enable_sqlite_dual_write": false
+  },
+  "checkpoint_metadata": {
+    "latest_checkpoint_id": "",
+    "records": []
+  }
+}

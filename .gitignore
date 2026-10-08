@@ -103,3 +103,7 @@ OmniDock_findings_*.zip
 # Local-only progress snapshots and raw appraisal logs (tracked in Notion)
 docs/PROGRESS_FOR_OMAR.md
 docs/appraisal_20260819/
+# Synthetic web UI test fixture must be tracked despite the *.csv and .workflow/ rules
+!test/fixtures/webui_project/**/*.csv
+!test/fixtures/webui_project/.workflow/
+!test/fixtures/webui_project/.workflow/**

@@ -1,0 +1,4 @@
+ligand,receptor,score,rank
+ligA,recX,0.0,1
+ligB,recX,0.0,2
+ligC,recX,0.0,3
