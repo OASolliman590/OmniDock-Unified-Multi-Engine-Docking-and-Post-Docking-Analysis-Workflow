@@ -331,7 +331,7 @@ global_settings:
   autodock:
     force_field: "AMBER"
     ph: 7.4
-    allow_bad_res: true
+    allow_bad_res: false  # strict receptor preparation refuses permissive residue deletion
     default_altloc: "A"
 
 # List of PDB entries to process
@@ -498,11 +498,13 @@ Preparation generates docking-ready assets and does not run PLIP.
 
 #### Command Line Usage
 
-# Create configuration file
+# Create configuration file. It is written to
+# <receptors-output>/.meta/autodock_preparation/autodock_config.json (Spec 033 R3),
+# never into the current working directory.
 python autodock_preparation.py --create-config
 
-# Edit configuration file
-nano autodock_config.json
+# Edit configuration file (path printed by --create-config)
+nano receptors_prep/.meta/autodock_preparation/autodock_config.json
 
 # Run preparation with custom settings
 python autodock_preparation.py \
@@ -515,8 +517,8 @@ python autodock_preparation.py \
     --ligand-profile engine_aware_full \
     --selected-engines gnina,vina,smina,autodock4
 
-# Run with bash script
-./prep_autodock_enhanced.sh autodock_config.json
+# Run with bash script (the configuration path is required; logs go beside it)
+./prep_autodock_enhanced.sh receptors_prep/.meta/autodock_preparation/autodock_config.json
 
 #### Python API Usage
 

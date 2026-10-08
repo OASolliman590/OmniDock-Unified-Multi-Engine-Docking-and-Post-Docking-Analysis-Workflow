@@ -16,6 +16,8 @@ dependencies:
   - scikit-learn  # For clustering and machine learning
   - scipy  # For statistical analysis
   - networkx>=3.2,<4  # Spec 031 graph/symmetry-aware atom mapping
+  - pdb2pqr>=3.4.1  # Spec 033 R2c: receptor protonation (pdb2pqr30); verified 3.4.1
+  - meeko>=0.7.1  # Spec 033 R2: receptor PDBQT conversion (mk_prepare_receptor.py); verified 0.7.1, brings rdkit
   - pip
   - pip:
     - plip

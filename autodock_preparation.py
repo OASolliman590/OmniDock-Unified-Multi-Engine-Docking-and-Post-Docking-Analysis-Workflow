@@ -5,6 +5,7 @@ Integrates with PDB Prepare Wizard for comprehensive molecular docking preparati
 """
 
 import os
+import sys
 import json
 import subprocess
 import logging
@@ -38,9 +39,11 @@ class PreparationConfig:
     receptors_output: str
     force_field: str = "AMBER"
     ph: float = 7.4
-    allow_bad_res: bool = True
+    # Strict receptor preparation refuses permissive bad-residue deletion (Spec 033).
+    allow_bad_res: bool = False
     default_altloc: str = "A"
-    receptor_use_pdb2pqr: bool = False
+    # Spec 033 R2c (Scientific Lead, option A): PDB2PQR protonation at pH/force field.
+    receptor_use_pdb2pqr: bool = True
     validate_outputs: bool = True
     min_file_size_kb: int = 1
     ligand_preparation_backend: str = "engine_aware_full"  # backward-compatible field
@@ -199,16 +202,44 @@ class AutoDockPreparationPipeline:
             
         return logger
     
-    def create_config_file(self, config_path: str = "autodock_config.json") -> str:
+    def default_meta_dir(self) -> Path:
+        """
+        Project-local folder for preparation configuration and logs (Spec 033 R3).
+
+        It sits inside the prepared-output tree, so nothing is written into the
+        process working directory.
+        """
+        resolved = [
+            Path(value).expanduser().resolve()
+            for value in (self.config.receptors_output, self.config.ligands_output)
+            if value
+        ]
+        if not resolved:
+            raise ValueError("A prepared-output directory is required to place the preparation configuration")
+        # The workflow substitutes a system temporary folder for an output it does not
+        # request; prefer a persistent project output so logs survive the run.
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        base = next(
+            (path for path in resolved if path != temp_root and temp_root not in path.parents),
+            resolved[0],
+        )
+        return base / ".meta" / "autodock_preparation"
+
+    def create_config_file(self, config_path: Optional[str] = None) -> str:
         """
         Create a configuration file for the enhanced bash script
-        
+
         Args:
-            config_path: Path to save the configuration file
-            
+            config_path: Path to save the configuration file. Defaults to
+                ``<prepared-output>/.meta/autodock_preparation/autodock_config.json``.
+
         Returns:
             Path to the created configuration file
         """
+        if config_path is None:
+            meta_dir = self.default_meta_dir()
+            meta_dir.mkdir(parents=True, exist_ok=True)
+            config_path = str(meta_dir / "autodock_config.json")
         config = {
             "input": {
                 "ligands": {
@@ -225,7 +256,8 @@ class AutoDockPreparationPipeline:
             "output": {
                 "ligands": self.config.ligands_output,
                 "receptors": self.config.receptors_output,
-                "logs": "./logs"
+                # Relative to this configuration file: the logs stay in the project.
+                "logs": "logs"
             },
             "preparation": {
                 "force_field": self.config.force_field,
@@ -399,6 +431,8 @@ class AutoDockPreparationPipeline:
             env["PDBWIZARD_LIGAND_PREP_BACKEND"] = profile
             env["PDBWIZARD_LIGAND_PREP_PROFILE"] = profile
             env["PDBWIZARD_LIGAND_PREP_PH"] = str(self.config.ph)
+            # Receptor preparation runs under this same interpreter (Spec 033 R2b).
+            env["PDBWIZARD_PYTHON"] = sys.executable
             if self.config.selected_engines:
                 env["PDBWIZARD_SELECTED_ENGINES"] = ",".join(
                     str(engine).strip().lower()

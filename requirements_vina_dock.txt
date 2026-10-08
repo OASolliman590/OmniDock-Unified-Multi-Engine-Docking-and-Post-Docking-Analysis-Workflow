@@ -1,6 +1,12 @@
 # Additional dependencies for vina_dock conda environment
 # Based on Jupyter_Dock requirements
 
+# Receptor preparation for Vina-family docking (Spec 033 R2)
+# PDB2PQR protonation (pdb2pqr30) and Meeko PDBQT conversion (mk_prepare_receptor.py).
+# Verified versions: pdb2pqr 3.4.1, meeko 0.7.1 (Meeko brings rdkit).
+pdb2pqr>=3.4.1
+meeko>=0.7.1
+
 # 3D Visualization
 py3dmol>=2.0.0
 

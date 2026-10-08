@@ -11,8 +11,12 @@ set -euo pipefail
 
 # ── Configuration and Setup ────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${1:-$SCRIPT_DIR/autodock_config.json}"
-LOG_FILE="${SCRIPT_DIR}/autodock_prep_$(date +%Y%m%d_%H%M%S).log"
+# Spec 033 R3: the configuration path is always explicit. There is no default
+# path, so nothing is written into the caller's working directory or the
+# repository root. The Python caller writes it under <prepared-output>/.meta/.
+CONFIG_FILE="${1:-}"
+# Set by setup_log_file once the configuration is known (logs live beside it).
+LOG_FILE=""
 
 # Default configuration
 DEFAULT_CONFIG='{
@@ -31,14 +35,14 @@ DEFAULT_CONFIG='{
   "output": {
     "ligands": "./ligands_prep",
     "receptors": "./receptors_prep",
-    "logs": "./logs"
+    "logs": "logs"
   },
   "preparation": {
     "force_field": "AMBER",
     "ph": 7.4,
-    "allow_bad_res": true,
+    "allow_bad_res": false,
     "default_altloc": "A",
-    "receptor_use_pdb2pqr": false,
+    "receptor_use_pdb2pqr": true,
     "ligand_preparation_backend": "engine_aware_full",
     "ligand_preparation_profile": "engine_aware_full",
     "selected_engines": [],
@@ -55,19 +59,19 @@ DEFAULT_CONFIG='{
 
 # ── Logging Functions ──────────────────────────────────────────────────────
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "${LOG_FILE:-/dev/null}"
 }
 
 log_error() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" | tee -a "$LOG_FILE" >&2
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" | tee -a "${LOG_FILE:-/dev/null}" >&2
 }
 
 log_success() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: $1" | tee -a "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: $1" | tee -a "${LOG_FILE:-/dev/null}"
 }
 
 log_info() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: $1" | tee -a "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: $1" | tee -a "${LOG_FILE:-/dev/null}"
 }
 
 # ── Reporting Helpers ──────────────────────────────────────────────────────
@@ -182,8 +186,32 @@ show_progress() {
 }
 
 # ── Configuration Management ───────────────────────────────────────────────
+require_config_argument() {
+    if [[ -z "$CONFIG_FILE" ]]; then
+        echo "Usage: $0 <config.json>" >&2
+        echo "The configuration path is required. Python callers write it under <prepared-output>/.meta/." >&2
+        exit 2
+    fi
+}
+
+# Logs live in the directory of the configuration file (relative "output.logs"),
+# which the Python caller places inside the project. Never the working directory.
+setup_log_file() {
+    local log_setting
+    log_setting=$(jq -r '.output.logs // "logs"' "$CONFIG_FILE")
+    local log_dir
+    if [[ "$log_setting" == /* ]]; then
+        log_dir="$log_setting"
+    else
+        log_dir="$(cd "$(dirname "$CONFIG_FILE")" && pwd)/$log_setting"
+    fi
+    mkdir -p "$log_dir"
+    LOG_FILE="$log_dir/autodock_prep_$(date +%Y%m%d_%H%M%S).log"
+}
+
 load_config() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
+        mkdir -p "$(dirname "$CONFIG_FILE")"
         log_info "Creating default configuration file: $CONFIG_FILE"
         echo "$DEFAULT_CONFIG" > "$CONFIG_FILE"
         log_info "Please edit $CONFIG_FILE and run again"
@@ -414,57 +442,6 @@ resolve_autodocktools_python() {
     return 1
 }
 
-autodocktools_pythonpath_root_from_script() {
-    local script_path="$1"
-    (
-        local script_dir
-        script_dir=$(cd "$(dirname "$script_path")" && pwd)
-        cd "$script_dir/../.." && pwd
-    )
-}
-
-prepare_receptor_with_autodocktools() {
-    local input_file="$1"
-    local output_file="$2"
-    local adt_script="${AUTODOCKTOOLS_PREPARE_RECEPTOR4:-}"
-    local adt_python="${AUTODOCKTOOLS_PYTHON:-python3}"
-
-    if [[ -z "$adt_script" || ! -f "$adt_script" ]]; then
-        log_error "AutoDockTools receptor script is not configured or missing: $adt_script"
-        return 1
-    fi
-
-    local adt_root
-    adt_root=$(autodocktools_pythonpath_root_from_script "$adt_script")
-    local adt_output=""
-
-    if ! adt_output=$(
-        PYTHONPATH="$adt_root${PYTHONPATH:+:$PYTHONPATH}" \
-        "$adt_python" "$adt_script" \
-            -r "$input_file" \
-            -o "$output_file" \
-            -A checkhydrogens \
-            -U nphs_lps_waters_deleteAltB 2>&1
-    ); then
-        log_error "AutoDockTools receptor preparation failed for $(basename "$input_file")"
-        if [[ -n "$adt_output" ]]; then
-            local first_error_line=""
-            first_error_line=$(printf '%s\n' "$adt_output" | tail -n 1)
-            log_error "prepare_receptor4.py output: $first_error_line"
-        fi
-        return 1
-    fi
-
-    if [[ -n "$adt_output" ]]; then
-        local last_line=""
-        last_line=$(printf '%s\n' "$adt_output" | tail -n 1)
-        if [[ -n "$last_line" ]]; then
-            log_info "prepare_receptor4.py: $last_line"
-        fi
-    fi
-    return 0
-}
-
 # ── Dependency Checking ────────────────────────────────────────────────────
 check_dependencies() {
     local missing_deps=()
@@ -486,15 +463,17 @@ check_dependencies() {
         fi
     done
 
-    # Check optional preparation tools and log their status.
+    # Check optional preparation tools and log their status. Receptor backends are
+    # not substituted: a receptor whose backend is missing is recorded as failed
+    # with reason backend_unavailable by the receptor module (Spec 033 R2b).
     if ! command -v pdb2pqr30 &> /dev/null; then
-        log_info "pdb2pqr30 not found. Receptor preparation will fall back to Open Babel."
+        log_info "pdb2pqr30 not found. Receptors with receptor_use_pdb2pqr=true will fail with backend_unavailable."
     fi
     if ! mk_prepare_ligand.py --help >/dev/null 2>&1; then
         log_info "mk_prepare_ligand.py is not usable. Ligand preparation will rely on profile-specific fallbacks."
     fi
     if ! mk_prepare_receptor.py --help >/dev/null 2>&1; then
-        log_info "mk_prepare_receptor.py is not usable. Receptor preparation will fall back to Open Babel."
+        log_info "mk_prepare_receptor.py is not usable. Receptors will fail with backend_unavailable."
     fi
 
     if profile_requires_autodocktools_ligand "$ligand_profile" "$selected_engines_csv"; then
@@ -541,10 +520,6 @@ check_dependencies() {
 
 has_working_meeko_ligand() {
     mk_prepare_ligand.py --help >/dev/null 2>&1
-}
-
-has_working_meeko_receptor() {
-    mk_prepare_receptor.py --help >/dev/null 2>&1
 }
 
 prepare_ligand_to_pdbqt() {
@@ -807,12 +782,6 @@ prepare_receptors() {
     local candidate_files=()
     local processed_files=0
     local skipped_ligand_like=0
-    local ligand_profile_raw
-    ligand_profile_raw=$(jq -r '.preparation.ligand_preparation_profile // .preparation.ligand_preparation_backend // "engine_aware_full"' "$CONFIG_FILE")
-    local ligand_profile
-    ligand_profile=$(normalize_ligand_profile "$ligand_profile_raw")
-    local receptor_use_pdb2pqr
-    receptor_use_pdb2pqr=$(jq -r '.preparation.receptor_use_pdb2pqr // false' "$CONFIG_FILE")
 
     # Collect receptor candidates while excluding ligand-like PDB artifacts that
     # may be present in the raw protein directory.
@@ -867,110 +836,68 @@ prepare_receptors() {
             local base_name
             base_name=$(basename "$pdb_file")
             base_name="${base_name%.*}"
-            local pqr_file="$output_dir/${base_name}.pqr"
-            local clean_pdb="$output_dir/${base_name}_clean.pdb"
             local pdbqt_file="$output_dir/${base_name}.pdbqt"
             local started_epoch
             started_epoch=$(date +%s)
             log_info "[$processed_files/$total_files] Preparing receptor: $(basename "$pdb_file")"
-            
-            # Skip if already exists and valid
-            if [[ -f "$pdbqt_file" ]] && validate_file "$pdbqt_file"; then
-                log_info "Skipping existing valid receptor output: $(basename "$pdbqt_file")"
-                append_report_row "$RECEPTOR_SKIPPED_REPORT" "receptor" "$pdb_file" "skipped" "already_prepared" "$pdbqt_file"
-                continue
-            fi
-            
-            local prep_input="$pdb_file"
-            local used_clean_intermediate="false"
+
+            # Spec 033 R2b: the strict Python receptor module is the only receptor backend.
+            # The output is always regenerated, and a stale PDBQT must not survive a failed run.
+            rm -f "$pdbqt_file"
+            local result_json=""
             local prepared_ok="false"
-
-            if [[ "$ligand_profile" == "autodocktools_only" ]]; then
-                if prepare_receptor_with_autodocktools "$pdb_file" "$pdbqt_file"; then
-                    prepared_ok="true"
-                fi
+            local reason=""
+            local details=""
+            if result_json=$(PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+                    "${PDBWIZARD_PYTHON:-python3}" -m docking.preparation.receptor_preparation \
+                        "$pdb_file" "$pdbqt_file" "$CONFIG_FILE" 2>> "${LOG_FILE:-/dev/null}"); then
+                prepared_ok="true"
             else
-                # Optional PDB2PQR path (disabled by default for better geometry stability,
-                # especially in protein+nucleic-acid assemblies).
-                if [[ "$receptor_use_pdb2pqr" == "true" ]]; then
-                    if command -v pdb2pqr30 >/dev/null 2>&1; then
-                        if pdb2pqr30 --ff "$(jq -r '.preparation.force_field' "$CONFIG_FILE")" \
-                                    --with-ph "$(jq -r '.preparation.ph' "$CONFIG_FILE")" \
-                                    "$pdb_file" "$pqr_file" >/dev/null 2>&1; then
-                            if obabel "$pqr_file" -O "$clean_pdb" >/dev/null 2>&1; then
-                                prep_input="$clean_pdb"
-                                used_clean_intermediate="true"
-                            else
-                                log_info "Open Babel clean step failed for $(basename "$pdb_file"). Falling back to the original PDB."
-                            fi
-                        else
-                            log_info "PDB2PQR failed for $(basename "$pdb_file"). Falling back to the original PDB."
-                        fi
-                    fi
-                fi
-
-                # Step 2: PDB → PDBQT via Meeko when usable, else Open Babel.
-                if has_working_meeko_receptor; then
-                    local meeko_args=("--read_pdb" "$prep_input" "-p" "$pdbqt_file")
-                    
-                    if [[ "$(jq -r '.preparation.allow_bad_res' "$CONFIG_FILE")" == "true" ]]; then
-                        meeko_args+=("--allow_bad_res")
-                    fi
-                    
-                    meeko_args+=("--default_altloc" "$(jq -r '.preparation.default_altloc' "$CONFIG_FILE")")
-                    
-                    if mk_prepare_receptor.py "${meeko_args[@]}" 2>/dev/null; then
-                        prepared_ok="true"
-                    else
-                        log_info "Meeko receptor preparation failed for $(basename "$pdb_file"). Falling back to Open Babel."
-                    fi
-                fi
-
-                if [[ "$prepared_ok" != "true" ]]; then
-                    if obabel "$prep_input" -O "$pdbqt_file" -xr >/dev/null 2>&1; then
-                        prepared_ok="true"
-                    fi
+                reason=$(printf '%s' "$result_json" | jq -r '.reason // empty' 2>/dev/null || true)
+                details=$(printf '%s' "$result_json" | jq -r '.details // empty' 2>/dev/null || true)
+                if [[ -z "$reason" ]]; then
+                    reason="preparation_error"
+                    details="receptor module exited without a JSON result; see log ${LOG_FILE:-}"
                 fi
             fi
 
             if [[ "$prepared_ok" == "true" ]]; then
                 if validate_file "$pdbqt_file"; then
-                    local elapsed
+                    local elapsed hd_count
                     elapsed=$(( $(date +%s) - started_epoch ))
-                    log_success "Prepared receptor: $base_name (${elapsed}s)"
-                    
+                    hd_count=$(printf '%s' "$result_json" | jq -r '.hd_count // 0' 2>/dev/null || echo 0)
+                    log_success "Prepared receptor: $base_name (${elapsed}s, polar H atoms: ${hd_count})"
                 else
                     log_error "Invalid output file: $pdbqt_file"
                     append_report_row "$RECEPTOR_FAILURE_REPORT" "receptor" "$pdb_file" "failed" "invalid_pdbqt_output" "$pdbqt_file"
                     rm -f "$pdbqt_file"
                 fi
             else
-                log_error "Failed to prepare receptor: $pdb_file"
-                append_report_row "$RECEPTOR_FAILURE_REPORT" "receptor" "$pdb_file" "failed" "backend_conversion_failed" ""
-            fi
-            
-            # Clean up intermediate files
-            if [[ "$used_clean_intermediate" == "true" ]]; then
-                rm -f "$pqr_file" "$clean_pdb"
-            else
-                rm -f "$pqr_file"
+                log_error "Failed to prepare receptor: $pdb_file (reason: $reason)"
+                if [[ -n "$details" ]]; then
+                    log_error "Receptor preparation details: $details"
+                fi
+                append_report_row "$RECEPTOR_FAILURE_REPORT" "receptor" "$pdb_file" "failed" "$reason" "$details"
             fi
     done
-    
+
     echo # New line after progress
     local success_count=$(find "$output_dir" -name "*.pdbqt" -type f | wc -l)
-    log_success "Receptor preparation completed: $success_count/$total_files files"
+    log_info "Receptor preparation finished: $success_count/$total_files PDBQT outputs"
 }
 
 # ── Main Execution ─────────────────────────────────────────────────────────
 main() {
+    require_config_argument
+
+    # Load configuration
+    load_config
+    setup_log_file
+
     log_info "Starting Enhanced AutoDock Preparation Script"
     log_info "Configuration file: $CONFIG_FILE"
     log_info "Log file: $LOG_FILE"
-    
-    # Load configuration
-    load_config
-    
+
     # Check dependencies
     check_dependencies
     
@@ -1037,7 +964,15 @@ main() {
     local total_ligands=$(find "$ligands_output" -name "*.pdbqt" -type f 2>/dev/null | wc -l)
     local total_receptors=$(find "$receptors_output" -name "*.pdbqt" -type f 2>/dev/null | wc -l)
     
-    log_success "Preparation completed successfully!"
+    local receptor_failure_count=0
+    if [[ -f "$RECEPTOR_FAILURE_REPORT" ]]; then
+        receptor_failure_count=$(( $(wc -l < "$RECEPTOR_FAILURE_REPORT") - 1 ))
+    fi
+    if [[ $receptor_failure_count -gt 0 ]]; then
+        log_error "Preparation finished with $receptor_failure_count receptor failure(s); failed receptors have no PDBQT output: $RECEPTOR_FAILURE_REPORT"
+    else
+        log_success "Preparation completed successfully!"
+    fi
     log_info "Ligands prepared: $total_ligands"
     log_info "Receptors prepared: $total_receptors"
     log_info "Log file saved: $LOG_FILE"

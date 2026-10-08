@@ -7,13 +7,13 @@
 
 ## Gate 4 — Implementation
 
-- [ ] **T003** (R1) Single layout-profile resolver. Replace hard-coded `"docking_legacy"` in workflow steps (`workflow/execution.py`, `workflow/interactive.py`) with the manifest-recorded profile. A missing manifest keeps today's legacy initialisation.
-- [ ] **T004** (R2a) Port `receptor_preparation.py`, `structure_contract.py` and the needed `receptor_quality.py` changes from `main@7fc130a`, without touching Spec 031/032 modules.
-- [ ] **T005** (R2b) Route shell receptor preparation through the strict module. Remove the silent `obabel -xr` fallback and report missing backends explicitly.
-- [ ] **T006** (R2c) `receptor_use_pdb2pqr` defaults to `true`, with explicit pH and force field recorded in provenance.
-- [ ] **T007** (R2d) Polar-hydrogen gate for Vina-family receptors.
-- [ ] **T008** (R2e) Declare `pdb2pqr` and `meeko` in the dependency manifests and add a capability/version check.
-- [ ] **T009** (R3) Write preparation config and logs into the project, never the working directory.
+- [x] **T003** (R1) Single layout-profile resolver. Replace hard-coded `"docking_legacy"` in workflow steps (`workflow/execution.py`, `workflow/interactive.py`) with the manifest-recorded profile. A missing manifest keeps today's legacy initialisation.
+- [x] **T004** (R2a) Port `receptor_preparation.py`, `structure_contract.py` and the needed `receptor_quality.py` changes from `main@7fc130a`, without touching Spec 031/032 modules.
+- [x] **T005** (R2b) Route shell receptor preparation through the strict module. Remove the silent `obabel -xr` fallback and report missing backends explicitly.
+- [ ] **T006** (R2c) `receptor_use_pdb2pqr` defaults to `true`, with explicit pH and force field recorded in provenance. **Implemented but blocked:** with the default PDB2PQR settings, 1IEP chain A fails heavy-atom conservation (PDB2PQR adds a C-terminal OXT at GLN 498 and flips His295/His375/His396, Asn414, Gln252 and Thr272). The gate was not weakened. Scientific Lead decision required (see `decisions/pdb2pqr-heavy-atom-policy.md`).
+- [x] **T007** (R2d) Polar-hydrogen gate for Vina-family receptors.
+- [x] **T008** (R2e) Declare `pdb2pqr` and `meeko` in the dependency manifests and add a capability/version check.
+- [x] **T009** (R3) Write preparation config and logs into the project, never the working directory.
 
 ## Gates 5–10 — Verification
 
