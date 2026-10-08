@@ -1,0 +1,106 @@
+{
+  "schema_version": "spec031-evidence-v1",
+  "assessed_commit": "cfe3305",
+  "implementation_baseline": "9d7400c",
+  "generated_date": "2026-08-21",
+  "fixture_manifest": "test/fixtures/spec031/vina_1iep/fixture_manifest.json",
+  "findings": [
+    {"id": "F-01", "classification": "observed_artifact", "evidence": ["docs/appraisal_20260819/OmniDock_findings_package/raw_logs/post_docking_vina_stdout.txt"]},
+    {"id": "F-02", "classification": "verified_code", "evidence": ["post_docking_analysis/multi_engine_pipeline_impl.py"]},
+    {"id": "F-03", "classification": "verified_code", "evidence": ["test/test_dockforge_smoke.py", "workflow/execution.py"]},
+    {"id": "F-04", "classification": "verified_code", "evidence": ["requirements.txt", "post_docking_analysis/requirements.txt", "environment.yml"]},
+    {"id": "F-05", "classification": "verified_code", "evidence": ["setup.py"]},
+    {"id": "F-06", "classification": "verified_code", "evidence": ["post_docking_analysis/visualization_suite.py"]},
+    {"id": "F-07", "classification": "verified_code", "evidence": ["workflow/state.py", "post_docking_analysis/simplified_pipeline_impl.py", "post_docking_analysis/multi_engine_pipeline_impl.py"]},
+    {"id": "NMR-01", "classification": "verified_code", "evidence": ["docking/cli.py", "workflow/cli.py"]},
+    {"id": "NMR-02", "classification": "reported_unverified", "evidence": []},
+    {"id": "NMR-03", "classification": "verified_code", "evidence": ["post_docking_analysis/multi_engine_pipeline_impl.py", "post_docking_analysis/artifact_graph.py"]},
+    {"id": "NMR-04", "classification": "verified_code", "evidence": ["post_docking_analysis/engine_hpc_adapter.py", "post_docking_analysis/engine_detector.py"]},
+    {"id": "NMR-05", "classification": "verified_code", "evidence": ["docking/preparation/pairlist_builder.py", "post_docking_analysis/reference_policy.py", "post_docking_analysis/simplified_input_handler.py"]},
+    {"id": "NMR-06", "classification": "verified_code", "evidence": ["post_docking_analysis/redocking_validation.py", "post_docking_analysis/geometric_consensus.py"]},
+    {"id": "NMR-07", "classification": "verified_code", "evidence": ["docking/preparation/binding_site_center.py", "core_pipeline.py", "batch_pdb_preparation.py", "cli_pipeline.py"]},
+    {"id": "NMR-08", "classification": "reported_unverified", "evidence": []},
+    {"id": "NMR-09", "classification": "verified_code", "evidence": ["post_docking_analysis/atom_mapping.py", "post_docking_analysis/geometric_consensus.py", "post_docking_analysis/consensus.py", "post_docking_analysis/top_pose_selector.py"]},
+    {"id": "M-01", "classification": "verified_code", "evidence": ["post_docking_analysis/reference_policy.py", "post_docking_analysis/redocking_validation.py", "post_docking_analysis/simplified_pipeline_impl.py"]},
+    {"id": "M-02", "classification": "verified_code", "evidence": ["post_docking_analysis/consensus.py"]}
+  ],
+  "superseded_claims": [
+    {
+      "claim": "Vina outputs are routed through the GNINA parser",
+      "classification": "superseded_claim",
+      "reason": "Both the assessed and current Vina paths call parse_vina_pdbqt directly. The retained zero-row observation requires layout/tag reproduction."
+    }
+  ],
+  "nmrbox_evidence": {
+    "classification": "reported_unverified",
+    "missing": [
+      "sanitized 21-complex project tree",
+      "exact commands and profile",
+      "engine versions and executable/container identity",
+      "normalized score inputs",
+      "pose checksums",
+      "4ZBE and 6LL5 fixtures",
+      "truth labels and expected outputs"
+    ],
+    "status": "skipped_missing_configuration"
+  },
+  "implementation_verification": {
+    "date": "2026-08-19",
+    "working_tree_state": "uncommitted",
+    "focused_spec031": {
+      "status": "completed",
+      "passed": 31
+    },
+    "full_pytest": {
+      "status": "completed",
+      "passed": 138,
+      "skipped": 1,
+      "warnings": 16
+    },
+    "dockforge_smoke": {
+      "status": "completed",
+      "all_engine_dry_run": true,
+      "external_submission": false
+    },
+    "compileall": "completed",
+    "git_diff_check": "completed",
+    "external_hpc_or_cloud_execution": "skipped_disabled"
+  },
+  "gate_2_approval": {
+    "status": "approved",
+    "date": "2026-08-21",
+    "approver_role": "Scientific Lead",
+    "dependency_policy_approved": true,
+    "phase_b_code_status": "implemented_local_verification_complete",
+    "decision_records": [
+      "specs/031-appraisal-remediation-p0/decisions/atom-mapping.md",
+      "specs/031-appraisal-remediation-p0/decisions/consensus-v2.md",
+      "specs/031-appraisal-remediation-p0/decisions/grid-center.md",
+      "specs/031-appraisal-remediation-p0/decisions/reference-classification.md"
+    ],
+    "implementation_plan": "specs/031-appraisal-remediation-p0/phase_b_plan.md"
+  },
+  "phase_b_verification": {
+    "date": "2026-08-21",
+    "status": "completed",
+    "mapping_method": "spec031-atom-mapping-v1",
+    "mapping_backend": "networkx",
+    "mapping_backend_version_tested": "3.6.1",
+    "mapping_dependency_bound": ">=3.2,<4",
+    "consensus_method": "consensus_rank_geometry_qc_v2",
+    "center_method": "binding_site_center_v1",
+    "reference_method": "explicit_reference_metadata_v2",
+    "gate_2_focused": {"passed": 30},
+    "all_spec031": {"passed": 54, "warnings": 16},
+    "full_pytest": {"passed": 161, "skipped": 1, "warnings": 16},
+    "dockforge_smoke": "completed",
+    "compileall": "completed",
+    "git_diff_check": "completed",
+    "external_hpc_or_cloud_execution": "skipped_disabled",
+    "external_docking_execution": "skipped_disabled",
+    "nmrbox_reproduction": "skipped_missing_configuration",
+    "human_scientific_review": "approved",
+    "human_scientific_review_date": "2026-08-21",
+    "human_scientific_review_record": "specs/031-appraisal-remediation-p0/decisions/gate-2-implementation-acceptance.md"
+  }
+}

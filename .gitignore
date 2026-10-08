@@ -99,3 +99,7 @@ dmypy.json
 OmniDock_findings_*.zip
 ._*
 .DS_Store
+
+# Local-only progress snapshots and raw appraisal logs (tracked in Notion)
+docs/PROGRESS_FOR_OMAR.md
+docs/appraisal_20260819/

@@ -1,0 +1,72 @@
+# Spec Kit Workflow Overlay for OmniDock / DockForge
+# Defines the 11-stage quality and scientific review gates
+
+version: '1.0.0'
+project: 'OmniDock-Unified-Multi-Engine-Docking-and-Post-Docking-Analysis-Workflow'
+
+gates:
+  - id: 1_specification_approval
+    name: 'Specification Approved'
+    type: 'manual_human_gate'
+    description: 'Human scientific lead approves feature/fix specification, requirements, and scope.'
+    required: true
+
+  - id: 2_architecture_scientific_review
+    name: 'Architecture & Scientific Assumptions Reviewed'
+    type: 'manual_human_gate'
+    description: 'Review binding site, grid coordinates, protonation, tautomers, score models, and engine selections.'
+    required: true
+
+  - id: 3_tasks_generation
+    name: 'Implementation Tasks Generated'
+    type: 'automated_or_spec'
+    description: 'Tasks decomposed into small, reviewable, verifiable units with explicit verification commands.'
+    required: true
+
+  - id: 4_implementation
+    name: 'Implementation (Surgical & Bounded)'
+    type: 'code_execution'
+    description: 'Implement only approved task scope without speculative refactoring or unapproved renames.'
+    required: true
+
+  - id: 5_lint_format_type
+    name: 'Format, Lint & Syntax Checks'
+    type: 'automated_check'
+    command: 'python -m compileall -q .'
+    required: true
+
+  - id: 6_unit_contract_tests
+    name: 'Unit & Contract Tests'
+    type: 'automated_check'
+    command: 'pytest test/test_webui.py'
+    required: true
+
+  - id: 7_bioinformatics_fixture_run
+    name: 'Minimal Bioinformatics Fixture Run'
+    type: 'automated_check'
+    command: 'python test/test_dockforge_smoke.py --skip-all-engines --skip-prep-matrix'
+    required: true
+
+  - id: 8_io_schema_validation
+    name: 'Input / Output Schema Validation'
+    type: 'automated_check'
+    description: 'Validate parameter schemas, pairlist schemas, and output directory layout.'
+    required: true
+
+  - id: 9_workflow_lint_cache_check
+    name: 'Workflow Lint & DAG Cache Check'
+    type: 'automated_check'
+    description: 'Verify DAG node statuses, cache keys, and cache invalidation on parameter changes.'
+    required: true
+
+  - id: 10_provenance_manifest_generated
+    name: 'Provenance Manifest Generated'
+    type: 'automated_check'
+    description: 'Verify run_tracking/manifest.json and SHA-256 checksums of input/output artifacts.'
+    required: true
+
+  - id: 11_human_scientific_review
+    name: 'Human Scientific Review & Sign-Off'
+    type: 'manual_human_gate'
+    description: 'Final review by scientific lead before commit, push, merge, or HPC/production run.'
+    required: true
