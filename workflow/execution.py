@@ -636,7 +636,7 @@ def run_pdb_collect(
     from cli_pipeline import EXCEL_AVAILABLE, parse_pdb_list, run_single_pdb_cli
     from interactive_pipeline import run_single_pdb_analysis
     from core_pipeline import MolecularDockingPipeline
-    from docking.project_layout import ensure_project_layout, load_manifest
+    from docking.project_layout import ensure_project_layout, load_manifest, resolve_layout_profile
 
     if not EXCEL_AVAILABLE:
         raise RuntimeError("openpyxl is required for project-aware PDB collection")
@@ -644,7 +644,7 @@ def run_pdb_collect(
     root = Path(project_dir).expanduser().resolve()
     if not is_canonical_project(str(root)):
         run_workflow_init(str(root), layout_profile="docking_legacy")
-    layout = ensure_project_layout(root, "docking_legacy")
+    layout = ensure_project_layout(root, resolve_layout_profile(root))
     pdb_list = parse_pdb_list(pdbs)
     pipeline = MolecularDockingPipeline(str(layout["raw_proteins"]))
 
@@ -794,12 +794,19 @@ def run_prepare_pairlist(
     from docking.preparation.pair_curation import materialize_pair_curation_round, upsert_pair_curation_round
     from docking.preparation.pairlist_builder import build_pairlists
     from docking.preparation.project_aliases import ensure_project_alias_files, prompt_project_aliases
-    from docking.project_layout import ensure_project_layout, load_manifest, pair_curation_state_path, save_manifest
+    from docking.project_layout import (
+        ensure_project_layout,
+        load_manifest,
+        pair_curation_state_path,
+        resolve_layout_profile,
+        save_manifest,
+    )
 
     root = Path(project_dir).expanduser().resolve()
     if not is_canonical_project(str(root)):
         run_workflow_init(str(root), layout_profile="docking_legacy")
-    layout = ensure_project_layout(root, "docking_legacy")
+    layout_profile = resolve_layout_profile(root)
+    layout = ensure_project_layout(root, layout_profile)
     manifest = load_manifest(root)
     resolved_prepared_proteins = Path(
         prepared_proteins or manifest.get("prepared_proteins_dir") or layout["prepared_proteins"]
@@ -810,7 +817,6 @@ def run_prepare_pairlist(
     resolved_excel = Path(
         excel_path or manifest.get("source_paths", {}).get("excel_path") or (layout["raw_proteins"] / "multi_pdb_analysis.xlsx")
     ).expanduser().resolve()
-    layout_profile = manifest.get("layout_profile", "docking_legacy") or "docking_legacy"
     if not resolved_excel.exists():
         nested_workbooks = sorted(root.glob("*/2-Raw_Protien/multi_pdb_analysis.xlsx"))
         detail = ""

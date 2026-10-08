@@ -33,6 +33,7 @@ from docking.project_layout import (
     pair_intent_path,
     pairlist_path,
     post_docking_root,
+    resolve_layout_profile,
     shared_receptors_dir,
 )
 from docking.hpc_profiles import load_hpc_profile, resolve_remote_project_dir, resolve_ssh_target
@@ -683,7 +684,7 @@ def _resolve_engine_selection(selection: str) -> List[str]:
 
 
 def _project_layout(project_root: Path) -> Dict[str, Path]:
-    return ensure_project_layout(project_root, "docking_legacy")
+    return ensure_project_layout(project_root, resolve_layout_profile(project_root))
 
 
 def _shared_naming_dir(project_root: Path) -> Path:
@@ -1303,6 +1304,7 @@ def _materialize_project(questionary, project_root: Path) -> None:
         return
 
     manifest = load_manifest(project_root)
+    layout_profile = resolve_layout_profile(project_root)
     engine_selection = _select(
         questionary,
         "Prepare docking folders for which panels?",
@@ -1319,16 +1321,16 @@ def _materialize_project(questionary, project_root: Path) -> None:
         "--output",
         str(project_root),
         "--layout-profile",
-        "docking_legacy",
+        layout_profile,
         "--asset-mode",
         "copy",
         "--engines",
         ",".join(_resolve_engine_selection(engine_selection)),
         "--pairlist-file",
-        str(pairlist_path(project_root, "docking_legacy")),
+        str(pairlist_path(project_root, layout_profile)),
     ]
-    if pair_intent_path(project_root, "docking_legacy").exists():
-        argv.extend(["--pair-intent", str(pair_intent_path(project_root, "docking_legacy"))])
+    if pair_intent_path(project_root, layout_profile).exists():
+        argv.extend(["--pair-intent", str(pair_intent_path(project_root, layout_profile))])
     result = run_prepare_project(argv)
     print(f"Project materialization status: {result.status}")
 

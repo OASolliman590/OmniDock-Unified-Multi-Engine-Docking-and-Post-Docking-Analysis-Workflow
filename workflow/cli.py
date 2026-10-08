@@ -403,7 +403,12 @@ Examples:
     prep_project.add_argument("--asset-mode", choices=["symlink", "copy"], default="symlink")
     prep_project.add_argument("--engines", default="gnina,vina,smina,autodock4")
     prep_project.add_argument("--project-name")
-    prep_project.add_argument("--layout-profile", choices=["canonical", "docking_legacy"], default="docking_legacy")
+    prep_project.add_argument(
+        "--layout-profile",
+        choices=["canonical", "docking_legacy"],
+        default=None,
+        help="Defaults to the project's recorded profile; new projects use docking_legacy",
+    )
     prep_project.add_argument(
         "--pair-mode",
         choices=["manual", "protein-based", "cocrystal_only", "cocrystal_plus_all", "curated_cartesian", "curated_per_protein"],
@@ -1579,9 +1584,16 @@ def _hydrate_project_prep_defaults(args: argparse.Namespace) -> None:
             )
         return
 
-    from docking.project_layout import ensure_project_layout, load_manifest, pair_intent_path, pairlist_path
+    from docking.project_layout import (
+        ensure_project_layout,
+        load_manifest,
+        pair_intent_path,
+        pairlist_path,
+        resolve_layout_profile,
+    )
 
     project_root = Path(args.project_dir).expanduser().resolve()
+    args.layout_profile = args.layout_profile or resolve_layout_profile(project_root)
     layout = ensure_project_layout(project_root, args.layout_profile)
     manifest = load_manifest(project_root)
     args.output = args.output or str(project_root)

@@ -128,6 +128,41 @@ NUMBERED_OUTPUT_TOPOLOGY = {
 }
 
 
+def _recorded_layout_profile(project_root: Path) -> Optional[str]:
+    """
+    Return the layout profile recorded inside an existing project manifest.
+
+    Reads the manifest files directly (not through manifest_path) so that this
+    helper can be used by detect_layout_profile without recursion. A manifest
+    that sits where its own recorded profile would place it (4-Docking/ for
+    docking_legacy, the project root for canonical) takes precedence. Otherwise
+    the first recorded profile found (checking 4-Docking/ before the root) is
+    used, so a stray manifest left by an earlier run cannot override the one
+    written at the recorded location.
+    """
+    root = Path(project_root).expanduser().resolve()
+    locations = {
+        LAYOUT_DOCKING_LEGACY: root / DOCKING_LEGACY_DIRS["docking_root"] / "project_manifest.json",
+        LAYOUT_CANONICAL: root / "project_manifest.json",
+    }
+    recorded: Dict[Path, str] = {}
+    for location in locations.values():
+        if not location.is_file():
+            continue
+        try:
+            with open(location, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        value = payload.get("layout_profile") if isinstance(payload, dict) else None
+        if value in LAYOUT_PROFILES:
+            recorded[location] = value
+    for profile, location in locations.items():
+        if recorded.get(location) == profile:
+            return profile
+    return next(iter(recorded.values()), None)
+
+
 def detect_layout_profile(project_root: Path, requested: Optional[str] = None) -> str:
     if requested:
         if requested not in LAYOUT_PROFILES:
@@ -135,9 +170,23 @@ def detect_layout_profile(project_root: Path, requested: Optional[str] = None) -
         return requested
 
     root = Path(project_root).expanduser().resolve()
+    recorded = _recorded_layout_profile(root)
+    if recorded:
+        return recorded
     if (root / DOCKING_LEGACY_DIRS["docking_root"]).exists():
         return LAYOUT_DOCKING_LEGACY
     return LAYOUT_CANONICAL
+
+
+def resolve_layout_profile(project_root: Path) -> str:
+    """
+    Layout profile that workflow steps must use for a project.
+
+    The profile recorded in the project manifest wins. Projects without a
+    recorded manifest keep the legacy default that workflow steps have always
+    used for them.
+    """
+    return _recorded_layout_profile(Path(project_root)) or LAYOUT_DOCKING_LEGACY
 
 
 def docking_root(project_root: Path, layout_profile: Optional[str] = None) -> Path:
