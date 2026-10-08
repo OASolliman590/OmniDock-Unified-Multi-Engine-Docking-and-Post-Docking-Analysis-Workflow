@@ -65,8 +65,6 @@ LIGPLOT_PARSED_SUMMARY.json
 latest_run.txt
 preparation_report.json
 hpc_manual_transfer/
-.specify/
-AGENTS.md
 STATUS.md
 closing_thesis/run_manifest*.json
 closing_thesis/*manifest*.json
@@ -95,3 +93,9 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Local test scratch, findings bundles, macOS metadata
+.pytest_tmp*/
+OmniDock_findings_*.zip
+._*
+.DS_Store
