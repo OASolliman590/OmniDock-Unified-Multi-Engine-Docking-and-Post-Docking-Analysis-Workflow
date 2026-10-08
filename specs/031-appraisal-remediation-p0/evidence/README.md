@@ -12,3 +12,7 @@ Evidence states:
 The retained 1IEP fixture is an offline parsing/post-docking regression. It does not select a new biological protocol and does not prove affinity, selectivity, mechanism, or efficacy. Unknown preparation parameters remain unknown.
 
 No NMRbox/HPC execution, upload, or remote mutation is part of this evidence package.
+
+Software re-verification records (separate from scientific evidence):
+
+- `software_linux_20261008.md`: clean-clone Linux run, Open Babel 3.2.1, full pytest and smoke.
