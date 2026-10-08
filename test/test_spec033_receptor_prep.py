@@ -19,6 +19,7 @@ import pytest
 
 from docking.preparation.receptor_preparation import (
     ReceptorPreparationError,
+    check_receptor_conservation,
     polar_hydrogen_gate,
     prepare_receptor,
     receptor_backend_capabilities,
@@ -163,6 +164,134 @@ def test_synthetic_heavy_atom_move_is_detected(tmp_path, monkeypatch):
         prepare_receptor(source, destination, _config(receptor_use_pdb2pqr=False))
     assert excinfo.value.reason == "heavy_atom_conservation_failed"
     assert not destination.exists()
+
+
+# ---------------------------------------------------------------- terminal additions (decision option 1)
+
+# Two residues of chain A: GLY 1 and GLY 2 (the C-terminus). Each residue has N, CA, C, O.
+TWO_RESIDUE_CHAIN = [
+    ("N", "GLY", "A", 1, (0.0, 0.0, 0.0), "N"),
+    ("CA", "GLY", "A", 1, (1.45, 0.0, 0.0), "C"),
+    ("C", "GLY", "A", 1, (2.0, 1.4, 0.0), "C"),
+    ("O", "GLY", "A", 1, (1.3, 2.4, 0.0), "O"),
+    ("N", "GLY", "A", 2, (3.5, 1.8, 0.0), "N"),
+    ("CA", "GLY", "A", 2, (4.9, 1.8, 0.0), "C"),
+    ("C", "GLY", "A", 2, (5.5, 3.2, 0.0), "C"),
+    ("O", "GLY", "A", 2, (4.8, 4.2, 0.0), "O"),
+]
+# Output rendering: PDBQT types (O becomes OA). Added atoms are passed in with their PDBQT type.
+TERMINAL_O_POSITION = (6.8, 3.4, 0.6)
+
+
+def _pdb_atom_line(serial, name, resname, chain, resseq, xyz, element):
+    x, y, z = xyz
+    return (
+        f"ATOM  {serial:5d} {name:<4s} {resname:>3s} {chain}{resseq:4d}    "
+        f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00          {element:>2s}"
+    )
+
+
+def _pdbqt_atom_line(serial, name, resname, chain, resseq, xyz, atom_type):
+    x, y, z = xyz
+    return (
+        f"ATOM  {serial:5d} {name:<4s} {resname:>3s} {chain}{resseq:4d}    "
+        f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00    {0.0:6.3f} {atom_type}"
+    )
+
+
+def _conservation(tmp_path, source_atoms, output_atoms, allow_terminal_additions=True):
+    source = _write(
+        tmp_path / "src.pdb",
+        "\n".join(_pdb_atom_line(i + 1, *atom) for i, atom in enumerate(source_atoms)) + "\nEND\n",
+    )
+    prepared = _write(
+        tmp_path / "out.pdbqt",
+        "\n".join(_pdbqt_atom_line(i + 1, *atom) for i, atom in enumerate(output_atoms)) + "\n",
+    )
+    return check_receptor_conservation(source, prepared, allow_terminal_additions)
+
+
+def _rendered(atoms):
+    """Output rendering of the source atoms: oxygens become PDBQT type OA."""
+    return [(n, r, c, s, xyz, "OA" if el == "O" else el) for (n, r, c, s, xyz, el) in atoms]
+
+
+def test_a_terminal_carboxylate_oxygen_on_last_residue_is_accepted_and_recorded(tmp_path):
+    output = _rendered(TWO_RESIDUE_CHAIN) + [("OXT", "GLY", "A", 2, TERMINAL_O_POSITION, "OA")]
+    accepted = _conservation(tmp_path, TWO_RESIDUE_CHAIN, output)
+    assert accepted == [{"chain": "A", "residue": "GLY", "resseq": 2, "atom": "OXT", "element": "O"}]
+
+
+def test_a2_same_addition_is_refused_when_pdb2pqr_is_not_used(tmp_path):
+    output = _rendered(TWO_RESIDUE_CHAIN) + [("OXT", "GLY", "A", 2, TERMINAL_O_POSITION, "OA")]
+    with pytest.raises(ReceptorPreparationError) as excinfo:
+        _conservation(tmp_path, TWO_RESIDUE_CHAIN, output, allow_terminal_additions=False)
+    assert excinfo.value.reason == "heavy_atom_conservation_failed"
+
+
+def test_b_added_atom_on_non_terminal_residue_fails(tmp_path):
+    output = _rendered(TWO_RESIDUE_CHAIN) + [("OX", "GLY", "A", 1, TERMINAL_O_POSITION, "OA")]
+    with pytest.raises(ReceptorPreparationError) as excinfo:
+        _conservation(tmp_path, TWO_RESIDUE_CHAIN, output)
+    assert excinfo.value.reason == "heavy_atom_conservation_failed"
+    assert "GLY 1:OX" in excinfo.value.details
+
+
+def test_b2_added_non_oxygen_at_terminus_fails(tmp_path):
+    output = _rendered(TWO_RESIDUE_CHAIN) + [("CX", "GLY", "A", 2, TERMINAL_O_POSITION, "C")]
+    with pytest.raises(ReceptorPreparationError) as excinfo:
+        _conservation(tmp_path, TWO_RESIDUE_CHAIN, output)
+    assert excinfo.value.reason == "heavy_atom_conservation_failed"
+    assert "GLY 2:CX" in excinfo.value.details
+
+
+def test_c_two_added_oxygens_at_one_terminus_fail(tmp_path):
+    output = _rendered(TWO_RESIDUE_CHAIN) + [
+        ("OXT", "GLY", "A", 2, TERMINAL_O_POSITION, "OA"),
+        ("O", "GLY", "A", 2, (7.5, 3.4, 0.6), "OA"),
+    ]
+    with pytest.raises(ReceptorPreparationError) as excinfo:
+        _conservation(tmp_path, TWO_RESIDUE_CHAIN, output)
+    assert excinfo.value.reason == "heavy_atom_conservation_failed"
+    assert "more than one added carboxylate O" in excinfo.value.details
+
+
+# Chain A with an internal break: residues 1-2, a gap, then residues 5-6. Residue 2 is not a terminus.
+BROKEN_CHAIN = [
+    ("N", "GLY", "A", 1, (0.0, 0.0, 0.0), "N"), ("CA", "GLY", "A", 1, (1.45, 0.0, 0.0), "C"),
+    ("C", "GLY", "A", 1, (2.0, 1.4, 0.0), "C"), ("O", "GLY", "A", 1, (1.3, 2.4, 0.0), "O"),
+    ("N", "GLY", "A", 2, (3.5, 1.8, 0.0), "N"), ("CA", "GLY", "A", 2, (4.9, 1.8, 0.0), "C"),
+    ("C", "GLY", "A", 2, (5.5, 3.2, 0.0), "C"), ("O", "GLY", "A", 2, (4.8, 4.2, 0.0), "O"),
+    ("N", "GLY", "A", 5, (9.0, 0.0, 0.0), "N"), ("CA", "GLY", "A", 5, (10.4, 0.0, 0.0), "C"),
+    ("C", "GLY", "A", 5, (11.0, 1.4, 0.0), "C"), ("O", "GLY", "A", 5, (10.3, 2.4, 0.0), "O"),
+    ("N", "GLY", "A", 6, (12.5, 1.8, 0.0), "N"), ("CA", "GLY", "A", 6, (13.9, 1.8, 0.0), "C"),
+    ("C", "GLY", "A", 6, (14.5, 3.2, 0.0), "C"), ("O", "GLY", "A", 6, (13.8, 4.2, 0.0), "O"),
+]
+
+
+def test_d_added_oxygen_at_internal_chain_break_fails_but_true_terminus_passes(tmp_path):
+    # Residue 2 precedes the gap: it is not the C-terminus, so an added O there must fail.
+    internal = _rendered(BROKEN_CHAIN) + [("OX", "GLY", "A", 2, TERMINAL_O_POSITION, "OA")]
+    with pytest.raises(ReceptorPreparationError) as excinfo:
+        _conservation(tmp_path, BROKEN_CHAIN, internal)
+    assert excinfo.value.reason == "heavy_atom_conservation_failed"
+    assert "GLY 2:OX" in excinfo.value.details
+    # Residue 6 is the true C-terminus of the chain: the same addition there is accepted.
+    terminal = _rendered(BROKEN_CHAIN) + [("OXT", "GLY", "A", 6, (15.2, 3.4, 0.6), "OA")]
+    accepted = _conservation(tmp_path / "terminal", BROKEN_CHAIN, terminal)
+    assert [entry["resseq"] for entry in accepted] == [6]
+
+
+def test_e_moved_heavy_atom_still_fails_even_with_a_terminal_addition(tmp_path):
+    moved = [
+        (n, r, c, s, (1.3, 2.9, 0.0) if (n, s) == ("O", 1) else xyz, "OA" if el == "O" else el)
+        for (n, r, c, s, xyz, el) in TWO_RESIDUE_CHAIN
+    ]
+    output = moved + [("OXT", "GLY", "A", 2, TERMINAL_O_POSITION, "OA")]
+    with pytest.raises(ReceptorPreparationError) as excinfo:
+        _conservation(tmp_path, TWO_RESIDUE_CHAIN, output)
+    assert excinfo.value.reason == "heavy_atom_conservation_failed"
+    assert "GLY 1:O" in excinfo.value.details
 
 
 # ---------------------------------------------------------------- backends on PATH (R2b, R2c)
@@ -370,37 +499,25 @@ def _chain_a_protein(tmp_path: Path) -> Path:
 
 
 @REQUIRES_1IEP_TOOLS
-def test_1iep_chain_a_pdb2pqr_default_is_refused_on_heavy_atom_change(tmp_path):
-    # Observed on pdb2pqr 3.4.1 (AMBER, pH 7.4): PDB2PQR adds a terminal carboxylate oxygen at
-    # GLN 498 and moves His 295/375/396, Asn 414, Gln 252 and Thr 272 side-chain atoms. The strict
-    # conservation gate must fail closed with a precise reason, not weaken the check.
-    source = _chain_a_protein(tmp_path)
-    destination = tmp_path / "out" / "1IEP_chainA_receptor.pdbqt"
-    with pytest.raises(ReceptorPreparationError) as excinfo:
-        prepare_receptor(source, destination, _config())
-    assert excinfo.value.reason == "heavy_atom_conservation_failed"
-    assert "GLN 498" in excinfo.value.details
-    assert not destination.exists()
-
-
-@REQUIRES_1IEP_TOOLS
-@pytest.mark.xfail(
-    strict=True,
-    raises=ReceptorPreparationError,
-    reason=(
-        "Spec 033 acceptance 3 is blocked by a Scientific Lead decision: PDB2PQR changes heavy atoms "
-        "of 1IEP chain A (C-terminal O at GLN 498; His/Asn/Gln/Thr side-chain flips). The strict "
-        "conservation gate refuses it. See test_1iep_chain_a_pdb2pqr_default_is_refused_on_heavy_atom_change."
-    ),
-)
 def test_1iep_chain_a_pdb2pqr_receptor_is_prepared_at_ph_7_4(tmp_path):
+    # Spec 033 acceptance 3 under decision option 1: --noopt --nodebump, pH 7.4, AMBER. The only
+    # accepted heavy-atom change is the C-terminal carboxylate O of GLN 498 (chain A).
     source = _chain_a_protein(tmp_path)
     destination = tmp_path / "out" / "1IEP_chainA_receptor.pdbqt"
     payload = prepare_receptor(source, destination, _config())
+    assert destination.is_file()
     assert payload["protonation_status"] == "pdb2pqr_applied"
     assert payload["requested_ph"] == 7.4
+    assert payload["pdb2pqr_options"] == ["--noopt", "--nodebump", "--keep-chain"]
     assert payload["hd_count"] > 0
-    assert payload["heavy_atom_conservation"] == "passed"
+    assert payload["hd_near_nitrogen_count"] > 0
+    assert payload["accepted_terminal_additions"] == [
+        {"chain": "A", "residue": "GLN", "resseq": 498, "atom": "O", "element": "O"}
+    ]
+    assert payload["heavy_atom_count"] == 2229
+    assert payload["output_heavy_atom_count"] == 2230
+    assert payload["heavy_atom_conservation"] == "passed_with_terminal_additions"
+    assert payload["output_sha256"] == hashlib.sha256(destination.read_bytes()).hexdigest()
 
 
 @REQUIRES_1IEP_TOOLS

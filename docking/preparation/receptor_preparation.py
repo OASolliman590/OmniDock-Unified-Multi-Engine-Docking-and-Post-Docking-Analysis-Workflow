@@ -13,10 +13,12 @@ Ported from main@7fc130a and extended for Spec 033:
 - Provenance JSON (backend, tool versions, commands, hashes, pH, protonation
   status) and a preparation log are written next to the output.
 
-Scientific limitations (disclosed, not solved here): PDB2PQR removes HETATM
-records, and its hydrogen-bond optimisation can flip His/Asn/Gln side chains.
-It also adds terminal atoms such as C-terminal OXT. Any of these changes a
-heavy atom and fails the conservation gate, by design.
+Heavy-atom policy (Spec 033 decision, option 1, Scientific Lead 2026-10-08): with PDB2PQR
+the run uses --noopt --nodebump, so no side chain is flipped. Removed or moved heavy atoms
+always fail. An added heavy atom is accepted only as a C-terminal carboxylate O (name O or
+OXT) on the last residue of a chain, at most one per terminus; it is recorded in provenance.
+Any other addition fails. The explicit receptor_use_pdb2pqr=false path accepts no additions.
+PDB2PQR removes HETATM records (ligands, ions, waters), so those fail conservation.
 
 The CLI prints one JSON object on stdout. Success is ``{"status": "completed"}``
 and exit code 0. Failure is ``{"status": "failed", "reason": ..., "details": ...}``
@@ -35,7 +37,7 @@ import subprocess
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from .receptor_quality import validate_receptor_file
 from .structure_contract import coordinates
@@ -47,6 +49,11 @@ PDB2PQR_FORCE_FIELDS = ("AMBER", "CHARMM", "PARSE", "TYL06", "PEOEPB", "SWANSON"
 DEFAULT_PH = 7.4
 DEFAULT_FORCE_FIELD = "AMBER"
 HD_NITROGEN_MAX_DISTANCE = 1.1  # Angstrom; N-H bond length ceiling for HD-N association
+# Spec 033 decision (option 1): no side-chain flip or debump optimisation. --keep-chain only labels
+# chains so that terminal additions can be attributed to a chain; it does not move atoms.
+PDB2PQR_OPTIONS = ("--noopt", "--nodebump", "--keep-chain")
+# Carboxylate oxygens that PDB2PQR may add at a C-terminus (names as in the PDB2PQR and Meeko outputs).
+TERMINAL_CARBOXYLATE_ATOM_NAMES = ("O", "OXT")
 
 PROTONATION_PDB2PQR = "pdb2pqr_applied"
 PROTONATION_TEMPLATE = "template_selected_not_ph_titrated"
@@ -108,9 +115,20 @@ def _atom_element(line: str, pdbqt: bool) -> str:
     return element.upper()
 
 
-def _heavy_atoms(path: Path, pdbqt: bool = False) -> List[Tuple[Tuple[str, float, float, float], str]]:
-    """Heavy atoms as (signature, label); signature = (element, x, y, z) at 0.01 A."""
-    atoms = []
+class _HeavyAtom(NamedTuple):
+    signature: Tuple[str, float, float, float]  # (element, x, y, z) rounded to 0.01 A
+    chain: str
+    resname: str
+    resseq: int
+    atom: str
+
+    @property
+    def label(self) -> str:
+        return f"{self.resname} {self.resseq}:{self.atom}"
+
+
+def _heavy_atoms(path: Path, pdbqt: bool = False) -> List[_HeavyAtom]:
+    atoms: List[_HeavyAtom] = []
     try:
         for line in Path(path).read_text(encoding="utf-8").splitlines():
             if not line.startswith(("ATOM  ", "HETATM")):
@@ -121,24 +139,106 @@ def _heavy_atoms(path: Path, pdbqt: bool = False) -> List[Tuple[Tuple[str, float
             if pdbqt:
                 element = _PDBQT_TYPE_TO_ELEMENT.get(element, element)
             xyz = [round(value, 2) for value in coordinates(line)]
-            label = f"{line[17:20].strip()} {line[22:26].strip()}:{line[12:16].strip()}"
-            atoms.append(((element, *xyz), label))
+            atoms.append(_HeavyAtom(
+                signature=(element, *xyz),
+                chain=line[21:22].strip(),
+                resname=line[17:20].strip(),
+                resseq=int(line[22:26]),
+                atom=line[12:16].strip(),
+            ))
     except ValueError as exc:
         raise ReceptorPreparationError("invalid_coordinates", f"{path.name}: {exc}") from exc
     return atoms
 
 
-def _unmatched(source_atoms, target_atoms) -> List[str]:
-    """Labels of source heavy atoms that have no identical counterpart in target."""
-    remaining = Counter(signature for signature, _ in target_atoms)
+def _unmatched(source_atoms: List[_HeavyAtom], target_atoms: List[_HeavyAtom]) -> List[_HeavyAtom]:
+    """Source heavy atoms that have no identical (element, position) counterpart in target."""
+    remaining = Counter(atom.signature for atom in target_atoms)
     unmatched = []
-    for signature, label in source_atoms:
-        if remaining[signature] > 0:
-            remaining[signature] -= 1
+    for atom in source_atoms:
+        if remaining[atom.signature] > 0:
+            remaining[atom.signature] -= 1
         else:
-            unmatched.append(label)
+            unmatched.append(atom)
     return unmatched
 
+
+def _chain_termini(source_path: Path) -> Dict[str, int]:
+    """Highest residue number per chain in the input ATOM records (C-terminal residue).
+
+    Internal chain breaks are not termini: only the highest residue number counts.
+    """
+    termini: Dict[str, int] = {}
+    try:
+        for line in Path(source_path).read_text(encoding="utf-8").splitlines():
+            if line.startswith("ATOM  "):
+                chain = line[21:22].strip()
+                termini[chain] = max(termini.get(chain, int(line[22:26])), int(line[22:26]))
+    except ValueError as exc:
+        raise ReceptorPreparationError("invalid_coordinates", f"{Path(source_path).name}: {exc}") from exc
+    return termini
+
+
+def check_heavy_atom_conservation(
+    source_atoms: List[_HeavyAtom],
+    prepared_atoms: List[_HeavyAtom],
+    termini: Dict[str, int],
+    allow_terminal_additions: bool,
+) -> List[Dict[str, Any]]:
+    """Strict heavy-atom conservation (Spec 033 decision, option 1).
+
+    Removed or moved source heavy atoms always fail. An added heavy atom is accepted only
+    when allow_terminal_additions is set (PDB2PQR path), it is an oxygen named O or OXT on the
+    last residue of its chain, and there is at most one such addition per chain terminus.
+    Returns the accepted terminal additions. Raises ReceptorPreparationError otherwise.
+    """
+    removed = _unmatched(source_atoms, prepared_atoms)
+    added = _unmatched(prepared_atoms, source_atoms)
+    if removed:
+        raise ReceptorPreparationError(
+            "heavy_atom_conservation_failed",
+            f"{len(removed)} source heavy atom(s) missing or moved. Missing/moved: {[a.label for a in removed[:20]]}. "
+            f"Added/moved: {[a.label for a in added[:20]]}",
+        )
+    accepted: List[_HeavyAtom] = []
+    rejected: List[_HeavyAtom] = []
+    for atom in added:
+        is_terminal_oxygen = (
+            allow_terminal_additions
+            and atom.signature[0] == "O"
+            and atom.atom in TERMINAL_CARBOXYLATE_ATOM_NAMES
+            and termini.get(atom.chain) == atom.resseq
+        )
+        (accepted if is_terminal_oxygen else rejected).append(atom)
+    if rejected:
+        raise ReceptorPreparationError(
+            "heavy_atom_conservation_failed",
+            f"{len(added)} output heavy atom(s) added; only a C-terminal carboxylate O on the last residue of a chain "
+            f"is accepted. Rejected additions: {[a.label for a in rejected[:20]]}",
+        )
+    per_terminus = Counter((atom.chain, atom.resseq) for atom in accepted)
+    overfilled = sorted(key for key, count in per_terminus.items() if count > 1)
+    if overfilled:
+        raise ReceptorPreparationError(
+            "heavy_atom_conservation_failed",
+            f"more than one added carboxylate O at terminus (chain, residue) {overfilled}",
+        )
+    return [
+        {"chain": atom.chain, "residue": atom.resname, "resseq": atom.resseq, "atom": atom.atom, "element": "O"}
+        for atom in accepted
+    ]
+
+
+def check_receptor_conservation(
+    source_path: Path, prepared_path: Path, allow_terminal_additions: bool
+) -> List[Dict[str, Any]]:
+    """Read a source PDB and a prepared PDBQT, then apply check_heavy_atom_conservation."""
+    return check_heavy_atom_conservation(
+        _heavy_atoms(source_path),
+        _heavy_atoms(prepared_path, pdbqt=True),
+        _chain_termini(source_path),
+        allow_terminal_additions,
+    )
 
 def polar_hydrogen_gate(pdbqt_path: Path) -> Dict[str, Any]:
     """Count HD atoms and HD atoms within 1.1 A of a nitrogen donor (N or NA)."""
@@ -268,7 +368,7 @@ def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_l
         protonation_status = PROTONATION_TEMPLATE
         if use_pdb2pqr:
             pqr, converted = folder / "protonated.pqr", folder / "protonated.pdb"
-            run([PDB2PQR_EXECUTABLE, "--ff", force_field, "--with-ph", str(ph), str(source), str(pqr)], "pdb2pqr_failed")
+            run([PDB2PQR_EXECUTABLE, "--ff", force_field, "--with-ph", str(ph), *PDB2PQR_OPTIONS, str(source), str(pqr)], "pdb2pqr_failed")
             run([OPEN_BABEL_EXECUTABLE, str(pqr), "-O", str(converted)], "pqr_conversion_failed")
             prep_input = converted
             protonation_status = PROTONATION_PDB2PQR
@@ -291,14 +391,12 @@ def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_l
             raise ReceptorPreparationError("backend_output_missing", f"{backend} backend did not create its PDBQT output")
 
         prepared_atoms = _heavy_atoms(prepared, pdbqt=True)
-        removed = _unmatched(original_atoms, prepared_atoms)
-        added = _unmatched(prepared_atoms, original_atoms)
-        if removed or added:
-            raise ReceptorPreparationError(
-                "heavy_atom_conservation_failed",
-                f"{len(removed)} source heavy atom(s) missing or moved and {len(added)} output heavy atom(s) added or moved. "
-                f"Missing/moved: {removed[:20]}. Added/moved: {added[:20]}",
-            )
+        accepted_additions = check_heavy_atom_conservation(
+            original_atoms,
+            prepared_atoms,
+            _chain_termini(source),
+            allow_terminal_additions=use_pdb2pqr,
+        )
 
         issues = validate_receptor_file(prepared, min_atom_count=1, min_heavy_atom_count=1)
         if issues:
@@ -342,8 +440,11 @@ def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_l
         "requested_force_field": force_field,
         "protonation_status": protonation_status,
         "receptor_frame_id": prior.get("receptor_frame_id", prior.get("reference_frame_id", "")),
-        "heavy_atom_conservation": "passed",
+        "pdb2pqr_options": list(PDB2PQR_OPTIONS) if use_pdb2pqr else [],
+        "accepted_terminal_additions": accepted_additions,
+        "heavy_atom_conservation": "passed_with_terminal_additions" if accepted_additions else "passed",
         "heavy_atom_count": len(original_atoms),
+        "output_heavy_atom_count": len(prepared_atoms),
         "hd_count": gate["hd_count"],
         "hd_near_nitrogen_count": gate["hd_near_nitrogen_count"],
         "polar_hydrogen_gate": "passed",
