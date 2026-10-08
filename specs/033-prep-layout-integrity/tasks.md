@@ -17,9 +17,9 @@
 
 ## Gates 5–10 — Verification
 
-- [ ] **T010** Focused tests: canonical `prep pairlist` → `dock run --dry-run`; legacy project unchanged; receptor without H rejected; missing PDB2PQR/Meeko rejected; heavy-atom conservation; no files written to the working directory.
-- [ ] **T011** Full pytest, contract smoke, `compileall`, `git diff --check`; record exact counts in `evidence/`.
-- [ ] **T012** Re-run the bounded Spec 032 Phase 2 check (1IEP/STI, Vina) on the fixed pipeline and record software and scientific evidence separately.
+- [x] **T010** Focused tests: canonical `prep pairlist` → `dock run --dry-run`; legacy project unchanged; receptor without H rejected; missing PDB2PQR/Meeko rejected; heavy-atom conservation; no files written to the working directory.
+- [x] **T011** Full pytest, contract smoke, `compileall`, `git diff --check`; record exact counts in `evidence/`.
+- [x] **T012** Re-run the bounded Spec 032 Phase 2 check (1IEP/STI, Vina) on the fixed pipeline and record software and scientific evidence separately. Done: `evidence/phase2_1iep_run_20261008.md` (docking completed; Spec 031 mapping `not_comparable`; MD-export row `not_comparable` at G3).
 
 ## Gate 11 — Human review
 
