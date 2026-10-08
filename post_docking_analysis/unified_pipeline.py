@@ -111,7 +111,7 @@ class UnifiedPostDockingPipeline(MultiEngineAnalysisPipeline):
         favorite_engine = str(kwargs.get("favorite_engine") or "").strip().lower() or None
         requested_engines = kwargs.pop("engines", None)
         engine_preset = str(kwargs.pop("engine_preset", "") or "").strip()
-        redetect = bool(kwargs.pop("redetect", False))
+        redetect = bool(kwargs.pop("redetect", False) or dag_force)
         interactive_fallback = bool(kwargs.pop("interactive_fallback", False))
         manifest = {}
         try:
@@ -189,6 +189,7 @@ class UnifiedPostDockingPipeline(MultiEngineAnalysisPipeline):
         if effective_mode == "multi_engine":
             effective_mode = "comparative_all_engines"
         kwargs["analysis_mode"] = effective_mode
+        kwargs["force_score_rebuild"] = dag_force
         self.engine_detection_report = dict(scope_resolution["scoped_detection"])
         self.analysis_mode_requested = requested_mode
         super().__init__(*args, **kwargs)

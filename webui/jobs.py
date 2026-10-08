@@ -42,6 +42,9 @@ IDENTITY_MISMATCH = "mismatch"
 IDENTITY_UNVERIFIABLE = "unverifiable"
 
 _TERMINATE_GRACE_SECONDS = 5.0
+_JOB_IO_LOCK = threading.RLock()
+_JOB_READ_RETRIES = 10
+_JOB_READ_RETRY_SECONDS = 0.01
 
 # The job is launched under this tiny supervisor rather than directly.
 #
@@ -111,14 +114,29 @@ def _exit_marker(job_id: str) -> Path:
     return jobs_dir() / f"{job_id}.exit"
 
 
+def _read_job_payload(path: Path) -> dict:
+    """Read an atomically replaced job record through transient Windows locks."""
+    last_error: OSError | None = None
+    for attempt in range(_JOB_READ_RETRIES):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            last_error = exc
+            if attempt + 1 < _JOB_READ_RETRIES:
+                time.sleep(_JOB_READ_RETRY_SECONDS)
+    assert last_error is not None
+    raise last_error
+
+
 def save_job(job: Job) -> None:
     if job.status not in VALID_STATUSES:
         raise JobError(f"Invalid job status: {job.status}")
-    path = _job_file(job.job_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(job.to_dict(), indent=2), encoding="utf-8")
-    tmp.replace(path)
+    with _JOB_IO_LOCK:
+        path = _job_file(job.job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(job.to_dict(), indent=2), encoding="utf-8")
+        tmp.replace(path)
 
 
 def load_job(job_id: str) -> Job:
@@ -126,8 +144,9 @@ def load_job(job_id: str) -> Job:
     if not path.exists():
         raise JobError(f"No job with id {job_id}")
     try:
-        return Job(**json.loads(path.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, TypeError) as exc:
+        with _JOB_IO_LOCK:
+            return Job(**_read_job_payload(path))
+    except (json.JSONDecodeError, TypeError, OSError) as exc:
         raise JobError(f"Job record for {job_id} is unreadable: {exc}") from exc
 
 
@@ -136,15 +155,16 @@ def list_jobs(project_id: str | None = None) -> list[Job]:
     if not directory.exists():
         return []
     jobs: list[Job] = []
-    for path in directory.glob("*.json"):
-        if path.name.endswith(".json.tmp"):
-            continue
-        try:
-            job = Job(**json.loads(path.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if project_id is None or job.project_id == project_id:
-            jobs.append(job)
+    with _JOB_IO_LOCK:
+        for path in directory.glob("*.json"):
+            if path.name.endswith(".json.tmp"):
+                continue
+            try:
+                job = Job(**_read_job_payload(path))
+            except (json.JSONDecodeError, TypeError, OSError):
+                continue
+            if project_id is None or job.project_id == project_id:
+                jobs.append(job)
     return sorted(jobs, key=lambda j: j.created_at, reverse=True)
 
 

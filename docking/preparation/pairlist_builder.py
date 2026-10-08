@@ -57,6 +57,12 @@ PAIRLIST_COLUMNS = [
     "size_z",
     "protein_display_name",
     "ligand_display_name",
+    "pdb_id",
+    "pair_source",
+    "is_cocrystal_benchmark",
+    "cocrystal_ligand_name",
+    "cocrystal_ligand_display_name",
+    "selection_mode",
 ]
 
 
@@ -260,19 +266,19 @@ def generate_pairlists(
             "size_z": float(default_box_size),
             "protein_display_name": protein_display_name,
             "ligand_display_name": ligand_display_name,
+            "pdb_id": pdb_id,
+            "pair_source": pair_source,
+            "is_cocrystal_benchmark": bool(is_cocrystal_benchmark),
+            "cocrystal_ligand_name": cocrystal_ligand_name,
+            "cocrystal_ligand_display_name": cocrystal_ligand_display_name,
+            "selection_mode": selection_mode,
         }
         pairlist_rows.append(core_row.copy())
         pair_intent_rows.append(
             {
                 **core_row,
-                "pdb_id": pdb_id,
                 "protein_display_name": protein_display_name,
                 "ligand_display_name": ligand_display_name,
-                "pair_source": pair_source,
-                "is_cocrystal_benchmark": bool(is_cocrystal_benchmark),
-                "cocrystal_ligand_name": cocrystal_ligand_name,
-                "cocrystal_ligand_display_name": cocrystal_ligand_display_name,
-                "selection_mode": selection_mode,
             }
         )
 

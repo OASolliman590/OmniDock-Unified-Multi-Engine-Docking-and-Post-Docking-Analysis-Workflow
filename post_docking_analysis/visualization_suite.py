@@ -17,6 +17,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 from post_docking_analysis.protein_naming import format_protein_label
+from post_docking_analysis.reference_policy import reference_mask
 
 try:
     import matplotlib.pyplot as plt
@@ -160,23 +161,7 @@ def _resolve_engine_mode(scope_config: Mapping[str, object], normalized_scores: 
 def _detect_references(classified_hits: pd.DataFrame) -> bool:
     if classified_hits is None or classified_hits.empty:
         return False
-    frame = classified_hits.copy()
-    if "ligand_type" in frame.columns:
-        series = frame["ligand_type"].astype(str).str.lower()
-        if series.eq("reference").any():
-            return True
-    if "is_cocrystal_benchmark" in frame.columns:
-        series = frame["is_cocrystal_benchmark"].astype(str).str.lower()
-        if series.isin({"true", "1", "yes"}).any():
-            return True
-    if "tag" in frame.columns:
-        if frame["tag"].astype(str).str.contains("reference_", case=False, na=False).any():
-            return True
-    # DockForge co-crystal naming convention: {PDB_CODE}_ligand_{resname}_{chain}_{seqnum}
-    if "ligand" in frame.columns:
-        if frame["ligand"].astype(str).str.contains(_COCRYSTAL_LIGAND_RE).any():
-            return True
-    return False
+    return bool(reference_mask(classified_hits).any())
 
 
 def _validation_state(validation_gate: Mapping[str, object]) -> Tuple[str, bool]:
@@ -212,7 +197,7 @@ def _save_placeholder(path: Path, title: str, message: str) -> None:
 
 def _as_relative(path: Path, root: Path) -> str:
     try:
-        return str(path.resolve().relative_to(root.resolve()))
+        return path.resolve().relative_to(root.resolve()).as_posix()
     except Exception:
         return str(path.resolve())
 
@@ -254,17 +239,7 @@ def _ligand_label(value: object, *, reference: Optional[bool] = None) -> str:
 def _ligand_reference_mask(frame: pd.DataFrame) -> pd.Series:
     if frame is None or frame.empty:
         return pd.Series(dtype=bool)
-    mask = pd.Series(False, index=frame.index)
-    if "ligand_type" in frame.columns:
-        mask |= frame["ligand_type"].astype(str).str.lower().eq("reference")
-    if "is_cocrystal_benchmark" in frame.columns:
-        raw = frame["is_cocrystal_benchmark"]
-        mask |= raw.astype(str).str.lower().isin({"true", "1", "yes"})
-    if "tag" in frame.columns:
-        mask |= frame["tag"].astype(str).str.contains("reference_", case=False, na=False)
-    if "ligand" in frame.columns:
-        mask |= frame["ligand"].astype(str).apply(_is_reference_ligand)
-    return mask
+    return reference_mask(frame)
 
 
 def _group_ligand_columns(columns: Sequence[object]) -> Tuple[List[str], List[str]]:
@@ -370,6 +345,14 @@ def _normalize_class(value: object) -> str:
     if normalized == "Inactive":
         return "Inactive"
     return "Unclassified"
+
+
+def _map_frame_elements(frame: pd.DataFrame, function: Callable[[object], object]) -> pd.DataFrame:
+    """Apply an elementwise function across supported pandas versions."""
+    dataframe_map = getattr(frame, "map", None)
+    if callable(dataframe_map):
+        return dataframe_map(function)
+    return frame.applymap(function)  # pragma: no cover - pandas < 2.1 compatibility
 
 
 def _load_protein_name_map(mapping_file: Optional[Path]) -> Optional[Dict[str, Dict[str, str]]]:
@@ -977,10 +960,12 @@ def _plot_hit_class_matrix(ctx: PlotContext, output: Path) -> None:
         .unstack(fill_value="Unclassified")
     )
     class_order = {"Unclassified": 0, "Inactive": 1, "Weak": 2, "Moderate": 3, "Strong": 4}
-    numeric = pivot.applymap(lambda value: class_order.get(_normalize_class(value), 0))
-    selectivity = (pivot.applymap(lambda value: _normalize_class(value) in {"Strong", "Moderate"}).sum(axis=1)).astype(int)
+    numeric = _map_frame_elements(pivot, lambda value: class_order.get(_normalize_class(value), 0))
+    selectivity = (
+        _map_frame_elements(pivot, lambda value: _normalize_class(value) in {"Strong", "Moderate"}).sum(axis=1)
+    ).astype(int)
     numeric = numeric.loc[selectivity.sort_values(ascending=False).index]
-    strong_counts = (pivot.applymap(lambda value: _normalize_class(value) == "Strong").sum(axis=0)).astype(int)
+    strong_counts = _map_frame_elements(pivot, lambda value: _normalize_class(value) == "Strong").sum(axis=0).astype(int)
     numeric = numeric[strong_counts.sort_values(ascending=False).index]
 
     fig = plt.figure(figsize=(max(9, 0.55 * numeric.shape[1]), max(6, 0.45 * numeric.shape[0] + 1.5)))

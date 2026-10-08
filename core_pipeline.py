@@ -27,6 +27,7 @@ import pandas as pd
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Any
 import warnings
+from docking.preparation.binding_site_center import resolve_binding_site_center
 warnings.filterwarnings("ignore")
 
 # Add Excel support
@@ -709,8 +710,19 @@ class MolecularDockingPipeline:
         if not coords:
             raise ValueError("No coordinates extracted")
         
-        # Calculate average XYZ
-        avg_xyz = np.mean(coords, axis=0)
+        center_result = resolve_binding_site_center(
+            structure_file=Path(cleaned_pdb),
+            accession=Path(cleaned_pdb).stem,
+            ligand_name=ligand_name,
+            chain_id=chain_id,
+            residue_number=res_id,
+        )
+        if center_result.get('status') != 'completed':
+            raise ValueError(
+                f"Binding-site center unavailable: {center_result.get('status')}:"
+                f"{center_result.get('reason')}"
+            )
+        avg_xyz = np.asarray(center_result['binding_site_center'], dtype=float)
         print(f"✓ Active site center: X={avg_xyz[0]:.2f}, Y={avg_xyz[1]:.2f}, Z={avg_xyz[2]:.2f}")
         
         return avg_xyz, len(coords)
@@ -733,7 +745,12 @@ class MolecularDockingPipeline:
         results = {
             'center_x': center_coords[0],
             'center_y': center_coords[1], 
-            'center_z': center_coords[2]
+            'center_z': center_coords[2],
+            'descriptor_contract': 'uncalibrated_pocket_heuristics_v1',
+            'scientific_limitation': (
+                'Fixed-sphere volume, empirical residue counts, and the combined score are '
+                'heuristic descriptors, not calibrated physical or druggability measurements.'
+            ),
         }
         
         try:
@@ -741,6 +758,7 @@ class MolecularDockingPipeline:
             
             # Pocket Size and Shape Analysis
             print("📊 Analyzing pocket size and shape...")
+            results['pocket_volume_method'] = 'fixed_sphere_radius_5A_heuristic'
             try:
                 # Geometric estimation based on interaction sphere
                 results['pocket_volume_A3'] = 4/3 * np.pi * (5.0**3)  # Assume 5Å interaction sphere
@@ -750,6 +768,7 @@ class MolecularDockingPipeline:
             
             # Electrostatic Potential Analysis
             print("⚡ Analyzing electrostatic potential...")
+            results['electrostatic_score_method'] = 'charged_CA_count_within_10A_heuristic'
             try:
                 charged_residues = {'ARG': 1, 'LYS': 1, 'HIS': 0.5, 'ASP': -1, 'GLU': -1}
                 electrostatic_score = 0
@@ -781,6 +800,7 @@ class MolecularDockingPipeline:
             
             # Hydrophobic Character Analysis
             print("🧪 Analyzing hydrophobic character...")
+            results['hydrophobic_score_method'] = 'hydrophobic_CA_count_within_8A_heuristic'
             try:
                 hydrophobic_residues = {'PHE', 'TRP', 'TYR', 'LEU', 'ILE', 'VAL', 'ALA', 'MET'}
                 hydrophobic_score = 0
@@ -810,7 +830,9 @@ class MolecularDockingPipeline:
                 results['nearby_hydrophobic_residues'] = 0
             
             # Druggability Scoring
-            print("💊 Calculating druggability score...")
+            print("💊 Calculating uncalibrated heuristic descriptor score...")
+            results['druggability_score_method'] = 'uncalibrated_descriptor_mean_v1'
+            results['druggability_score_calibrated'] = False
             try:
                 # Simple druggability scoring based on multiple factors
                 druggability_factors = []
@@ -844,8 +866,12 @@ class MolecularDockingPipeline:
                     else:
                         interpretation = "Poor"
                     
-                    results['druggability_interpretation'] = interpretation
-                    print(f"✓ Druggability score: {druggability_score:.3f} ({interpretation})")
+                    results['druggability_legacy_interpretation'] = interpretation
+                    results['druggability_interpretation'] = f"Heuristic {interpretation.lower()}"
+                    print(
+                        f"✓ Heuristic descriptor score: {druggability_score:.3f} "
+                        f"({interpretation.lower()}; not calibrated druggability)"
+                    )
                 else:
                     results['druggability_score'] = 'N/A'
                     results['druggability_interpretation'] = 'Unknown'
@@ -1060,6 +1086,19 @@ def extract_residue_level_coordinates(pdb_file: str, ligand_name: str,
     try:
         structure_path = Path(pdb_file)
         structure = MolecularDockingPipeline._load_structure('protein', pdb_file)
+        center_provenance = resolve_binding_site_center(
+            structure_file=structure_path,
+            accession=structure_path.stem,
+            ligand_name=ligand_name,
+            chain_id=chain_id,
+            residue_number=res_id,
+        )
+        if center_provenance.get('status') != 'completed':
+            raise ValueError(
+                f"Binding-site center unavailable: {center_provenance.get('status')}:"
+                f"{center_provenance.get('reason')}"
+            )
+        binding_site_center = np.asarray(center_provenance['binding_site_center'], dtype=float)
 
         # Try PLIP text report analysis first
         if structure_path.suffix.lower() in {".cif", ".mmcif"}:
@@ -1115,8 +1154,8 @@ def extract_residue_level_coordinates(pdb_file: str, ligand_name: str,
                                                             break
                                 
                                 if all_coords:
-                                    # Calculate overall center
-                                    overall_center = np.mean(all_coords, axis=0)
+                                    # Contact centroid is descriptive; the approved box center is the ligand centroid.
+                                    contact_residue_centroid = np.mean(all_coords, axis=0)
                                     
                                     # Calculate residue averages
                                     residue_averages = {}
@@ -1141,13 +1180,17 @@ def extract_residue_level_coordinates(pdb_file: str, ligand_name: str,
                                     
                                     print(f"✓ PLIP found {len(interacting_residues)} interacting residues")
                                     print(f"✓ Total interacting atoms: {len(all_coords)}")
-                                    print(f"✓ Binding site center: X={overall_center[0]:.2f}, Y={overall_center[1]:.2f}, Z={overall_center[2]:.2f}")
+                                    print(f"✓ Binding site center: X={binding_site_center[0]:.2f}, Y={binding_site_center[1]:.2f}, Z={binding_site_center[2]:.2f}")
                                     
                                     return {
-                                        'overall_center': overall_center,
+                                        'binding_site_center': binding_site_center,
+                                        'overall_center': binding_site_center,
                                         'residue_averages': residue_averages,
                                         'all_coords': all_coords,
-                                        'ligand_center': overall_center,
+                                        'ligand_center': binding_site_center,
+                                        'ligand_centroid': binding_site_center,
+                                        'contact_residue_centroid': contact_residue_centroid,
+                                        'center_provenance': center_provenance,
                                         'num_interacting_residues': len(interacting_residues),
                                         'num_interacting_atoms': len(all_coords),
                                         'plip_enhanced': True,
@@ -1200,8 +1243,7 @@ def extract_residue_level_coordinates(pdb_file: str, ligand_name: str,
             raise ValueError(f"Ligand {ligand_name} not found in chain {chain_id}")
         
         # Get ligand atom coordinates
-        ligand_coords = [atom.get_coord() for atom in ligand_residue.get_atoms()]
-        ligand_center = np.mean(ligand_coords, axis=0)
+        ligand_center = binding_site_center
         
         # Find interacting residues within cutoff distance
         residue_coords = {}
@@ -1232,18 +1274,21 @@ def extract_residue_level_coordinates(pdb_file: str, ligand_name: str,
             residue_averages[reskey] = avg_coord
             all_coords.extend(coords)
         
-        # Calculate overall average binding site center
-        overall_center = np.mean(all_coords, axis=0) if all_coords else ligand_center
+        contact_residue_centroid = np.mean(all_coords, axis=0) if all_coords else None
         
         print(f"✓ Found {len(residue_averages)} interacting residues")
         print(f"✓ Total interacting atoms: {len(all_coords)}")
-        print(f"✓ Binding site center: X={overall_center[0]:.2f}, Y={overall_center[1]:.2f}, Z={overall_center[2]:.2f}")
+        print(f"✓ Binding site center: X={binding_site_center[0]:.2f}, Y={binding_site_center[1]:.2f}, Z={binding_site_center[2]:.2f}")
         
         return {
-            'overall_center': overall_center,
+            'binding_site_center': binding_site_center,
+            'overall_center': binding_site_center,
             'residue_averages': residue_averages,
             'all_coords': all_coords,
             'ligand_center': ligand_center,
+            'ligand_centroid': ligand_center,
+            'contact_residue_centroid': contact_residue_centroid,
+            'center_provenance': center_provenance,
             'num_interacting_residues': len(residue_averages),
             'num_interacting_atoms': len(all_coords),
             'plip_enhanced': False

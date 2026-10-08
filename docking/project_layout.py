@@ -23,6 +23,12 @@ PAIRLIST_COLUMNS = [
     "size_z",
     "protein_display_name",
     "ligand_display_name",
+    "pdb_id",
+    "pair_source",
+    "is_cocrystal_benchmark",
+    "cocrystal_ligand_name",
+    "cocrystal_ligand_display_name",
+    "selection_mode",
 ]
 
 LAYOUT_CANONICAL = "canonical"
@@ -296,12 +302,24 @@ def ensure_post_docking_compat_shim(project_root: Path) -> Dict[str, object]:
                 stacklevel=2,
             )
     else:
-        legacy.symlink_to(canonical, target_is_directory=True)
-        warnings.warn(
-            f"Created compatibility symlink {legacy} -> {canonical}. Use {canonical} for new analysis outputs.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+        try:
+            legacy.symlink_to(canonical, target_is_directory=True)
+            warnings.warn(
+                f"Created compatibility symlink {legacy} -> {canonical}. Use {canonical} for new analysis outputs.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        except (OSError, NotImplementedError) as exc:
+            try:
+                legacy.mkdir(parents=True, exist_ok=True)
+                status = "fallback_dir_created"
+            except Exception:
+                status = "symlink_skipped_unsupported"
+            warnings.warn(
+                f"Could not create symlink {legacy} -> {canonical} ({exc}). Using directory fallback.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
     return {
         "status": status,
         "canonical_root": canonical,

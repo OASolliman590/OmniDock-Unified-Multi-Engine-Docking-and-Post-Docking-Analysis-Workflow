@@ -8,6 +8,7 @@ import csv
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -128,7 +129,7 @@ def run_smoke_test(keep_temp: bool = False) -> Dict[str, str]:
     print("1) Initializing project layout...")
     _run(
         [
-            "python",
+            sys.executable,
             "main.py",
             "workflow",
             "init",
@@ -145,7 +146,7 @@ def run_smoke_test(keep_temp: bool = False) -> Dict[str, str]:
     print("2) Materializing docking project from pairlist...")
     _run(
         [
-            "python",
+            sys.executable,
             "main.py",
             "prep",
             "project",
@@ -168,7 +169,7 @@ def run_smoke_test(keep_temp: bool = False) -> Dict[str, str]:
     print("3) Running all engines in dry-run mode...")
     _run(
         [
-            "python",
+            sys.executable,
             "main.py",
             "dock",
             "run",
@@ -210,7 +211,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _ensure_console_encoding() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            encoding = (getattr(stream, "encoding", "") or "").lower()
+            if encoding.replace("-", "") != "utf8" and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main() -> int:
+    _ensure_console_encoding()
     args = parse_args()
     print("🧪 Running unified all-engines smoke test")
     print("=" * 60)

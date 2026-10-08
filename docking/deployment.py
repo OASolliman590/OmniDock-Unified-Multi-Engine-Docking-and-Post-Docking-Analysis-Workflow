@@ -443,6 +443,8 @@ def generate_condor_deployment(
     remote_project_root: str = "",
     skip_completed: bool = False,
     pair_source_file: str = "",
+    pair_source_sha256: str = "",
+    pair_source_kind: str = "",
     rerun_manifest_file: str = "",
 ) -> Dict[str, object]:
     root = Path(project_root).expanduser().resolve()
@@ -464,6 +466,8 @@ def generate_condor_deployment(
         "engines": engines,
         "pair_count": len(pairlist_rows),
         "pair_source_file": _map_project_path(pair_source_file, root, execution_root) if pair_source_file else "",
+        "pair_source_sha256": str(pair_source_sha256 or ""),
+        "pair_source_kind": str(pair_source_kind or ""),
         "rerun_manifest_file": _map_project_path(rerun_manifest_file, root, execution_root) if rerun_manifest_file else "",
         "generation_stage_root": str(stage_root),
         "stage_root": str(execution_stage_root),
@@ -509,6 +513,9 @@ def generate_condor_deployment(
             "runtime": mapped_runtime,
             "condor": engine_settings,
             "hpc_profile": deployment_manifest["hpc_profile"],
+            "pair_source_file": deployment_manifest["pair_source_file"],
+            "pair_source_sha256": deployment_manifest["pair_source_sha256"],
+            "pair_source_kind": deployment_manifest["pair_source_kind"],
             "jobs": [],
         }
 
@@ -659,6 +666,8 @@ def generate_slurm_deployment(
     remote_project_root: str = "",
     skip_completed: bool = False,
     pair_source_file: str = "",
+    pair_source_sha256: str = "",
+    pair_source_kind: str = "",
     rerun_manifest_file: str = "",
 ) -> Dict[str, object]:
     root = Path(project_root).expanduser().resolve()
@@ -680,6 +689,8 @@ def generate_slurm_deployment(
         "engines": engines,
         "pair_count": len(pairlist_rows),
         "pair_source_file": _map_project_path(pair_source_file, root, execution_root) if pair_source_file else "",
+        "pair_source_sha256": str(pair_source_sha256 or ""),
+        "pair_source_kind": str(pair_source_kind or ""),
         "rerun_manifest_file": _map_project_path(rerun_manifest_file, root, execution_root) if rerun_manifest_file else "",
         "generation_stage_root": str(stage_root),
         "stage_root": str(execution_stage_root),
@@ -724,6 +735,9 @@ def generate_slurm_deployment(
             "runtime": mapped_runtime,
             "slurm": engine_settings,
             "hpc_profile": deployment_manifest["hpc_profile"],
+            "pair_source_file": deployment_manifest["pair_source_file"],
+            "pair_source_sha256": deployment_manifest["pair_source_sha256"],
+            "pair_source_kind": deployment_manifest["pair_source_kind"],
             "jobs": [],
         }
         submit_lines = [

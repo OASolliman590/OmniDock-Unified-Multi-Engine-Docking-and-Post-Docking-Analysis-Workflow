@@ -1,0 +1,55 @@
+{
+  "schema_version": "spec031-vina-fixture-v1",
+  "purpose": "offline parsing and post-docking regression only",
+  "receptor": {
+    "accession": "1IEP",
+    "chain": "A",
+    "path": "docs/appraisal_20260819/OmniDock_findings_package/real_fixture/1IEP.pdb",
+    "sha256": "577386b4b8bc58a570facba0c8a843386842caef5ed7b60106c685d0f68d4218"
+  },
+  "prepared_receptor": {
+    "path": "docs/appraisal_20260819/OmniDock_findings_package/real_fixture/omnidock_core_output/receptor_1IEP_sanitized.pdbqt",
+    "sha256": "f68567a0b34c54f3f34df0cadd7b47bab398ac092d9d74929edc0fc4d02a9015"
+  },
+  "ligand": {
+    "identifier": "STI-571",
+    "residue": "STI",
+    "chain": "A",
+    "residue_number": 201,
+    "path": "docs/appraisal_20260819/OmniDock_findings_package/real_fixture/omnidock_core_output/ligand_STI.pdbqt",
+    "sha256": "872c3644df1b8a2be05675ce85dd7c3207e265a5a669bda265b56db597b473f2",
+    "protonation_ph": "unknown",
+    "tautomer_state": "unknown",
+    "charge_method": "unknown",
+    "hydrogen_policy": "unknown"
+  },
+  "pose_output": {
+    "path": "docs/appraisal_20260819/OmniDock_findings_package/real_fixture/omnidock_core_output/vina_1IEP_STI.pdbqt",
+    "sha256": "42636f9b0368b84017621a760aa806cfc349451ee65d9b3b7eba6983481fcde5",
+    "requested_poses": 5,
+    "retained_parsed_rows": 2
+  },
+  "engine": {
+    "name": "AutoDock Vina",
+    "version": "1.2.7",
+    "interface": "Python",
+    "scoring_function": "vina",
+    "exhaustiveness": 8,
+    "seed": 12345,
+    "cpu": 2,
+    "executable_path": "unknown",
+    "container_digest": "not_applicable"
+  },
+  "box": {
+    "center_angstrom": [16.75773811340332, 56.582794189453125, 13.778149604797363],
+    "dimensions_angstrom": [20.0, 20.0, 20.0],
+    "historical_center_method": "PLIP full-interacting-residue centroid",
+    "coordinate_system": "retained Cartesian coordinates in angstrom"
+  },
+  "preparation": {
+    "conversion_tool": "Open Babel",
+    "conversion_tool_version": "unknown",
+    "conversion_command": "unknown"
+  },
+  "expected_status": "completed"
+}

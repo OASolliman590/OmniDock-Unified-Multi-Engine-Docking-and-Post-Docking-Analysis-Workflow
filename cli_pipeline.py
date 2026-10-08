@@ -231,7 +231,7 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
                         cutoff=config.get('analysis', {}).get('distance_cutoff', 5.0)
                     )
                     if residue_analysis:
-                        coords = residue_analysis['overall_center']
+                        coords = residue_analysis['binding_site_center']
                         num_atoms = residue_analysis['num_interacting_atoms']
                         results.update({
                             'selected_ligand': f"{selected_hetatm}_{chain_id}_{res_id}",
@@ -241,6 +241,7 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
                             'interacting_residues_count': residue_analysis['num_interacting_residues'],
                             'interacting_atoms_count': residue_analysis['num_interacting_atoms']
                         })
+                        results['binding_site_center_provenance'] = residue_analysis.get('center_provenance', {})
                         print(f"✓ Active site coordinates extracted: X={coords[0]:.2f}, Y={coords[1]:.2f}, Z={coords[2]:.2f}")
                     else:
                         raise ValueError("Enhanced coordinate extraction failed")

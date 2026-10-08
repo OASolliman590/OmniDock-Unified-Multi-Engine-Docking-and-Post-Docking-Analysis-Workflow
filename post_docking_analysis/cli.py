@@ -124,7 +124,7 @@ Examples:
     parser.add_argument("--preprocess", action="store_true",
                         help="Run preprocessing to generate all_scores.csv and identify pairs")
     parser.add_argument("--force", action="store_true",
-                        help="Force regeneration during preprocessing or bypass DAG cache for artifact-scope runs")
+                        help="Force preprocessing or engine-score regeneration, engine re-detection, and DAG cache bypass")
     parser.add_argument("--pairlist", 
                         help="Path to pairlist.csv for accurate receptor-ligand mapping")
     parser.add_argument("--analysis-mode",
@@ -169,7 +169,7 @@ Examples:
                         help="Optional TXT/CSV file restricting promotion to explicit pair tags or receptor/site_id/ligand rows")
     parser.add_argument(
         "--consensus-mode",
-        choices=["dockbox_geometric", "weighted_hybrid", "strict_consensus", "favorite_guardrails"],
+        choices=["dockbox_geometric", "weighted_hybrid", "strict_consensus", "favorite_guardrails", "consensus_rank_geometry_qc_v2"],
         default="dockbox_geometric",
         help="Consensus policy for comparative hit ranking and rerun promotion",
     )
@@ -279,7 +279,7 @@ Examples:
             engines=args.engines,
             engine_preset=args.engine_preset,
             favorite_engine=args.favorite_engine,
-            redetect=args.redetect,
+            redetect=bool(args.redetect or args.force),
             interactive_fallback=args.interactive_fallback,
             promote_exhaustive=args.promote_exhaustive,
             rerun_engine=args.rerun_engine,
@@ -307,7 +307,7 @@ Examples:
             rmsd_scopes=args.rmsd_scopes,
             resume_rmsd=not args.no_resume_rmsd,
             dag_scope=args.scope,
-            dag_force=bool(args.force and args.scope),
+            dag_force=bool(args.force),
         )
         try:
             engine_pipeline = UnifiedPostDockingPipeline(**pipeline_kwargs)

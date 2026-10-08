@@ -12,9 +12,10 @@ dependencies:
   - matplotlib
   - seaborn
   - jupyter
-  - openbabel  # For ligand processing (SDF, MOL2, PDBQT conversions)
+  - openbabel=3.2.1  # For ligand processing; pinned to the Spec 032 verified backend
   - scikit-learn  # For clustering and machine learning
   - scipy  # For statistical analysis
+  - networkx>=3.2,<4  # Spec 031 graph/symmetry-aware atom mapping
   - pip
   - pip:
     - plip

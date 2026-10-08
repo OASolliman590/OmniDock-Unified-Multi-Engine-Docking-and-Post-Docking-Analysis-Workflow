@@ -72,7 +72,7 @@ def _consensus_score_ascending(mode: str) -> bool:
     token = str(mode or "").strip().lower()
     if token in _CONSENSUS_SCORE_ASCENDING_MODES:
         return True
-    if token in {"dockbox_geometric", "favorite_guardrails"}:
+    if token in {"dockbox_geometric", "favorite_guardrails", "consensus_rank_geometry_qc_v2"}:
         return False
     return True
 
@@ -217,7 +217,8 @@ def build_top_pose_atlas(
     atlas["winner_engine"] = atlas["winner_engine"].astype(str).str.lower()
     atlas["winner_engine"] = atlas["winner_engine"].where(atlas["winner_engine"].str.len() > 0, atlas["engine"])
 
-    atlas["_sort_primary"] = pd.to_numeric(atlas.get(primary_field), errors="coerce").fillna(np.inf)
+    missing_primary = np.inf if primary_sort_ascending else -np.inf
+    atlas["_sort_primary"] = pd.to_numeric(atlas.get(primary_field), errors="coerce").fillna(missing_primary)
     atlas["_sort_secondary"] = pd.to_numeric(atlas.get(secondary_field), errors="coerce").fillna(np.inf)
     atlas["_sort_tag"] = atlas["tag"].astype(str)
 

@@ -260,7 +260,7 @@ Examples:
     workflow_jump.add_argument("--pair-allowlist", help="Optional TXT/CSV file restricting promotion to explicit pair tags or receptor/site_id/ligand rows")
     workflow_jump.add_argument(
         "--consensus-mode",
-        choices=["dockbox_geometric", "weighted_hybrid", "strict_consensus", "favorite_guardrails"],
+        choices=["dockbox_geometric", "weighted_hybrid", "strict_consensus", "favorite_guardrails", "consensus_rank_geometry_qc_v2"],
         default="dockbox_geometric",
         help="Consensus policy for comparative hit ranking and rerun promotion",
     )
@@ -431,6 +431,42 @@ Examples:
     analyze_sub = analyze.add_subparsers(dest="analyze_command")
     analyze_comparative = analyze_sub.add_parser("comparative", help="Comparative multi-engine analysis")
     analyze_comparative.add_argument("--project-dir", required=True, help="Canonical project root")
+    analyze_md_inputs = analyze_sub.add_parser(
+        "md-inputs",
+        help="Export exact selected poses as strict CHARMM-GUI/CGenFF input files",
+    )
+    analyze_md_inputs.add_argument("--project-dir", required=True, help="Canonical project root")
+    analyze_md_inputs.add_argument("--engine", required=True, choices=["gnina", "vina", "smina"])
+    analyze_md_inputs.add_argument("--tags-file", required=True, help="TXT or CSV containing the exact requested tags")
+    analyze_md_inputs.add_argument("--receptor-map", required=True, help="CSV mapping tags/proteins to prepared receptor PDB files")
+    analyze_md_inputs.add_argument("--topology-map", help="CSV mapping Vina/Smina tags to topology files and atom permutations")
+    analyze_md_inputs.add_argument("--charge-map", help="Optional CSV of Scientific Lead-approved integer net charges")
+    analyze_md_inputs.add_argument("--ph", required=True, type=float, help="Explicit target pH for ligand protonation")
+    analyze_md_inputs.add_argument(
+        "--protonation-policy",
+        required=True,
+        choices=["openbabel_predicted"],
+        help="Approved ligand protonation policy; predicted states require human review",
+    )
+    analyze_md_inputs.add_argument(
+        "--consumer-profile",
+        choices=["charmm_gui_cgenff_v1"],
+        default="charmm_gui_cgenff_v1",
+    )
+    analyze_md_inputs.add_argument(
+        "--ligand-format",
+        dest="ligand_formats",
+        action="append",
+        choices=["mol2", "sdf", "pdb"],
+        default=[],
+        help="Additional ligand format; repeat as needed (MOL2 is always emitted)",
+    )
+    analyze_md_inputs.add_argument(
+        "--no-protonate",
+        action="store_true",
+        help="Use only an already explicit-H topology; G6 and approved charge checks still apply",
+    )
+    analyze_md_inputs.add_argument("--force", action="store_true", help="Regenerate even when hashes match")
     analyze_comparative.add_argument("--config-file", help="Optional post-docking analysis YAML/JSON config file")
     analyze_comparative.add_argument("-o", "--output", help="Output directory")
     analyze_comparative.add_argument("--promote-exhaustive", action="store_true", help="Emit an exhaustive rerun manifest from comparative results")
@@ -442,7 +478,7 @@ Examples:
     analyze_comparative.add_argument("--pair-allowlist", help="Optional TXT/CSV file restricting promotion to explicit pair tags or receptor/site_id/ligand rows")
     analyze_comparative.add_argument(
         "--consensus-mode",
-        choices=["dockbox_geometric", "weighted_hybrid", "strict_consensus", "favorite_guardrails"],
+        choices=["dockbox_geometric", "weighted_hybrid", "strict_consensus", "favorite_guardrails", "consensus_rank_geometry_qc_v2"],
         default="dockbox_geometric",
         help="Consensus policy for comparative hit ranking and rerun promotion",
     )
@@ -741,7 +777,15 @@ def _add_deploy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--engines", help="Comma-separated engine list")
     parser.add_argument("--round", help="Optional logical round identifier")
     parser.add_argument("--mode", choices=["screen", "exhaustive"], default="screen")
-    parser.add_argument("--from-rerun-manifest", help="Optional rerun manifest CSV from analyze comparative")
+    pair_source_group = parser.add_mutually_exclusive_group()
+    pair_source_group.add_argument(
+        "--pairlist-file",
+        help="Exact pairlist CSV to deploy without modifying canonical pairlist or curation state",
+    )
+    pair_source_group.add_argument(
+        "--from-rerun-manifest",
+        help="Optional rerun manifest CSV from analyze comparative",
+    )
     parser.add_argument(
         "--allow-full-exhaustive",
         action="store_true",
@@ -924,6 +968,8 @@ def _build_deploy_argv(args: argparse.Namespace) -> List[str]:
         argv.extend(["--round", args.round])
     if args.from_rerun_manifest:
         argv.extend(["--from-rerun-manifest", args.from_rerun_manifest])
+    if args.pairlist_file:
+        argv.extend(["--pairlist-file", args.pairlist_file])
     if args.allow_full_exhaustive:
         argv.append("--allow-full-exhaustive")
     if args.skip_completed:
@@ -1070,13 +1116,31 @@ def _build_submit_argv(args: argparse.Namespace) -> List[str]:
 
 
 def _run_analysis_dispatch(args: argparse.Namespace, target: str) -> int:
-    from .execution import run_analysis_comparative, run_analysis_favorite, run_analysis_target
+    from .execution import run_analysis_comparative, run_analysis_favorite, run_analysis_md_inputs, run_analysis_target
 
     try:
         rmsd_workers = _parse_rmsd_workers(getattr(args, "rmsd_workers", 0))
     except Exception as exc:
         raise SystemExit(f"Invalid --rmsd-workers value: {exc}") from exc
 
+    if target == "analyze.md_inputs":
+        result = run_analysis_md_inputs(
+            args.project_dir,
+            engine=args.engine,
+            tags_file=args.tags_file,
+            receptor_map=args.receptor_map,
+            topology_map=getattr(args, "topology_map", None),
+            charge_map=getattr(args, "charge_map", None),
+            ph=args.ph,
+            protonation_policy=args.protonation_policy,
+            ligand_formats=getattr(args, "ligand_formats", None),
+            consumer_profile=args.consumer_profile,
+            protonate=not bool(getattr(args, "no_protonate", False)),
+            force=bool(getattr(args, "force", False)),
+        )
+        print(f"MD-input manifest: {result.outputs.get('manifest_file', '')}")
+        print(f"MD-input counts: {result.outputs.get('counts', {})}")
+        return 0 if result.status == "completed" else 1
     if target == "analyze.comparative":
         result = run_analysis_comparative(
             args.project_dir,
@@ -1436,6 +1500,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("A dock subcommand is required")
 
     if args.group == "analyze":
+        if args.analyze_command == "md-inputs":
+            return _run_analysis_dispatch(args, "analyze.md_inputs")
         if args.analyze_command == "comparative":
             return _run_analysis_dispatch(args, "analyze.comparative")
         if args.analyze_command == "favorite-engine":

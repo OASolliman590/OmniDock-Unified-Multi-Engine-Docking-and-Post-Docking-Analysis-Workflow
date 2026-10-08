@@ -376,9 +376,12 @@ def list_checkpoint_metadata(root: Path) -> List[Dict[str, object]]:
     records = checkpoint_store.get("records", [])
     if not isinstance(records, list):
         return []
-    cleaned = [row for row in records if isinstance(row, dict)]
-    cleaned.sort(key=lambda row: str(row.get("created_at", "")), reverse=True)
-    return cleaned
+    cleaned = [(index, row) for index, row in enumerate(records) if isinstance(row, dict)]
+    cleaned.sort(
+        key=lambda item: (str(item[1].get("created_at", "")), item[0]),
+        reverse=True,
+    )
+    return [row for _, row in cleaned]
 
 
 def summarize_state(root: Path) -> List[str]:
@@ -476,7 +479,7 @@ def write_meta_run_manifest(
             continue
         try:
             relative = path.relative_to(root)
-            relative_path = str(relative)
+            relative_path = relative.as_posix()
         except ValueError:
             relative_path = str(path)
         checksums.append(

@@ -18,7 +18,18 @@ import numpy as np
 import pandas as pd
 
 from docking.project_layout import shared_ligands_dir
-from post_docking_analysis.geometric_consensus import _extract_sdf_pose
+from post_docking_analysis.atom_mapping import (
+    MAPPING_METHOD,
+    attach_coordinates_to_topology,
+    compare_graph_poses,
+    load_sdf_graph_pose,
+    not_comparable_result,
+)
+from post_docking_analysis.geometric_consensus import _extract_pdb_like_pose, _extract_sdf_pose
+from post_docking_analysis.reference_policy import (
+    classify_reference_frame,
+    classify_reference_row,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,35 +56,7 @@ _REFERENCE_TEXT_TOKENS = (
 
 
 def _is_reference_candidate_row(row: pd.Series) -> bool:
-    if bool(row.get("is_cocrystal_benchmark")):
-        return True
-
-    pair_source = str(row.get("pair_source") or "").strip().lower()
-    if pair_source in {"cocrystal", "reference", "native", "redocking", "comparative", "compartive"}:
-        return True
-
-    site_id = str(row.get("site_id") or "").strip().lower()
-    if site_id in _REFERENCE_SITE_TOKENS:
-        return True
-
-    text = " ".join(
-        str(row.get(key) or "")
-        for key in ("tag", "ligand", "cocrystal_ligand_name", "ligand_display_name")
-    ).lower()
-    return any(token in text for token in _REFERENCE_TEXT_TOKENS)
-
-
-def _atom_element_from_pdb_line(line: str) -> str:
-    element = line[76:78].strip()
-    if element:
-        return element.upper()
-    atom_name = line[12:16].strip()
-    letters = "".join(ch for ch in atom_name if ch.isalpha())
-    if not letters:
-        return ""
-    if len(letters) >= 2 and letters[0].isalpha() and letters[1].islower():
-        return letters[:2].upper()
-    return letters[0].upper()
+    return classify_reference_row(row).is_reference
 
 
 def _parse_pdb_like_heavy_atoms(
@@ -81,36 +64,9 @@ def _parse_pdb_like_heavy_atoms(
     *,
     pose_index: int = 1,
 ) -> Tuple[np.ndarray, List[str], str]:
-    coords: List[List[float]] = []
-    elements: List[str] = []
-
     if file_path.suffix.lower() in (".sdf", ".mol"):
         return _extract_sdf_pose(file_path, pose_index=pose_index)
-
-    try:
-        lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except Exception as exc:
-        return np.empty((0, 3), dtype=float), [], f"read_error:{exc}"
-
-    for line in lines:
-        if not line.startswith(("ATOM", "HETATM")):
-            continue
-        if len(line) < 54:
-            continue
-        element = _atom_element_from_pdb_line(line)
-        if not element or element.upper().startswith("H"):
-            continue
-        try:
-            x = float(line[30:38].strip())
-            y = float(line[38:46].strip())
-            z = float(line[46:54].strip())
-        except Exception:
-            continue
-        coords.append([x, y, z])
-        elements.append(element.upper())
-    if not coords:
-        return np.empty((0, 3), dtype=float), [], "no_heavy_atoms"
-    return np.array(coords, dtype=float), elements, ""
+    return _extract_pdb_like_pose(file_path, pose_index=pose_index)
 
 
 def _kabsch_rmsd(coords_a: np.ndarray, coords_b: np.ndarray) -> float:
@@ -129,21 +85,39 @@ def _kabsch_rmsd(coords_a: np.ndarray, coords_b: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.sum(diff * diff, axis=1))))
 
 
-def _compute_pose_rmsd(docked_pose_file: Path, reference_pose_file: Path) -> Tuple[Optional[float], str]:
-    dock_coords, dock_elements, dock_err = _parse_pdb_like_heavy_atoms(docked_pose_file, pose_index=1)
-    if dock_coords.size == 0:
-        return None, f"docked_pose_parse_failed:{dock_err or 'unknown'}"
-    ref_coords, ref_elements, ref_err = _parse_pdb_like_heavy_atoms(reference_pose_file, pose_index=1)
-    if ref_coords.size == 0:
-        return None, f"reference_pose_parse_failed:{ref_err or 'unknown'}"
-    if dock_coords.shape[0] != ref_coords.shape[0]:
-        return None, f"atom_count_mismatch:{dock_coords.shape[0]}!={ref_coords.shape[0]}"
-    if dock_elements != ref_elements:
-        return None, "element_sequence_mismatch"
-    rmsd = _kabsch_rmsd(dock_coords, ref_coords)
-    if not np.isfinite(rmsd):
-        return None, "rmsd_not_finite"
-    return float(rmsd), ""
+def _compute_pose_rmsd(
+    docked_pose_file: Path,
+    reference_pose_file: Path,
+    *,
+    docked_pose_index: int = 1,
+    reference_pose_index: int = 1,
+    docked_topology_file: Optional[Path] = None,
+    reference_topology_file: Optional[Path] = None,
+) -> Tuple[Optional[float], str, Dict[str, object]]:
+    def _load_pose(coordinate_file: Path, pose_index: int, topology_file: Optional[Path]):
+        if coordinate_file.suffix.lower() in {".sdf", ".mol"}:
+            return load_sdf_graph_pose(coordinate_file, pose_index=pose_index)
+        if topology_file is None or topology_file.suffix.lower() not in {".sdf", ".mol"}:
+            raise ValueError("missing_explicit_sdf_topology")
+        coords, elements, error = _parse_pdb_like_heavy_atoms(coordinate_file, pose_index=pose_index)
+        if error or coords.size == 0:
+            raise ValueError(f"pose_parse_failed:{error or 'no_heavy_atoms'}")
+        return attach_coordinates_to_topology(coords, elements, topology_file)
+
+    try:
+        docked = _load_pose(docked_pose_file, docked_pose_index, docked_topology_file)
+    except (OSError, RuntimeError, ValueError) as exc:
+        result = not_comparable_result(f"docked_pose_not_comparable:{exc}")
+        return None, result.reason, result.to_dict()
+    try:
+        reference = _load_pose(reference_pose_file, reference_pose_index, reference_topology_file)
+    except (OSError, RuntimeError, ValueError) as exc:
+        result = not_comparable_result(f"reference_pose_not_comparable:{exc}")
+        return None, result.reason, result.to_dict()
+    result = compare_graph_poses(docked, reference)
+    if not result.comparable:
+        return None, f"not_comparable:{result.reason}", result.to_dict()
+    return float(result.rmsd_angstrom), "", result.to_dict()
 
 
 def _candidate_reference_roots(project_dir: Path) -> List[Path]:
@@ -189,7 +163,7 @@ def _iter_ligand_name_tokens(row: pd.Series) -> Iterable[str]:
             yield token
 
 
-def _find_reference_pose_file(project_dir: Path, row: pd.Series) -> Optional[Path]:
+def _find_reference_pose_file(project_dir: Path, row: pd.Series, *, legacy_mode: bool = False) -> Optional[Path]:
     explicit_fields = (
         "reference_pose_file",
         "reference_ligand_file",
@@ -202,6 +176,9 @@ def _find_reference_pose_file(project_dir: Path, row: pd.Series) -> Optional[Pat
         resolved = _resolve_existing_path(project_dir, row.get(field))
         if resolved is not None and resolved.is_file():
             return resolved
+
+    if not legacy_mode:
+        return None
 
     roots = _candidate_reference_roots(project_dir)
     if not roots:
@@ -258,6 +235,7 @@ def run_redocking_validation(
     output_dir: Path,
     pass_threshold_angstrom: float = 2.0,
     warn_threshold_angstrom: float = 3.5,
+    legacy_reference_mode: bool = False,
 ) -> Dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     validation_file = output_dir / "redocking_validation.csv"
@@ -271,10 +249,24 @@ def run_redocking_validation(
         "tag",
         "engine",
         "docked_pose_file",
+        "docked_pose_index",
         "reference_pose_file",
         "redocking_rmsd_angstrom",
         "redocking_classification",
         "validation_reason",
+        "mapping_method",
+        "mapping_status",
+        "mapping_reason",
+        "alignment_method",
+        "mapped_heavy_atoms",
+        "total_heavy_atoms_docked",
+        "total_heavy_atoms_reference",
+        "mapping_coverage",
+        "valid_mapping_count",
+        "mapping_backend",
+        "mapping_backend_version",
+        "docked_topology_sha256",
+        "reference_topology_sha256",
     ]
     baseline_columns = [
         "protein",
@@ -319,8 +311,12 @@ def run_redocking_validation(
             "reference_baselines_df": pd.DataFrame(),
         }
 
-    frame = best_by_engine.copy()
-    frame["is_reference_candidate"] = frame.apply(_is_reference_candidate_row, axis=1)
+    frame = classify_reference_frame(best_by_engine, legacy_mode=legacy_reference_mode)
+    if legacy_reference_mode:
+        frame[frame["legacy_reference_candidate"]].to_csv(
+            output_dir / "legacy_reference_migration_candidates.csv", index=False
+        )
+    frame["is_reference_candidate"] = frame["reference_classification"].eq("reference")
     references = frame[frame["is_reference_candidate"]].copy()
 
     # Deduplicate: one RMSD computation per unique (protein, ligand, tag, engine) tuple.
@@ -333,8 +329,14 @@ def run_redocking_validation(
     records: List[Dict[str, object]] = []
     for _, row in references.iterrows():
         docked_pose_path = _resolve_existing_path(project_dir, row.get("pose_file"))
-        reference_pose_path = _find_reference_pose_file(project_dir, row)
+        reference_pose_path = _find_reference_pose_file(project_dir, row, legacy_mode=False)
+        raw_pose_index = row.get("pose", 1)
+        try:
+            docked_pose_index = 1 if pd.isna(raw_pose_index) else int(raw_pose_index)
+        except (TypeError, ValueError, OverflowError):
+            docked_pose_index = raw_pose_index
         rmsd: Optional[float] = None
+        mapping_details: Dict[str, object] = not_comparable_result("not_attempted").to_dict()
         classification = "not_evaluable"
         reason = ""
 
@@ -343,7 +345,17 @@ def run_redocking_validation(
         elif reference_pose_path is None or not reference_pose_path.exists():
             reason = "missing_reference_pose_file"
         else:
-            rmsd, error = _compute_pose_rmsd(docked_pose_path, reference_pose_path)
+            rmsd, error, mapping_details = _compute_pose_rmsd(
+                docked_pose_path,
+                reference_pose_path,
+                docked_pose_index=docked_pose_index,
+                docked_topology_file=_resolve_existing_path(
+                    project_dir, row.get("topology_file", row.get("ligand_topology_file"))
+                ),
+                reference_topology_file=_resolve_existing_path(
+                    project_dir, row.get("reference_ligand_file", row.get("reference_topology_file"))
+                ),
+            )
             if rmsd is None:
                 reason = error or "rmsd_computation_failed"
             else:
@@ -361,10 +373,24 @@ def run_redocking_validation(
                 "tag": str(row.get("tag", "")),
                 "engine": str(row.get("engine", "")),
                 "docked_pose_file": str(docked_pose_path) if docked_pose_path else "",
+                "docked_pose_index": docked_pose_index,
                 "reference_pose_file": str(reference_pose_path) if reference_pose_path else "",
                 "redocking_rmsd_angstrom": rmsd,
                 "redocking_classification": classification,
                 "validation_reason": reason,
+                "mapping_method": MAPPING_METHOD,
+                "mapping_status": mapping_details.get("status", "not_comparable"),
+                "mapping_reason": mapping_details.get("reason", reason),
+                "alignment_method": mapping_details.get("alignment_method", "kabsch"),
+                "mapped_heavy_atoms": mapping_details.get("mapped_heavy_atoms", 0),
+                "total_heavy_atoms_docked": mapping_details.get("total_heavy_atoms_a", 0),
+                "total_heavy_atoms_reference": mapping_details.get("total_heavy_atoms_b", 0),
+                "mapping_coverage": mapping_details.get("mapping_coverage", 0.0),
+                "valid_mapping_count": mapping_details.get("valid_mapping_count", 0),
+                "mapping_backend": mapping_details.get("backend", "networkx"),
+                "mapping_backend_version": mapping_details.get("backend_version", ""),
+                "docked_topology_sha256": mapping_details.get("topology_sha256_a", ""),
+                "reference_topology_sha256": mapping_details.get("topology_sha256_b", ""),
             }
         )
 
@@ -379,7 +405,10 @@ def run_redocking_validation(
 
     baseline_rows: List[Dict[str, object]] = []
     for protein, group in merged.groupby("protein", dropna=False):
-        valid = group[group["redocking_classification"] == "pass"].copy()
+        anchor_eligible = group.get("reference_validation_anchor_eligible", False)
+        if not isinstance(anchor_eligible, pd.Series):
+            anchor_eligible = pd.Series(bool(anchor_eligible), index=group.index)
+        valid = group[(group["redocking_classification"] == "pass") & anchor_eligible.astype(bool)].copy()
         if not valid.empty:
             valid["affinity_kcal_mol"] = pd.to_numeric(valid.get("affinity_kcal_mol"), errors="coerce")
             valid = valid[np.isfinite(valid["affinity_kcal_mol"])].copy()

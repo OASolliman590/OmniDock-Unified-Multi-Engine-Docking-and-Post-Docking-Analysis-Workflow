@@ -3,6 +3,7 @@ Engine detection and auto-routing for DockForge post-docking analysis.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -11,13 +12,13 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import pandas as pd
 
 from docking.project_layout import (
-    ensure_engine_layout,
     ensure_numbered_output_layout,
     load_manifest,
     pairlist_path,
     save_manifest,
 )
 from post_docking_analysis.docking_parser import parse_autodock4_dlg, parse_vina_pdbqt
+from post_docking_analysis.engine_hpc_adapter import detect_engine_layout
 from post_docking_analysis.generate_scores_csv import parse_gnina_log
 
 
@@ -52,17 +53,10 @@ def _candidate_engines_from_manifest(project_dir: Path) -> List[str]:
 
 def _candidate_engines_from_filesystem(project_dir: Path) -> List[str]:
     candidates: List[str] = []
-    dock_root = project_dir / "4-Docking" if (project_dir / "4-Docking").exists() else project_dir
     for engine in SUPPORTED_ENGINES:
-        if (dock_root / f"{engine}_out").exists():
+        detected = detect_engine_layout(project_dir, engine)
+        if detected.get("pose_folder") or detected.get("log_folder"):
             candidates.append(engine)
-    logs_dir = dock_root / "logs"
-    if logs_dir.exists():
-        for log_file in sorted(logs_dir.glob("*.log")):
-            content = _safe_read_text(log_file).lower()
-            if any(marker in content for marker in GNINA_LOG_MARKERS):
-                if "gnina" not in candidates:
-                    candidates.append("gnina")
     return candidates
 
 
@@ -77,9 +71,18 @@ def _pairlist_size(project_dir: Path) -> int:
 
 
 def _gnina_details(project_dir: Path) -> Dict[str, object]:
-    layout = ensure_engine_layout(project_dir, "gnina")
-    pose_files = sorted(layout["poses"].glob("*.sdf"))
-    log_files = sorted(layout["logs"].glob("*.log"))
+    detected = detect_engine_layout(project_dir, "gnina")
+    pose_dir = Path(detected["pose_folder"]) if detected.get("pose_folder") else None
+    log_dir = Path(detected["log_folder"]) if detected.get("log_folder") else None
+    pose_files = sorted(pose_dir.glob("*.sdf")) if pose_dir else []
+    log_files = (
+        sorted(
+            set(log_dir.glob("*.log")).union(log_dir.glob("*_log")),
+            key=lambda path: str(path),
+        )
+        if log_dir
+        else []
+    )
     valid_score_rows = 0
     matched_marker = ""
     score_columns: List[str] = []
@@ -103,6 +106,7 @@ def _gnina_details(project_dir: Path) -> Dict[str, object]:
         "score_columns": score_columns,
         "log_marker_matched": matched_marker,
         "rmsd_available": False,
+        "input_layout": _layout_diagnostics(detected),
     }
 
 
@@ -130,14 +134,24 @@ def _extract_smina_weights(log_files: Iterable[Path]) -> Tuple[Dict[str, float],
 
 
 def _vina_family_details(project_dir: Path, engine: str) -> Dict[str, object]:
-    layout = ensure_engine_layout(project_dir, engine)
-    pose_files = sorted(layout["poses"].glob("*.pdbqt"))
-    score_file = layout["scores"] / "normalized_scores.csv"
-    log_files = sorted(layout["logs"].glob("*.log"))
+    detected = detect_engine_layout(project_dir, engine)
+    pose_dir = Path(detected["pose_folder"]) if detected.get("pose_folder") else None
+    log_dir = Path(detected["log_folder"]) if detected.get("log_folder") else None
+    score_dir = Path(detected["score_folder"]) if detected.get("score_folder") else None
+    pose_files = sorted(pose_dir.glob("*.pdbqt")) if pose_dir else []
+    score_file = score_dir / "normalized_scores.csv" if score_dir else None
+    log_files = (
+        sorted(
+            set(log_dir.glob("*.log")).union(log_dir.glob("*_log")),
+            key=lambda path: str(path),
+        )
+        if log_dir
+        else []
+    )
     valid_score_rows = 0
     score_columns = ["vina_affinity"]
     rmsd_available = engine == "vina"
-    if score_file.exists():
+    if score_file is not None and score_file.exists():
         try:
             frame = pd.read_csv(score_file)
             valid_score_rows = int(len(frame))
@@ -163,6 +177,7 @@ def _vina_family_details(project_dir: Path, engine: str) -> Dict[str, object]:
         "valid_score_rows": int(valid_score_rows),
         "score_columns": score_columns,
         "rmsd_available": bool(rmsd_available),
+        "input_layout": _layout_diagnostics(detected),
     }
     if engine == "smina":
         weights, inconsistent = _extract_smina_weights(log_files)
@@ -172,12 +187,14 @@ def _vina_family_details(project_dir: Path, engine: str) -> Dict[str, object]:
 
 
 def _autodock4_details(project_dir: Path) -> Dict[str, object]:
-    layout = ensure_engine_layout(project_dir, "autodock4")
-    pose_files = sorted(layout["poses"].glob("*.dlg"))
-    score_file = layout["scores"] / "normalized_scores.csv"
+    detected = detect_engine_layout(project_dir, "autodock4")
+    pose_dir = Path(detected["pose_folder"]) if detected.get("pose_folder") else None
+    score_dir = Path(detected["score_folder"]) if detected.get("score_folder") else None
+    pose_files = sorted(pose_dir.glob("*.dlg")) if pose_dir else []
+    score_file = score_dir / "normalized_scores.csv" if score_dir else None
     valid_score_rows = 0
     score_columns = ["autodock4_affinity"]
-    if score_file.exists():
+    if score_file is not None and score_file.exists():
         try:
             frame = pd.read_csv(score_file)
             valid_score_rows = int(len(frame))
@@ -195,7 +212,63 @@ def _autodock4_details(project_dir: Path) -> Dict[str, object]:
         "valid_score_rows": int(valid_score_rows),
         "score_columns": score_columns,
         "rmsd_available": False,
+        "input_layout": _layout_diagnostics(detected),
     }
+
+
+def _layout_diagnostics(detected: Dict[str, object]) -> Dict[str, object]:
+    return {
+        "pose_folder": str(detected.get("pose_folder") or ""),
+        "log_folder": str(detected.get("log_folder") or ""),
+        "score_folder": str(detected.get("score_folder") or ""),
+        "layout": str(detected.get("layout") or ""),
+        "ambiguous": bool(detected.get("ambiguous", False)),
+        "warnings": list(detected.get("warnings") or []),
+        "artifact_resolution": dict(detected.get("artifact_resolution") or {}),
+    }
+
+
+def _detection_source_signature(project_dir: Path, manifest: Dict[str, object]) -> str:
+    rows = [
+        "manifest_engines="
+        + ",".join(
+            sorted(
+                str(engine).strip().lower()
+                for engine in (manifest.get("engines", []) or [])
+                if str(engine).strip()
+            )
+        )
+    ]
+    suffixes = {
+        "poses": {"gnina": (".sdf",), "vina": (".pdbqt",), "smina": (".pdbqt",), "autodock4": (".dlg",)},
+        "logs": {engine: (".log", "_log") for engine in SUPPORTED_ENGINES},
+        "scores": {engine: (".csv",) for engine in SUPPORTED_ENGINES},
+    }
+    files = set()
+    for engine in SUPPORTED_ENGINES:
+        detected = detect_engine_layout(project_dir, engine)
+        resolution = dict(detected.get("artifact_resolution") or {})
+        for artifact in ("poses", "logs", "scores"):
+            artifact_row = dict(resolution.get(artifact) or {})
+            for raw_dir in artifact_row.get("populated_candidates", []) or []:
+                directory = Path(str(raw_dir))
+                if not directory.is_dir():
+                    continue
+                for suffix in suffixes[artifact][engine]:
+                    files.update(path.resolve() for path in directory.glob(f"*{suffix}") if path.is_file())
+    try:
+        pairlist = pairlist_path(project_dir)
+        if pairlist.is_file():
+            files.add(pairlist.resolve())
+    except Exception:
+        pass
+    for path in sorted(files, key=lambda item: str(item)):
+        try:
+            stat = path.stat()
+            rows.append(f"{path}|{stat.st_mtime_ns}|{stat.st_size}")
+        except OSError:
+            rows.append(f"{path}|stat_error")
+    return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
 
 
 def _engine_status(details: Dict[str, object], *, total_pairs: int, min_coverage_pct: float) -> str:
@@ -223,16 +296,18 @@ def detect_engines(
     except Exception:
         manifest = {}
 
+    source_signature = _detection_source_signature(root, manifest)
     if not redetect and isinstance(manifest.get("detected_engines"), dict):
         cached = dict(manifest["detected_engines"])
-        cached["cache_hit"] = True
-        override = str(override_engine or "").strip().lower()
-        if override:
-            cached["detection_override"] = True
-            cached["override_reason"] = f"--engine {override}"
-            cached["routed_to_engine"] = override
-            cached["routing_decision"] = "single_engine"
-        return cached
+        if str(cached.get("source_signature") or "") == source_signature:
+            cached["cache_hit"] = True
+            override = str(override_engine or "").strip().lower()
+            if override:
+                cached["detection_override"] = True
+                cached["override_reason"] = f"--engine {override}"
+                cached["routed_to_engine"] = override
+                cached["routing_decision"] = "single_engine"
+            return cached
 
     candidates = _candidate_engines_from_manifest(root)
     detection_method = "manifest" if candidates else "filesystem"
@@ -284,6 +359,7 @@ def detect_engines(
         "engines": engines_payload,
         "min_coverage_pct": float(min_coverage_pct),
         "total_pairlist_pairs": int(total_pairs),
+        "source_signature": source_signature,
         "cache_hit": False,
     }
 

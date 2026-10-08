@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dockforge.local/schemas/md_inputs_manifest_v1.schema.json",
+  "title": "DockForge MD inputs aggregate manifest v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "method_version",
+    "generated_at",
+    "status",
+    "request",
+    "request_fingerprint",
+    "chemistry_capability",
+    "selection_file",
+    "counts",
+    "rows"
+  ],
+  "properties": {
+    "schema_version": {"const": "md_inputs_manifest_v1"},
+    "method_version": {"type": "string", "minLength": 1},
+    "generated_at": {"type": "string", "minLength": 1},
+    "status": {"enum": ["completed", "failed"]},
+    "request": {"type": "object"},
+    "request_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "chemistry_capability": {"type": "object"},
+    "selection_file": {"type": "object"},
+    "counts": {"type": "object"},
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tag", "engine", "status", "reason", "gates", "cache_reused"],
+        "properties": {
+          "status": {
+            "enum": [
+              "completed",
+              "failed",
+              "skipped_disabled",
+              "skipped_missing_dependency",
+              "skipped_missing_configuration",
+              "not_comparable"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

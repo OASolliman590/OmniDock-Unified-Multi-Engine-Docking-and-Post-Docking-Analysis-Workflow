@@ -1645,6 +1645,79 @@ def run_analysis_comparative(
     )
 
 
+def run_analysis_md_inputs(
+    project_dir: str,
+    *,
+    engine: str,
+    tags_file: str,
+    receptor_map: str,
+    ph: float,
+    protonation_policy: str,
+    topology_map: Optional[str] = None,
+    charge_map: Optional[str] = None,
+    ligand_formats: Optional[List[str]] = None,
+    consumer_profile: str = "charmm_gui_cgenff_v1",
+    protonate: bool = True,
+    force: bool = False,
+) -> WorkflowStepResult:
+    """Request the strict, optional md_inputs artifact and expose row failures."""
+    from docking.project_layout import post_docking_root
+    from post_docking_analysis.md_inputs import MDInputsRequest
+    from post_docking_analysis.multi_engine_pipeline import MultiEngineAnalysisPipeline
+
+    root = Path(project_dir).expanduser().resolve()
+    request = MDInputsRequest.from_dict(
+        {
+            "project_dir": str(root),
+            "engine": engine,
+            "tags_file": tags_file,
+            "receptor_map": receptor_map,
+            "topology_map": topology_map or "",
+            "charge_map": charge_map or "",
+            "pH": ph,
+            "protonation_policy": protonation_policy,
+            "ligand_formats": ligand_formats or ["mol2"],
+            "consumer_profile": consumer_profile,
+            "protonate": protonate,
+            "force": force,
+        }
+    )
+    session_dir = post_docking_root(root) / "sessions" / datetime.now().strftime("md_inputs_%Y%m%d_%H%M%S")
+    pipeline = MultiEngineAnalysisPipeline(
+        project_dir=str(root),
+        output_dir=str(session_dir),
+        analysis_mode="single_engine",
+        engine=request.engine,
+        favorite_engine=request.engine,
+        engines_in_scope=[request.engine],
+        analysis_scope="md_inputs",
+        md_inputs_request=request.to_dict(),
+    )
+    dag_report = pipeline.request_artifact_scope("md_inputs", force=force)
+    manifest_file = root / "5-Analysis" / "md_inputs" / "md_inputs_manifest.json"
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except Exception as exc:
+        manifest = {"status": "failed", "counts": {}, "rows": [], "reason": f"manifest_unavailable:{exc}"}
+    completed = manifest.get("status") == "completed"
+    outputs = {
+        "output_dir": str(root / "5-Analysis" / "md_inputs"),
+        "manifest_file": str(manifest_file),
+        "dag_report_file": str(root / "4-Working" / "metadata" / "dag_execution_report.json"),
+        "counts": dict(manifest.get("counts") or {}),
+    }
+    update_artifacts(root, md_inputs_output_dir=outputs["output_dir"], md_inputs_manifest_file=str(manifest_file))
+    notes = [] if completed else [str(manifest.get("reason") or "One or more requested MD-input rows did not complete.")]
+    return _result(
+        "analyze.md_inputs",
+        "completed" if completed else "failed",
+        root,
+        inputs=request.to_dict(),
+        outputs={**outputs, "dag_report": dag_report},
+        notes=notes,
+    )
+
+
 def run_analysis_favorite(
     project_dir: str,
     favorite_engine: Optional[str],

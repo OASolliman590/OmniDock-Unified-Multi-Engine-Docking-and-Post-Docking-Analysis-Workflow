@@ -17,7 +17,7 @@ def _utc_now_iso() -> str:
 
 def _safe_relative(path: Path, root: Path) -> str:
     try:
-        return str(path.resolve().relative_to(root.resolve()))
+        return path.resolve().relative_to(root.resolve()).as_posix()
     except Exception:
         return str(path)
 

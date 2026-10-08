@@ -36,7 +36,7 @@ setup(
     install_requires=requirements,
     entry_points={
         "console_scripts": [
-            "pdb-prepare-wizard=main:main",
+            "pdb-prepare-wizard=workflow.cli:main",
             "pdb-wizard-workflow=workflow.cli:main",
             "pdb-wizard-interactive=workflow.interactive:run_interactive_workflow",
             "pdb-wizard-legacy-interactive=interactive_pipeline:run_interactive_pipeline",

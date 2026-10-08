@@ -1991,6 +1991,7 @@ def _smoke_non_gnina_rmsd_enforcement_contract() -> None:
             minimum_pose_count=1,
             rmsd_workers=0,
             speed_profile="standard",
+            analysis_config=None,
         )
         _assert(isinstance(result, tuple) and len(result) == 5, "non-GNINA bridge context should return expected tuple contract")
         _assert(bool(captured_kwargs.get("run_rmsd", False)) is True, "non-GNINA bridge must force run_rmsd=True")
@@ -2294,7 +2295,7 @@ def _smoke_interactive_favorite_flow_clean_followup_contract() -> None:
     )
     clean_output = str(followup_call.get("output_dir", ""))
     _assert(
-        clean_output.endswith("favorite_engine/clean_interactions"),
+        Path(clean_output).parts[-2:] == ("favorite_engine", "clean_interactions"),
         f"favorite-flow clean follow-up should use favorite_engine/clean_interactions output suffix, got: {clean_output}",
     )
     _assert(
@@ -3108,15 +3109,15 @@ def _smoke_redocking_validation_multi_pose_end_to_end_contract() -> None:
     temp_root = Path(tempfile.mkdtemp(prefix="dockforge_redock_e2e_"))
     try:
         docked_sdf = temp_root / "gnina_best_pose.sdf"
-        reference_pose = temp_root / "reference_pose.pdbqt"
-        coords_pose_1 = _compact_test_coords(44, offset=0.0)
-        coords_pose_2 = _compact_test_coords(44, offset=0.20)
+        reference_pose = temp_root / "reference_pose.sdf"
+        coords_pose_1 = _compact_test_coords(1, offset=0.0)
+        coords_pose_2 = _compact_test_coords(1, offset=0.20)
         _write_test_sdf(
             docked_sdf,
             [coords_pose_1, coords_pose_2],
-            declared_atom_counts=[88, 44],
+            declared_atom_counts=[1, 1],
         )
-        _write_test_pdbqt_pose(reference_pose, coords_pose_1)
+        _write_test_sdf(reference_pose, [coords_pose_1])
 
         best_by_engine = pd.DataFrame(
             [
@@ -3130,6 +3131,8 @@ def _smoke_redocking_validation_multi_pose_end_to_end_contract() -> None:
                     "is_cocrystal_benchmark": True,
                     "pair_source": "reference",
                     "reference_pose_file": str(reference_pose),
+                    "cocrystal_ligand_name": "REF1",
+                    "pdb_id": "P1",
                 }
             ]
         )
@@ -4628,8 +4631,18 @@ def _smoke_unified_output_topology_contract() -> None:
         _assert("7-Reports" in contents, "analysis index should mention consolidated reports path")
 
         latest_link = analysis_root / "LATEST_SESSION"
-        _assert(latest_link.is_symlink(), "LATEST_SESSION should be a symlink")
-        _assert(latest_link.resolve() == session_root.resolve(), "LATEST_SESSION should resolve to current session")
+        if latest_link.is_symlink():
+            _assert(latest_link.resolve() == session_root.resolve(), "LATEST_SESSION should resolve to current session")
+        else:
+            latest_fallback = analysis_root / "README_FIRST.txt"
+            _assert(
+                latest_fallback.exists(),
+                "README_FIRST.txt should identify the latest session when symlinks are unavailable",
+            )
+            _assert(
+                str(session_root) in latest_fallback.read_text(encoding="utf-8"),
+                "README_FIRST.txt should record the current session when symlinks are unavailable",
+            )
 
         raw_copy = analysis_root / "raw_data" / "START_HERE.md"
         _assert(raw_copy.exists(), "raw_data duplicate START_HERE.md should exist")
@@ -5196,7 +5209,7 @@ def _smoke_visualization_suite_start_here_embedding_contract() -> None:
         _assert(bool(generated_rows), "visualization manifest should contain at least one generated figure")
         first_path = Path(str(generated_rows[0].get("path", ""))).expanduser()
         try:
-            rel_path = str(first_path.resolve().relative_to(temp_root.resolve()))
+            rel_path = first_path.resolve().relative_to(temp_root.resolve()).as_posix()
         except Exception:
             rel_path = str(first_path)
 
@@ -6288,7 +6301,18 @@ def _smoke_webui_contract() -> None:
     _assert(webui_config.HOST == "127.0.0.1", "web UI must default to a localhost bind")
 
 
+def _ensure_console_encoding() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            encoding = (getattr(stream, "encoding", "") or "").lower()
+            if encoding.replace("-", "") != "utf8" and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main() -> int:
+    _ensure_console_encoding()
     args = parse_args()
     print("🧪 Running DockForge smoke checks")
     print("=" * 60)

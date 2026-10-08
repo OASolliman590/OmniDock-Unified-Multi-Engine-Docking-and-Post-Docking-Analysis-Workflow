@@ -66,6 +66,8 @@ from .protein_naming import (
     extract_pdb_code,
     format_protein_label,
 )
+from .value_normalization import normalize_boolean, normalize_boolean_series
+from .reference_policy import classify_reference_row, reference_mask
 
 
 _VALID_RMSD_SCOPES = ("per_complex", "per_protein", "global")
@@ -459,7 +461,7 @@ class SimplifiedPostDockingPipeline:
                 stat = file_path.stat()
                 output_rows.append(
                     {
-                        "relative_path": str(relative),
+                        "relative_path": relative.as_posix(),
                         "category": self._classify_output_path(relative),
                         "extension": str(file_path.suffix.lower()),
                         "size_bytes": int(stat.st_size),
@@ -1905,34 +1907,7 @@ class SimplifiedPostDockingPipeline:
         """
         Detect whether a row should be treated as a reference/control entry.
         """
-        site_id = str(row.get("site_id") or "").strip().lower()
-        if site_id in {
-            "reference",
-            "comparative",
-            "compartive",
-            "lapi",
-            "control",
-            "benchmark",
-            "known",
-            "native",
-            "redocking",
-        }:
-            return True
-
-        text = " ".join(
-            str(row.get(key) or "")
-            for key in ("tag", "ligand", "ligand_name")
-        ).lower()
-        tokens = (
-            "reference",
-            "co-crystal",
-            "cocrystal",
-            "native",
-            "control",
-            "benchmark",
-            "redocking",
-        )
-        return any(token in text for token in tokens)
+        return classify_reference_row(row).is_reference
 
     @staticmethod
     def _serialize_targets(values: List[str]) -> str:
@@ -3307,13 +3282,7 @@ class SimplifiedPostDockingPipeline:
         if df is None or df.empty:
             return pd.Series(dtype=bool)
 
-        ref_mask = pd.Series(False, index=df.index)
-        if "is_cocrystal_benchmark" in df.columns:
-            ref_mask |= df["is_cocrystal_benchmark"].fillna(False).astype(bool)
-        if "is_reference_candidate" in df.columns:
-            ref_mask |= df["is_reference_candidate"].fillna(False).astype(bool)
-        ref_mask |= df.apply(self._is_reference_candidate_row, axis=1)
-        return ref_mask
+        return reference_mask(df)
 
     def _select_nonreference_shared_ligands(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -3720,7 +3689,9 @@ class SimplifiedPostDockingPipeline:
                         comp_df.groupby(["protein_label", "ligand"])["vina_affinity"].idxmin()
                     ].copy()
                     comp_df["source_class"] = comp_df.apply(
-                        lambda row: "Cocrystal Benchmark" if bool(row.get("is_cocrystal_benchmark")) else "Reference/Control",
+                        lambda row: "Cocrystal Benchmark"
+                        if normalize_boolean(row.get("is_cocrystal_benchmark"))
+                        else "Reference/Control",
                         axis=1,
                     )
                     comp_df = comp_df.sort_values("vina_affinity")
@@ -5147,8 +5118,8 @@ class SimplifiedPostDockingPipeline:
                 raw_inventory_rows.append(
                     {
                         "bucket": bucket,
-                        "source_file": str(rel_path),
-                        "indexed_copy": str(destination.relative_to(self.output_dir)),
+                        "source_file": rel_path.as_posix(),
+                        "indexed_copy": destination.relative_to(self.output_dir).as_posix(),
                     }
                 )
 

@@ -1,0 +1,14 @@
+{
+  "detection_method": "filesystem",
+  "detection_override": false,
+  "override_reason": null,
+  "routing_decision": "no_valid_engines",
+  "routed_to_engine": null,
+  "valid_engines": [],
+  "engines": {},
+  "min_coverage_pct": 30.0,
+  "total_pairlist_pairs": 0,
+  "source_signature": "e3f8efa0b35888db52a767fb975897a3453c67b9bb748a41a19241ce6117b7e4",
+  "cache_hit": false,
+  "report_file": "D:\\OmniDock\\test\\fixtures\\webui_project\\4-Working\\metadata\\engine_detection_report.json"
+}

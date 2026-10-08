@@ -12,6 +12,8 @@ Analysis hierarchy:
 3. Cross-protein comparison (same ligands across different proteins)
 """
 import pandas as pd
+
+from .value_normalization import normalize_boolean_series
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -263,7 +265,7 @@ class HierarchicalDockingAnalyzer:
 
         cross_data = self.df.copy()
         if 'is_cocrystal_benchmark' in cross_data.columns:
-            cross_data = cross_data[~cross_data['is_cocrystal_benchmark'].fillna(False).astype(bool)].copy()
+            cross_data = cross_data[~normalize_boolean_series(cross_data['is_cocrystal_benchmark'])].copy()
 
         ligand_counts = cross_data.groupby('ligand')['protein'].nunique()
         shared_ligands = ligand_counts[ligand_counts >= 2].index.tolist()
@@ -307,7 +309,7 @@ class HierarchicalDockingAnalyzer:
 
         comp_mask = pd.Series(False, index=self.df.index)
         if 'is_cocrystal_benchmark' in self.df.columns:
-            comp_mask |= self.df['is_cocrystal_benchmark'].fillna(False).astype(bool)
+            comp_mask |= normalize_boolean_series(self.df['is_cocrystal_benchmark'])
         comp_mask |= self.df['site_id'].astype(str).str.lower().isin(
             {'comparative', 'compartive', 'reference', 'redocking', 'native'}
         )

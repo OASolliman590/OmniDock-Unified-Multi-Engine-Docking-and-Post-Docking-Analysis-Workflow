@@ -306,7 +306,7 @@ class BatchPDBPreparationPipeline:
                             cleaned_pdb, selected_hetatm, chain_id, res_id
                         )
                         if residue_analysis:
-                            coords = residue_analysis['overall_center']
+                            coords = residue_analysis['binding_site_center']
                             results.update({
                                 'selected_ligand': f"{selected_hetatm}_{chain_id}_{res_id}",
                                 'active_site_center_x': coords[0],
@@ -315,6 +315,7 @@ class BatchPDBPreparationPipeline:
                                 'interacting_residues_count': residue_analysis['num_interacting_residues'],
                                 'interacting_atoms_count': residue_analysis['num_interacting_atoms']
                             })
+                            results['binding_site_center_provenance'] = residue_analysis.get('center_provenance', {})
                         else:
                             raise ValueError("Enhanced coordinate extraction failed")
                     else:
