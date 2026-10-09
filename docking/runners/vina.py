@@ -23,6 +23,7 @@ class VinaRunner(DockingEngineRunner):
         num_modes = int(runtime.get("num_modes", 20))
         cpu = runtime.get("cpu")
         seed = runtime.get("seed")
+        scoring = str(runtime.get("scoring") or "").strip()
 
         command: List[str] = []
         if env_name:
@@ -58,6 +59,8 @@ class VinaRunner(DockingEngineRunner):
             command.extend(["--cpu", str(cpu)])
         if seed not in (None, ""):
             command.extend(["--seed", str(seed)])
+        if scoring:
+            command.extend(["--scoring", scoring])
         return command
 
     def collect_normalized_scores(self, pairlist_rows: List[PairlistRow]) -> pd.DataFrame:

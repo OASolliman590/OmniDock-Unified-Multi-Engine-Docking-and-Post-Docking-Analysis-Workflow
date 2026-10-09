@@ -283,6 +283,23 @@ pdb-wizard-interactive
 
 The new workflow shell can resume or inspect state from `.workflow/state.json`, jump directly to specific functions, and continue from docking preparation into docking execution and post-docking analysis without switching entrypoints.
 
+For explicit empirical scoring, `dock run`, `dock dry-run`, `dock engine`, and
+`dock deploy` accept optional `--gnina-scoring`, `--vina-scoring`, and the existing
+`--smina-scoring`. Each supplied value is forwarded as the engine's `--scoring`
+argument. Omit these flags to keep the engine's existing scoring default; during
+deployment, an omitted flag preserves a scoring value configured in the HPC
+profile. A supplied CLI value overrides that profile value. Scoring names are
+passed through for the selected engine version to validate. GNINA's empirical
+scoring flag is separate from `--gnina-cnn-scoring` (default `rescore`), and
+`--gnina-cpu` is forwarded alongside `--gnina-device` when GPU execution is
+enabled and both are supplied (for example, with `--execution-environment local_gpu`).
+
+This does not change normalized score selection: GNINA retains `cnn_affinity`
+as primary and `cnn_score` as secondary, with both named columns in
+`all_scores.csv`. Consumers needing CNNscore must select the named `cnn_score`
+field. Vina/Smina retain their existing `vina_affinity` output label; use the
+recorded runtime scoring setting and command to identify the empirical function.
+
 `workflow init --layout-profile docking_legacy` bootstraps a staged docking project with:
 
 - `1-Raw_Ligand/`

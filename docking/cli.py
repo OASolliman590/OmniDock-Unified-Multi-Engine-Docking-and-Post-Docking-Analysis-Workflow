@@ -120,6 +120,7 @@ def _build_runtime_by_engine(
             "device": args.gnina_device,
             "cpu": args.gnina_cpu,
             "cnn_scoring": args.gnina_cnn_scoring,
+            "scoring": getattr(args, "gnina_scoring", None),
             "score_only": getattr(args, "mode", "standard") == "score-only",
             "exhaustiveness": args.exhaustiveness,
             "num_modes": args.num_modes,
@@ -131,6 +132,7 @@ def _build_runtime_by_engine(
             "conda_env": args.vina_conda_env,
             "binary": args.vina_binary,
             "cpu": args.vina_cpu,
+            "scoring": getattr(args, "vina_scoring", None),
             "exhaustiveness": args.exhaustiveness,
             "num_modes": args.num_modes,
             "round_id": round_id,
@@ -440,9 +442,11 @@ def dock_main(argv=None) -> int:
     parser.add_argument("--gnina-device", help="GNINA device id")
     parser.add_argument("--gnina-cpu", type=int, help="CPU cores for GNINA CPU mode")
     parser.add_argument("--gnina-cnn-scoring", default="rescore", help="GNINA CNN scoring mode")
+    parser.add_argument("--gnina-scoring", help="Optional GNINA empirical scoring function")
     parser.add_argument("--vina-conda-env", help="Conda environment name for AutoDock Vina")
     parser.add_argument("--vina-binary", help="Vina binary name/path")
     parser.add_argument("--vina-cpu", type=int, help="CPU cores for Vina")
+    parser.add_argument("--vina-scoring", help="Optional Vina scoring function")
     parser.add_argument("--smina-conda-env", help="Conda environment name for Smina")
     parser.add_argument("--smina-binary", help="Smina binary name/path")
     parser.add_argument("--smina-cpu", type=int, help="CPU cores for Smina")
@@ -658,9 +662,11 @@ def deploy_main(argv=None) -> int:
     parser.add_argument("--gnina-device", help="GNINA device id")
     parser.add_argument("--gnina-cpu", type=int, help="CPU cores for GNINA CPU mode")
     parser.add_argument("--gnina-cnn-scoring", default="rescore", help="GNINA CNN scoring mode")
+    parser.add_argument("--gnina-scoring", help="Optional GNINA empirical scoring function")
     parser.add_argument("--vina-conda-env", help="Conda environment name for AutoDock Vina")
     parser.add_argument("--vina-binary", help="Vina binary name/path")
     parser.add_argument("--vina-cpu", type=int, help="CPU cores for Vina")
+    parser.add_argument("--vina-scoring", help="Optional Vina scoring function")
     parser.add_argument("--smina-conda-env", help="Conda environment name for Smina")
     parser.add_argument("--smina-binary", help="Smina binary name/path")
     parser.add_argument("--smina-cpu", type=int, help="CPU cores for Smina")

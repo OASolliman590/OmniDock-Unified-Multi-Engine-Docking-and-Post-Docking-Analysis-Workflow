@@ -711,9 +711,11 @@ def _add_dock_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--gnina-device")
     parser.add_argument("--gnina-cpu", type=int)
     parser.add_argument("--gnina-cnn-scoring", default="rescore")
+    parser.add_argument("--gnina-scoring", help="Optional GNINA empirical scoring function")
     parser.add_argument("--vina-conda-env")
     parser.add_argument("--vina-binary")
     parser.add_argument("--vina-cpu", type=int)
+    parser.add_argument("--vina-scoring", help="Optional Vina scoring function")
     parser.add_argument("--smina-conda-env")
     parser.add_argument("--smina-binary")
     parser.add_argument("--smina-cpu", type=int)
@@ -797,9 +799,11 @@ def _add_deploy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--gnina-device")
     parser.add_argument("--gnina-cpu", type=int)
     parser.add_argument("--gnina-cnn-scoring", default="rescore")
+    parser.add_argument("--gnina-scoring", help="Optional GNINA empirical scoring function")
     parser.add_argument("--vina-conda-env")
     parser.add_argument("--vina-binary")
     parser.add_argument("--vina-cpu", type=int)
+    parser.add_argument("--vina-scoring", help="Optional Vina scoring function")
     parser.add_argument("--smina-conda-env")
     parser.add_argument("--smina-binary")
     parser.add_argument("--smina-cpu", type=int)
@@ -913,8 +917,10 @@ def _build_dock_argv(args: argparse.Namespace, forced_engine: Optional[str] = No
         "--gnina-binary",
         "--gnina-device",
         "--gnina-cnn-scoring",
+        "--gnina-scoring",
         "--vina-conda-env",
         "--vina-binary",
+        "--vina-scoring",
         "--smina-conda-env",
         "--smina-binary",
         "--smina-scoring",
@@ -985,8 +991,10 @@ def _build_deploy_argv(args: argparse.Namespace) -> List[str]:
         "--gnina-binary",
         "--gnina-device",
         "--gnina-cnn-scoring",
+        "--gnina-scoring",
         "--vina-conda-env",
         "--vina-binary",
+        "--vina-scoring",
         "--smina-conda-env",
         "--smina-binary",
         "--smina-scoring",

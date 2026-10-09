@@ -28,6 +28,7 @@ class GninaRunner(DockingEngineRunner):
         device = runtime.get("device")
         cpu = runtime.get("cpu")
         seed = runtime.get("seed")
+        scoring = str(runtime.get("scoring") or "").strip()
 
         command: List[str] = []
         if image:
@@ -72,9 +73,11 @@ class GninaRunner(DockingEngineRunner):
             command.append("--score_only")
         if seed not in (None, ""):
             command.extend(["--seed", str(seed)])
+        if scoring:
+            command.extend(["--scoring", scoring])
         if use_gpu and device not in (None, ""):
             command.extend(["--device", str(device)])
-        elif cpu not in (None, ""):
+        if cpu not in (None, ""):
             command.extend(["--cpu", str(cpu)])
         return command
 
