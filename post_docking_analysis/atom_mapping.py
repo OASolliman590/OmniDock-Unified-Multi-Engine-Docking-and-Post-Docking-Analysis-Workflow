@@ -24,6 +24,11 @@ MAPPING_METHOD = "spec031-atom-mapping-v1"
 ALIGNMENT_METHOD = "kabsch"
 DEFAULT_MAX_ISOMORPHISMS = 100_000
 
+# RMSD frames.  "kabsch" is the accepted Spec 031 value (superposed).  "in_place_v1" is the
+# Spec 034 T002a redocking primary (no superposition, same valid mappings).
+KABSCH_METHOD = "kabsch"
+IN_PLACE_METHOD = "in_place_v1"
+
 # Spec 034 R1: lineage source for Meeko-prepared PDBQT poses. Explicit SDF
 # topologies (the Spec 031 source) are labelled EXPLICIT_TOPOLOGY_SOURCE.
 LINEAGE_METHOD = "meeko_smiles_idx_lineage_v1"
@@ -91,6 +96,8 @@ class AtomMappingResult:
     topology_sha256_b: str = ""
     lineage_source: str = ""
     reference_lineage_source: str = ""
+    rmsd_frame: str = ""
+    kabsch_rmsd_angstrom: Optional[float] = None
 
     @property
     def comparable(self) -> bool:
@@ -117,6 +124,8 @@ class AtomMappingResult:
             "topology_sha256_b": self.topology_sha256_b,
             "lineage_source": self.lineage_source,
             "reference_lineage_source": self.reference_lineage_source,
+            "rmsd_frame": self.rmsd_frame,
+            "kabsch_rmsd_angstrom": self.kabsch_rmsd_angstrom,
         }
 
 
@@ -327,7 +336,17 @@ def kabsch_rmsd(coords_a: np.ndarray, coords_b: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.sum(delta * delta, axis=1))))
 
 
-def _pair_base_fields(pose_a: GraphPose, pose_b: GraphPose) -> Dict[str, object]:
+def in_place_rmsd(coords_a: np.ndarray, coords_b: np.ndarray) -> float:
+    """Heavy-atom RMSD with no superposition (both poses already share the receptor frame)."""
+    left = np.asarray(coords_a, dtype=float)
+    right = np.asarray(coords_b, dtype=float)
+    if left.shape != right.shape or left.ndim != 2 or left.shape[1] != 3 or left.shape[0] == 0:
+        return float("nan")
+    delta = left - right
+    return float(np.sqrt(np.mean(np.sum(delta * delta, axis=1))))
+
+
+def _pair_base_fields(pose_a: GraphPose, pose_b: GraphPose, *, rmsd_frame: str, alignment_method: str) -> Dict[str, object]:
     return {
         "total_heavy_atoms_a": int(pose_a.coords.shape[0]),
         "total_heavy_atoms_b": int(pose_b.coords.shape[0]),
@@ -338,7 +357,86 @@ def _pair_base_fields(pose_a: GraphPose, pose_b: GraphPose) -> Dict[str, object]
         "topology_sha256_b": pose_b.topology_sha256,
         "lineage_source": pose_a.lineage_source,
         "reference_lineage_source": pose_b.lineage_source,
+        "rmsd_frame": rmsd_frame,
+        "alignment_method": alignment_method,
     }
+
+
+def _shared_lineage(pose_a: GraphPose, pose_b: GraphPose) -> bool:
+    return (
+        bool(pose_a.topology_sha256)
+        and pose_a.topology_sha256 == pose_b.topology_sha256
+        and pose_a.topology_pose_index == pose_b.topology_pose_index
+        and pose_a.elements == pose_b.elements
+        and list(pose_a.graph.nodes(data=True)) == list(pose_b.graph.nodes(data=True))
+        and list(pose_a.graph.edges(data=True)) == list(pose_b.graph.edges(data=True))
+    )
+
+
+@dataclass
+class _MappingSearch:
+    """Minima over the same valid symmetry mappings, for both RMSD frames."""
+
+    mapping_count: int = 0
+    limit_exceeded: bool = False
+    kabsch_min: float = float("inf")
+    kabsch_order: Optional[Tuple[int, ...]] = None
+    in_place_min: float = float("inf")
+    in_place_order: Optional[Tuple[int, ...]] = None
+
+
+def _offer_candidate(
+    search: _MappingSearch,
+    frame: str,
+    candidate: float,
+    order: Tuple[int, ...],
+) -> None:
+    if not np.isfinite(candidate):
+        return
+    if frame == KABSCH_METHOD:
+        current, selected = search.kabsch_min, search.kabsch_order
+    else:
+        current, selected = search.in_place_min, search.in_place_order
+    if candidate < current - 1e-12 or (abs(candidate - current) <= 1e-12 and (selected is None or order < selected)):
+        if frame == KABSCH_METHOD:
+            search.kabsch_min, search.kabsch_order = float(candidate), order
+        else:
+            search.in_place_min, search.in_place_order = float(candidate), order
+
+
+def _search_mappings(pose_a: GraphPose, pose_b: GraphPose, max_isomorphisms: int) -> _MappingSearch:
+    """Enumerate every bond-labelled, element- and charge-matched isomorphism once."""
+    count_a = int(pose_a.coords.shape[0])
+    matcher = nx.algorithms.isomorphism.GraphMatcher(
+        pose_a.graph,
+        pose_b.graph,
+        node_match=_node_match,
+        edge_match=_edge_match,
+    )
+    search = _MappingSearch()
+    for mapping in matcher.isomorphisms_iter():
+        search.mapping_count += 1
+        if search.mapping_count > int(max_isomorphisms):
+            search.mapping_count -= 1
+            search.limit_exceeded = True
+            break
+        order = tuple(int(mapping[index]) for index in range(count_a))
+        permuted = pose_b.coords[list(order), :]
+        _offer_candidate(search, KABSCH_METHOD, kabsch_rmsd(pose_a.coords, permuted), order)
+        _offer_candidate(search, IN_PLACE_METHOD, in_place_rmsd(pose_a.coords, permuted), order)
+    return search
+
+
+def _precheck(pose_a: GraphPose, pose_b: GraphPose, base: Dict[str, object]) -> Optional[AtomMappingResult]:
+    count_a = int(pose_a.coords.shape[0])
+    count_b = int(pose_b.coords.shape[0])
+    if nx is None:
+        return AtomMappingResult(status="not_comparable", reason="skipped_missing_dependency:networkx", **base)
+    if count_a != count_b:
+        return AtomMappingResult(status="not_comparable", reason="atom_count_mismatch", **base)
+    if count_a <= 0:
+        return AtomMappingResult(status="not_comparable", reason="no_heavy_atoms", **base)
+    return None
 
 
 def compare_graph_poses(
@@ -347,25 +445,14 @@ def compare_graph_poses(
     *,
     max_isomorphisms: int = DEFAULT_MAX_ISOMORPHISMS,
 ) -> AtomMappingResult:
+    """Spec 031 comparison: minimum Kabsch-superposed heavy-atom RMSD over valid mappings."""
     count_a = int(pose_a.coords.shape[0])
-    count_b = int(pose_b.coords.shape[0])
-    base = _pair_base_fields(pose_a, pose_b)
-    if nx is None:
-        return AtomMappingResult(status="not_comparable", reason="skipped_missing_dependency:networkx", **base)
-    if count_a != count_b:
-        return AtomMappingResult(status="not_comparable", reason="atom_count_mismatch", **base)
-    if count_a <= 0:
-        return AtomMappingResult(status="not_comparable", reason="no_heavy_atoms", **base)
+    base = _pair_base_fields(pose_a, pose_b, rmsd_frame=KABSCH_METHOD, alignment_method=ALIGNMENT_METHOD)
+    early = _precheck(pose_a, pose_b, base)
+    if early is not None:
+        return early
 
-    shared_lineage = (
-        bool(pose_a.topology_sha256)
-        and pose_a.topology_sha256 == pose_b.topology_sha256
-        and pose_a.topology_pose_index == pose_b.topology_pose_index
-        and pose_a.elements == pose_b.elements
-        and list(pose_a.graph.nodes(data=True)) == list(pose_b.graph.nodes(data=True))
-        and list(pose_a.graph.edges(data=True)) == list(pose_b.graph.edges(data=True))
-    )
-    if shared_lineage:
+    if _shared_lineage(pose_a, pose_b):
         rmsd = kabsch_rmsd(pose_a.coords, pose_b.coords)
         if np.isfinite(rmsd):
             return AtomMappingResult(
@@ -376,54 +463,99 @@ def compare_graph_poses(
                 mapping_coverage=1.0,
                 valid_mapping_count=1,
                 selected_mapping=tuple(range(count_a)),
+                kabsch_rmsd_angstrom=float(rmsd),
                 **base,
             )
 
-    matcher = nx.algorithms.isomorphism.GraphMatcher(
-        pose_a.graph,
-        pose_b.graph,
-        node_match=_node_match,
-        edge_match=_edge_match,
-    )
-    minimum = float("inf")
-    selected: Optional[Tuple[int, ...]] = None
-    mapping_count = 0
-    for mapping in matcher.isomorphisms_iter():
-        mapping_count += 1
-        if mapping_count > int(max_isomorphisms):
-            return AtomMappingResult(
-                status="not_comparable",
-                reason=f"mapping_limit_exceeded:{max_isomorphisms}",
-                valid_mapping_count=mapping_count - 1,
-                **base,
-            )
-        order = tuple(int(mapping[index]) for index in range(count_a))
-        candidate = kabsch_rmsd(pose_a.coords, pose_b.coords[list(order), :])
-        if not np.isfinite(candidate):
-            continue
-        if candidate < minimum - 1e-12 or (
-            abs(candidate - minimum) <= 1e-12 and (selected is None or order < selected)
-        ):
-            minimum = float(candidate)
-            selected = order
-
-    if mapping_count == 0:
+    search = _search_mappings(pose_a, pose_b, max_isomorphisms)
+    if search.limit_exceeded:
+        return AtomMappingResult(
+            status="not_comparable",
+            reason=f"mapping_limit_exceeded:{max_isomorphisms}",
+            valid_mapping_count=search.mapping_count,
+            **base,
+        )
+    if search.mapping_count == 0:
         return AtomMappingResult(status="not_comparable", reason="graphs_not_isomorphic", **base)
-    if selected is None or not np.isfinite(minimum):
+    if search.kabsch_order is None or not np.isfinite(search.kabsch_min):
         return AtomMappingResult(
             status="not_comparable",
             reason="rmsd_not_finite",
-            valid_mapping_count=mapping_count,
+            valid_mapping_count=search.mapping_count,
             **base,
         )
     return AtomMappingResult(
         status="comparable",
         reason="graph_isomorphism_complete",
-        rmsd_angstrom=minimum,
+        rmsd_angstrom=search.kabsch_min,
         mapped_heavy_atoms=count_a,
         mapping_coverage=1.0,
-        valid_mapping_count=mapping_count,
-        selected_mapping=selected,
+        valid_mapping_count=search.mapping_count,
+        selected_mapping=search.kabsch_order,
+        kabsch_rmsd_angstrom=search.kabsch_min,
+        **base,
+    )
+
+
+def compare_graph_poses_in_place(
+    pose_a: GraphPose,
+    pose_b: GraphPose,
+    *,
+    max_isomorphisms: int = DEFAULT_MAX_ISOMORPHISMS,
+) -> AtomMappingResult:
+    """Spec 034 T002a redocking primary: minimum in-place heavy-atom RMSD over the same
+    valid mappings used by ``compare_graph_poses``.  The Kabsch minimum over that mapping
+    set is reported as ``kabsch_rmsd_angstrom`` (secondary, not used for classification).
+    """
+    count_a = int(pose_a.coords.shape[0])
+    base = _pair_base_fields(pose_a, pose_b, rmsd_frame=IN_PLACE_METHOD, alignment_method="in_place")
+    early = _precheck(pose_a, pose_b, base)
+    if early is not None:
+        return early
+
+    if _shared_lineage(pose_a, pose_b):
+        in_place = in_place_rmsd(pose_a.coords, pose_b.coords)
+        if np.isfinite(in_place):
+            kabsch = kabsch_rmsd(pose_a.coords, pose_b.coords)
+            return AtomMappingResult(
+                status="comparable",
+                reason="shared_topology_lineage_exact_order",
+                rmsd_angstrom=float(in_place),
+                mapped_heavy_atoms=count_a,
+                mapping_coverage=1.0,
+                valid_mapping_count=1,
+                selected_mapping=tuple(range(count_a)),
+                kabsch_rmsd_angstrom=float(kabsch) if np.isfinite(kabsch) else None,
+                **base,
+            )
+
+    search = _search_mappings(pose_a, pose_b, max_isomorphisms)
+    if search.limit_exceeded:
+        return AtomMappingResult(
+            status="not_comparable",
+            reason=f"mapping_limit_exceeded:{max_isomorphisms}",
+            valid_mapping_count=search.mapping_count,
+            **base,
+        )
+    if search.mapping_count == 0:
+        return AtomMappingResult(status="not_comparable", reason="graphs_not_isomorphic", **base)
+    if search.in_place_order is None or not np.isfinite(search.in_place_min):
+        return AtomMappingResult(
+            status="not_comparable",
+            reason="rmsd_not_finite",
+            valid_mapping_count=search.mapping_count,
+            **base,
+        )
+    kabsch_secondary = search.kabsch_min if np.isfinite(search.kabsch_min) else None
+    return AtomMappingResult(
+        status="comparable",
+        reason="graph_isomorphism_complete",
+        rmsd_angstrom=search.in_place_min,
+        mapped_heavy_atoms=count_a,
+        mapping_coverage=1.0,
+        valid_mapping_count=search.mapping_count,
+        selected_mapping=search.in_place_order,
+        kabsch_rmsd_angstrom=kabsch_secondary,
         **base,
     )
 
@@ -737,25 +869,36 @@ def compare_lineage_graph_poses(
     pose_b: GraphPose,
     *,
     max_isomorphisms: int = DEFAULT_MAX_ISOMORPHISMS,
+    rmsd_frame: str = KABSCH_METHOD,
 ) -> AtomMappingResult:
     """Compare a lineage pose with a reference graph under one bond-order convention.
 
-    Both graphs go through ``_aromatic_convention_graph`` before the unchanged Spec 031
-    ``compare_graph_poses``.  Failure to normalise is ``not_comparable``; nothing is
-    loosened.  At least one side must carry the lineage source.
+    Both graphs go through ``_aromatic_convention_graph`` before the mapping comparison.
+    ``rmsd_frame`` selects ``compare_graph_poses`` (``kabsch``, the default, used by the
+    Spec 032 atom_map derivation) or ``compare_graph_poses_in_place`` (``in_place_v1``,
+    the Spec 034 T002a redocking primary).  Failure to normalise is ``not_comparable``;
+    nothing is loosened.  At least one side must carry the lineage source.
     """
+    if rmsd_frame not in (KABSCH_METHOD, IN_PLACE_METHOD):
+        raise ValueError(f"unknown_rmsd_frame:{rmsd_frame}")
     if LINEAGE_METHOD not in (pose_a.lineage_source, pose_b.lineage_source):
         raise ValueError("lineage_pose_required")
+    compare = compare_graph_poses_in_place if rmsd_frame == IN_PLACE_METHOD else compare_graph_poses
+    alignment = "in_place" if rmsd_frame == IN_PLACE_METHOD else ALIGNMENT_METHOD
     try:
         normalized_a = _normalize_pose_convention(pose_a)
         normalized_b = _normalize_pose_convention(pose_b)
     except RuntimeError as exc:
         reason = str(exc) if str(exc).startswith("skipped_missing_dependency") else f"bond_convention_failed:{exc}"
-        return AtomMappingResult(status="not_comparable", reason=reason, **_pair_base_fields(pose_a, pose_b))
+        return AtomMappingResult(
+            status="not_comparable",
+            reason=reason,
+            **_pair_base_fields(pose_a, pose_b, rmsd_frame=rmsd_frame, alignment_method=alignment),
+        )
     except Exception as exc:  # RDKit sanitisation errors do not share a base class
         return AtomMappingResult(
             status="not_comparable",
             reason=f"bond_convention_failed:{exc.__class__.__name__}",
-            **_pair_base_fields(pose_a, pose_b),
+            **_pair_base_fields(pose_a, pose_b, rmsd_frame=rmsd_frame, alignment_method=alignment),
         )
-    return compare_graph_poses(normalized_a, normalized_b, max_isomorphisms=max_isomorphisms)
+    return compare(normalized_a, normalized_b, max_isomorphisms=max_isomorphisms)

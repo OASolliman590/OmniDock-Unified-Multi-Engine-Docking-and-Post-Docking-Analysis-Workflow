@@ -19,10 +19,11 @@ import pandas as pd
 
 from docking.project_layout import shared_ligands_dir
 from post_docking_analysis.atom_mapping import (
+    IN_PLACE_METHOD,
     MAPPING_METHOD,
     LineageError,
     attach_coordinates_to_topology,
-    compare_graph_poses,
+    compare_graph_poses_in_place,
     compare_lineage_graph_poses,
     load_pdbqt_lineage_pose,
     load_sdf_graph_pose,
@@ -72,22 +73,6 @@ def _parse_pdb_like_heavy_atoms(
     return _extract_pdb_like_pose(file_path, pose_index=pose_index)
 
 
-def _kabsch_rmsd(coords_a: np.ndarray, coords_b: np.ndarray) -> float:
-    if coords_a.shape != coords_b.shape or coords_a.shape[0] <= 0:
-        return float("nan")
-    a = coords_a - np.mean(coords_a, axis=0)
-    b = coords_b - np.mean(coords_b, axis=0)
-    covariance = np.dot(a.T, b)
-    u, _, vt = np.linalg.svd(covariance)
-    rot = np.dot(vt.T, u.T)
-    if np.linalg.det(rot) < 0:
-        vt[-1, :] *= -1
-        rot = np.dot(vt.T, u.T)
-    aligned = np.dot(a, rot)
-    diff = aligned - b
-    return float(np.sqrt(np.mean(np.sum(diff * diff, axis=1))))
-
-
 def _compute_pose_rmsd(
     docked_pose_file: Path,
     reference_pose_file: Path,
@@ -97,6 +82,13 @@ def _compute_pose_rmsd(
     docked_topology_file: Optional[Path] = None,
     reference_topology_file: Optional[Path] = None,
 ) -> Tuple[Optional[float], str, Dict[str, object]]:
+    """Redocking RMSD of a docked pose against the reference ligand.
+
+    Spec 034 T002a: the returned value is the in-place heavy-atom RMSD (``in_place_v1``,
+    no superposition) minimised over the valid symmetry mappings; it drives classification.
+    The Kabsch-superposed value over the same mapping set is in the details as
+    ``kabsch_rmsd_angstrom`` (secondary).
+    """
     def _load_pose(coordinate_file: Path, pose_index: int, topology_file: Optional[Path]):
         if coordinate_file.suffix.lower() in {".sdf", ".mol"}:
             return load_sdf_graph_pose(coordinate_file, pose_index=pose_index)
@@ -127,7 +119,7 @@ def _compute_pose_rmsd(
         except (OSError, RuntimeError, ValueError) as exc:
             result = not_comparable_result(f"reference_pose_not_comparable:{exc}")
             return None, result.reason, result.to_dict()
-        lineage_result = compare_lineage_graph_poses(lineage_docked, reference)
+        lineage_result = compare_lineage_graph_poses(lineage_docked, reference, rmsd_frame=IN_PLACE_METHOD)
         if not lineage_result.comparable:
             return None, f"not_comparable:{lineage_result.reason}", lineage_result.to_dict()
         return float(lineage_result.rmsd_angstrom), "", lineage_result.to_dict()
@@ -142,7 +134,7 @@ def _compute_pose_rmsd(
     except (OSError, RuntimeError, ValueError) as exc:
         result = not_comparable_result(f"reference_pose_not_comparable:{exc}")
         return None, result.reason, result.to_dict()
-    result = compare_graph_poses(docked, reference)
+    result = compare_graph_poses_in_place(docked, reference)
     if not result.comparable:
         return None, f"not_comparable:{result.reason}", result.to_dict()
     return float(result.rmsd_angstrom), "", result.to_dict()
@@ -230,6 +222,20 @@ def _find_reference_pose_file(project_dir: Path, row: pd.Series, *, legacy_mode:
     return None
 
 
+KABSCH_SECONDARY_METHOD = "kabsch_secondary"
+
+
+def _rmsd_frame_summary(pass_threshold_angstrom: float, warn_threshold_angstrom: float) -> Dict[str, object]:
+    return {
+        "redocking_rmsd_frame": IN_PLACE_METHOD,
+        "decision_rmsd_column": "redocking_rmsd_angstrom",
+        "secondary_rmsd_method": KABSCH_SECONDARY_METHOD,
+        "secondary_rmsd_column": "kabsch_secondary_rmsd_angstrom",
+        "pass_threshold_angstrom": float(pass_threshold_angstrom),
+        "warn_threshold_angstrom": float(warn_threshold_angstrom),
+    }
+
+
 def _build_validation_summary_markdown(summary: Dict[str, object]) -> str:
     lines = [
         "# Validation Summary",
@@ -253,6 +259,22 @@ def _build_validation_summary_markdown(summary: Dict[str, object]) -> str:
         lines.append("Validation confidence is moderate: mixed redocking pass/fail outcomes.")
     else:
         lines.append("Validation confidence is low: no/limited evaluable rows or weak redocking reproduction.")
+    if summary.get("redocking_rmsd_frame"):
+        lines.extend(
+            [
+                "",
+                "## RMSD frame",
+                "",
+                f"- decision_rmsd: {summary.get('decision_rmsd_column', 'redocking_rmsd_angstrom')} "
+                f"({summary.get('redocking_rmsd_frame')}, in-place heavy-atom RMSD, no superposition). "
+                "This value drives pass/warn/fail.",
+                f"- thresholds: pass <= {float(summary.get('pass_threshold_angstrom', 2.0)):.3f} A, "
+                f"warn <= {float(summary.get('warn_threshold_angstrom', 3.5)):.3f} A, otherwise fail.",
+                f"- secondary_rmsd: {summary.get('secondary_rmsd_column', 'kabsch_secondary_rmsd_angstrom')} "
+                f"({summary.get('secondary_rmsd_method', KABSCH_SECONDARY_METHOD)}, Kabsch-superposed over the same "
+                "valid mappings). Reported only; it does not affect classification.",
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -296,6 +318,9 @@ def run_redocking_validation(
         "docked_topology_sha256",
         "reference_topology_sha256",
         "lineage_source",
+        "redocking_rmsd_frame",
+        "kabsch_secondary_rmsd_angstrom",
+        "rmsd_secondary_method",
     ]
     baseline_columns = [
         "protein",
@@ -327,6 +352,7 @@ def run_redocking_validation(
         summary_payload["validation_gate_state"] = "needs_review"
         summary_payload["allow_reference_anchor"] = False
         summary_payload["validation_gate_reason"] = "no_reference_rows"
+        summary_payload.update(_rmsd_frame_summary(pass_threshold_angstrom, warn_threshold_angstrom))
         summary_file.write_text(_build_validation_summary_markdown(summary_payload), encoding="utf-8")
         gate_file.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
         return {
@@ -421,6 +447,13 @@ def run_redocking_validation(
                 "docked_topology_sha256": mapping_details.get("topology_sha256_a", ""),
                 "reference_topology_sha256": mapping_details.get("topology_sha256_b", ""),
                 "lineage_source": mapping_details.get("lineage_source", ""),
+                "redocking_rmsd_frame": IN_PLACE_METHOD if rmsd is not None else "",
+                "kabsch_secondary_rmsd_angstrom": (
+                    mapping_details.get("kabsch_rmsd_angstrom") if rmsd is not None else None
+                ),
+                "rmsd_secondary_method": (
+                    KABSCH_SECONDARY_METHOD if rmsd is not None and mapping_details.get("kabsch_rmsd_angstrom") is not None else ""
+                ),
             }
         )
 
@@ -513,6 +546,7 @@ def run_redocking_validation(
             "validation_gate_reason": gate_reason,
         }
     )
+    summary_payload.update(_rmsd_frame_summary(pass_threshold_angstrom, warn_threshold_angstrom))
     summary_file.write_text(_build_validation_summary_markdown(summary_payload), encoding="utf-8")
     gate_file.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
     logger.info(

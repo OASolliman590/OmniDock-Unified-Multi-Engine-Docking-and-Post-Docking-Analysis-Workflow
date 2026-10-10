@@ -31,7 +31,8 @@ from post_docking_analysis.atom_mapping import (
     load_sdf_graph_pose,
 )
 from post_docking_analysis.md_inputs import MDInputsRequest, export_md_inputs
-from post_docking_analysis.redocking_validation import _compute_pose_rmsd
+from post_docking_analysis.redocking_validation import _compute_pose_rmsd, run_redocking_validation
+from test_spec031_pose_selection import _write_models, _write_sdf
 from test_spec032_md_inputs import (
     FakeChemistryBackend,
     _pdb_atom,
@@ -55,8 +56,14 @@ def _phenol_coordinates() -> np.ndarray:
     return rng.uniform(-3.0, 3.0, size=(7, 3))  # SMILES order
 
 
-def _write_phenol_pdbqt(path: Path, *, idx_pairs=None, models: int = 0) -> Path:
-    coords = _phenol_coordinates()
+def _write_phenol_pdbqt(
+    path: Path,
+    *,
+    idx_pairs=None,
+    models: int = 0,
+    shift: tuple = (0.0, 0.0, 0.0),
+) -> Path:
+    coords = _phenol_coordinates() + np.asarray(shift, dtype=float)
     smiles_of_serial = {serial: smiles for smiles, serial in PHENOL_IDX_PAIRS}
     pairs = PHENOL_IDX_PAIRS if idx_pairs is None else idx_pairs
     atom_lines = []
@@ -387,3 +394,93 @@ def test_empty_atom_map_with_incomplete_lineage_stays_not_comparable(tmp_path):
     assert row["status"] == "not_comparable"
     assert row["reason"] == "incomplete_lineage_idx"
     assert row["gates"]["G3"]["status"] == "not_comparable"
+
+
+# ---------------------------------------------------------------------------
+# Spec 034 T002a: redocking primary is in-place heavy-atom RMSD (in_place_v1)
+# ---------------------------------------------------------------------------
+
+
+def test_rigid_5A_translation_in_place_is_5_kabsch_is_0_and_decision_fails(tmp_path):
+    # Explicit-topology path (no lineage remarks): three carbons, path graph C2-C1-C3.
+    reference_coords = [(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 2.0, 0.0)]
+    shifted_coords = [(x + 5.0, y, z) for x, y, z in reference_coords]
+    docked_pose = tmp_path / "docked_shifted.pdbqt"
+    reference_pose = tmp_path / "reference_pose.sdf"
+    topology = tmp_path / "topology.sdf"
+    _write_models(docked_pose, [shifted_coords])
+    _write_sdf(reference_pose, reference_coords)
+    _write_sdf(topology, reference_coords)
+
+    rmsd, error, details = _compute_pose_rmsd(
+        docked_pose,
+        reference_pose,
+        docked_pose_index=1,
+        reference_pose_index=1,
+        docked_topology_file=topology,
+    )
+    assert error == ""
+    assert rmsd == pytest.approx(5.0, abs=1e-6)
+    assert details["rmsd_frame"] == "in_place_v1"
+    assert details["kabsch_rmsd_angstrom"] == pytest.approx(0.0, abs=1e-6)
+
+    outputs = run_redocking_validation(
+        project_dir=tmp_path,
+        best_by_engine=pd.DataFrame(
+            [
+                {
+                    "protein": "P1",
+                    "ligand": "REF",
+                    "tag": "P1_site_1_REF",
+                    "engine": "vina",
+                    "pose": 1,
+                    "pose_file": str(docked_pose),
+                    "topology_file": str(topology),
+                    "reference_pose_file": str(reference_pose),
+                    "affinity_kcal_mol": -8.0,
+                    "is_cocrystal_benchmark": True,
+                    "cocrystal_ligand_name": "REF",
+                    "pdb_id": "P1",
+                }
+            ]
+        ),
+        output_dir=tmp_path / "reports",
+    )
+    validation = outputs["validation_df"]
+    row = validation.iloc[0]
+    assert float(row["redocking_rmsd_angstrom"]) == pytest.approx(5.0, abs=1e-6)
+    assert row["redocking_classification"] == "fail"
+    assert row["redocking_rmsd_frame"] == "in_place_v1"
+    assert float(row["kabsch_secondary_rmsd_angstrom"]) == pytest.approx(0.0, abs=1e-6)
+    assert row["rmsd_secondary_method"] == "kabsch_secondary"
+    summary = Path(outputs["summary_file"]).read_text(encoding="utf-8")
+    assert "in_place_v1" in summary
+    assert "decision_rmsd" in summary and "kabsch_secondary" in summary
+
+
+def test_rigid_5A_translation_lineage_path_in_place_is_5_kabsch_is_0(tmp_path):
+    shifted = _write_phenol_pdbqt(tmp_path / "phenol_shifted.pdbqt", shift=(5.0, 0.0, 0.0))
+    reference = _write_phenol_kekule_sdf(tmp_path / "phenol_kekule.sdf")
+
+    rmsd, error, details = _compute_pose_rmsd(shifted, reference, docked_pose_index=1, reference_pose_index=1)
+
+    assert error == ""
+    assert rmsd == pytest.approx(5.0, abs=2e-3)
+    assert details["lineage_source"] == LINEAGE_METHOD
+    assert details["rmsd_frame"] == "in_place_v1"
+    assert details["kabsch_rmsd_angstrom"] == pytest.approx(0.0, abs=2e-3)
+
+
+def test_committed_sti_model1_in_place_rmsd_against_crystal(tmp_path):
+    pdbqt = tmp_path / MODEL1_PDBQT.name
+    reference = tmp_path / CRYSTAL_SDF.name
+    shutil.copy2(MODEL1_PDBQT, pdbqt)
+    shutil.copy2(CRYSTAL_SDF, reference)
+
+    rmsd, error, details = _compute_pose_rmsd(pdbqt, reference, docked_pose_index=1, reference_pose_index=1)
+
+    assert error == ""
+    assert details["status"] == "comparable"
+    assert details["rmsd_frame"] == "in_place_v1"
+    assert rmsd == pytest.approx(0.857, abs=0.005)
+    assert details["kabsch_rmsd_angstrom"] == pytest.approx(1.116, abs=0.005)

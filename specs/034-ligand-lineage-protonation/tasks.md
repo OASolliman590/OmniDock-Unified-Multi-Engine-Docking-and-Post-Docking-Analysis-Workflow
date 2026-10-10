@@ -2,7 +2,7 @@
 
 - [x] **T001** Scientific Lead directs lineage mapping, a protonation policy that fits any case, and explicit receptor pH entry (2026-10-10).
 - [x] **T002** Scientific Lead decided the redocking RMSD frame: in-place primary, Kabsch secondary (`decisions/redocking-rmsd-frame.md`, 2026-10-10).
-- [ ] **T002a** Implement the redocking RMSD frame decision: an in-place RMSD over the symmetry-aware mapping as the primary redocking value and pass/fail basis, with Kabsch reported as secondary; method ids recorded.
+- [x] **T002a** Implement the redocking RMSD frame decision: an in-place RMSD over the symmetry-aware mapping as the primary redocking value and pass/fail basis, with Kabsch reported as secondary; method ids recorded.
 - [x] **T003** (R1a–b) Meeko SMILES/IDX lineage reader and `meeko_smiles_idx_lineage_v1` mapping source.
 - [x] **T004** (R1c–d) Spec 032 atom_map derivation from lineage and redocking reuse.
 - [ ] **T005** (R2a–b) Fix the protonation no-op; measured charge, charged atoms and microspecies in provenance.
