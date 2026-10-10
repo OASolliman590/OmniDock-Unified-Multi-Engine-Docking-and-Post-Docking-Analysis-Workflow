@@ -8,7 +8,7 @@ nearest-neighbour assignment, or common-substructure truncation.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
@@ -23,6 +23,29 @@ except ImportError:  # pragma: no cover - exercised through capability status
 MAPPING_METHOD = "spec031-atom-mapping-v1"
 ALIGNMENT_METHOD = "kabsch"
 DEFAULT_MAX_ISOMORPHISMS = 100_000
+
+# Spec 034 R1: lineage source for Meeko-prepared PDBQT poses. Explicit SDF
+# topologies (the Spec 031 source) are labelled EXPLICIT_TOPOLOGY_SOURCE.
+LINEAGE_METHOD = "meeko_smiles_idx_lineage_v1"
+EXPLICIT_TOPOLOGY_SOURCE = "explicit_sdf_topology"
+NO_LINEAGE_REASON = "no_lineage_remarks"
+
+# AutoDock atom type -> element symbol (shared by PDBQT readers).
+AUTODOCK_ELEMENTS = {
+    "A": "C", "C": "C", "N": "N", "NA": "N", "NS": "N",
+    "OA": "O", "OS": "O", "O": "O", "S": "S", "SA": "S",
+    "P": "P", "F": "F", "CL": "Cl", "BR": "Br", "I": "I",
+    "H": "H", "HD": "H", "HS": "H", "MG": "Mg", "MN": "Mn",
+    "ZN": "Zn", "CA": "Ca", "FE": "Fe", "CU": "Cu",
+}
+
+
+class LineageError(ValueError):
+    """A PDBQT lineage pose cannot be built; ``reason`` is machine-readable."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(str(reason))
+        self.reason = str(reason)
 
 
 _SDF_CHARGE_CODES = {
@@ -44,6 +67,7 @@ class GraphPose:
     topology_path: str
     topology_sha256: str
     topology_pose_index: int
+    lineage_source: str = EXPLICIT_TOPOLOGY_SOURCE
 
 
 @dataclass
@@ -65,6 +89,8 @@ class AtomMappingResult:
     topology_b: str = ""
     topology_sha256_a: str = ""
     topology_sha256_b: str = ""
+    lineage_source: str = ""
+    reference_lineage_source: str = ""
 
     @property
     def comparable(self) -> bool:
@@ -89,6 +115,8 @@ class AtomMappingResult:
             "topology_b": self.topology_b,
             "topology_sha256_a": self.topology_sha256_a,
             "topology_sha256_b": self.topology_sha256_b,
+            "lineage_source": self.lineage_source,
+            "reference_lineage_source": self.reference_lineage_source,
         }
 
 
@@ -299,6 +327,20 @@ def kabsch_rmsd(coords_a: np.ndarray, coords_b: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.sum(delta * delta, axis=1))))
 
 
+def _pair_base_fields(pose_a: GraphPose, pose_b: GraphPose) -> Dict[str, object]:
+    return {
+        "total_heavy_atoms_a": int(pose_a.coords.shape[0]),
+        "total_heavy_atoms_b": int(pose_b.coords.shape[0]),
+        "backend_version": str(getattr(nx, "__version__", "")) if nx is not None else "",
+        "topology_a": pose_a.topology_path,
+        "topology_b": pose_b.topology_path,
+        "topology_sha256_a": pose_a.topology_sha256,
+        "topology_sha256_b": pose_b.topology_sha256,
+        "lineage_source": pose_a.lineage_source,
+        "reference_lineage_source": pose_b.lineage_source,
+    }
+
+
 def compare_graph_poses(
     pose_a: GraphPose,
     pose_b: GraphPose,
@@ -307,15 +349,7 @@ def compare_graph_poses(
 ) -> AtomMappingResult:
     count_a = int(pose_a.coords.shape[0])
     count_b = int(pose_b.coords.shape[0])
-    base = {
-        "total_heavy_atoms_a": count_a,
-        "total_heavy_atoms_b": count_b,
-        "backend_version": str(getattr(nx, "__version__", "")) if nx is not None else "",
-        "topology_a": pose_a.topology_path,
-        "topology_b": pose_b.topology_path,
-        "topology_sha256_a": pose_a.topology_sha256,
-        "topology_sha256_b": pose_b.topology_sha256,
-    }
+    base = _pair_base_fields(pose_a, pose_b)
     if nx is None:
         return AtomMappingResult(status="not_comparable", reason="skipped_missing_dependency:networkx", **base)
     if count_a != count_b:
@@ -408,3 +442,320 @@ def not_comparable_result(
         total_heavy_atoms_b=int(total_b),
         backend_version=str(getattr(nx, "__version__", "")) if nx is not None else "",
     )
+
+
+# ---------------------------------------------------------------------------
+# Spec 034 R1: Meeko SMILES / SMILES IDX lineage source (meeko_smiles_idx_lineage_v1)
+#
+# Meeko writes ``REMARK SMILES <smiles>`` and ``REMARK SMILES IDX`` pairs
+# ``<smiles_index_1based> <pdbqt_serial_1based>`` (meeko.writer.remark_index_map).
+# Vina copies these remarks into every output MODEL.  The graph built here has one
+# node per PDBQT heavy atom, in PDBQT file order, so node i carries the coordinates of
+# the i-th heavy ATOM record of the selected model.
+# ---------------------------------------------------------------------------
+
+
+def _load_rdkit_chem():
+    try:
+        from rdkit import Chem  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("skipped_missing_dependency:rdkit") from exc
+    return Chem
+
+
+def _pdbqt_model_lines(path: Path, model_index: int) -> List[str]:
+    try:
+        text_lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise LineageError("unreadable_pdbqt") from exc
+    if not any(line.startswith("MODEL") for line in text_lines):
+        if int(model_index) != 1:
+            raise LineageError(f"model_not_found:{model_index}")
+        return text_lines
+    selected: List[str] = []
+    capture = False
+    found = False
+    for line in text_lines:
+        if line.startswith("MODEL"):
+            try:
+                number = int(line.split()[1])
+            except (IndexError, ValueError) as exc:
+                raise LineageError("invalid_pdbqt_model_record") from exc
+            capture = number == int(model_index)
+            found = found or capture
+            continue
+        if line.startswith("ENDMDL"):
+            if capture:
+                break
+            capture = False
+            continue
+        if capture:
+            selected.append(line)
+    if not found:
+        raise LineageError(f"model_not_found:{model_index}")
+    return selected
+
+
+def _pdbqt_atoms(lines: Sequence[str]) -> List[Tuple[int, str, Tuple[float, float, float], bool]]:
+    """Return (serial, element, xyz, is_heavy) for every ATOM/HETATM record."""
+    atoms: List[Tuple[int, str, Tuple[float, float, float], bool]] = []
+    for line in lines:
+        if not line.startswith(("ATOM", "HETATM")):
+            continue
+        parts = line.split()
+        try:
+            serial = int(line[6:11])
+        except ValueError:
+            try:
+                serial = int(parts[1])
+            except (IndexError, ValueError) as exc:
+                raise LineageError("invalid_pdbqt_atom_serial") from exc
+        try:
+            xyz = (float(line[30:38]), float(line[38:46]), float(line[46:54]))
+        except ValueError:
+            try:
+                xyz = (float(parts[6]), float(parts[7]), float(parts[8]))
+            except (IndexError, ValueError) as exc:
+                raise LineageError("invalid_pdbqt_coordinates") from exc
+        token = parts[-1].upper() if parts else ""
+        element = AUTODOCK_ELEMENTS.get(token)
+        if not element:
+            raw_element = line[76:78].strip().upper() if len(line) >= 78 else ""
+            element = AUTODOCK_ELEMENTS.get(raw_element)
+        if not element:
+            raise LineageError(f"unknown_autodock_atom_type:{token}")
+        atoms.append((serial, element, xyz, element.upper() != "H"))
+    return atoms
+
+
+def _lineage_remarks(lines: Sequence[str]) -> Tuple[str, List[int]]:
+    smiles: List[str] = []
+    flat_pairs: List[int] = []
+    idx_seen = False
+    for line in lines:
+        if line.startswith("REMARK SMILES IDX"):
+            try:
+                values = [int(token) for token in line.split()[3:]]
+            except ValueError as exc:
+                raise LineageError("invalid_lineage_idx") from exc
+            if len(values) % 2:
+                raise LineageError("invalid_lineage_idx")
+            flat_pairs.extend(values)
+            idx_seen = True
+        elif line.startswith("REMARK SMILES "):
+            parts = line.split()
+            if len(parts) < 3:
+                raise LineageError("invalid_lineage_smiles")
+            smiles.append(parts[2])
+    if not smiles and not idx_seen:
+        raise LineageError(NO_LINEAGE_REASON)
+    if len(smiles) > 1:
+        raise LineageError("ambiguous_lineage_smiles")
+    if not smiles:
+        raise LineageError("missing_lineage_smiles")
+    if not idx_seen:
+        raise LineageError("incomplete_lineage_idx")
+    return smiles[0], flat_pairs
+
+
+def load_pdbqt_lineage_pose(path: Path, model_index: int = 1) -> GraphPose:
+    """Build a heavy-atom, bond-labelled pose graph from Meeko lineage remarks.
+
+    Raises ``LineageError`` whose ``reason`` is machine-readable.  ``no_lineage_remarks``
+    means the file carries no SMILES/IDX remarks; every other reason is a lineage that
+    is present but cannot be used, and must not fall back silently.
+    """
+    if nx is None:
+        raise LineageError("skipped_missing_dependency:networkx")
+    source = Path(path).expanduser().resolve()
+    if source.suffix.lower() != ".pdbqt":
+        raise LineageError("unsupported_pose_format")
+    if int(model_index) < 1:
+        raise LineageError("invalid_pose_index")
+    lines = _pdbqt_model_lines(source, int(model_index))
+    smiles_text, flat_pairs = _lineage_remarks(lines)
+    try:
+        Chem = _load_rdkit_chem()
+    except RuntimeError as exc:
+        raise LineageError(str(exc)) from exc
+    mol = Chem.MolFromSmiles(smiles_text)
+    if mol is None:
+        raise LineageError("invalid_lineage_smiles")
+    for atom in mol.GetAtoms():
+        if atom.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED:
+            raise LineageError("lineage_stereo_unsupported")
+    for bond in mol.GetBonds():
+        if bond.GetStereo() != Chem.BondStereo.STEREONONE:
+            raise LineageError("lineage_stereo_unsupported")
+
+    atoms = _pdbqt_atoms(lines)
+    heavy = [(serial, element, xyz) for serial, element, xyz, is_heavy in atoms if is_heavy]
+    hydrogen_serials = {serial for serial, _, _, is_heavy in atoms if not is_heavy}
+    if not heavy:
+        raise LineageError("no_heavy_atoms")
+    serial_to_position: Dict[int, int] = {}
+    for position, (serial, _, _) in enumerate(heavy):
+        if serial in serial_to_position:
+            raise LineageError("ambiguous_pdbqt_serial")
+        serial_to_position[serial] = position
+    pose_element = {serial: element for serial, element, _ in heavy}
+
+    smiles_heavy = {atom.GetIdx() for atom in mol.GetAtoms() if atom.GetAtomicNum() != 1}
+    smiles_atom_count = mol.GetNumAtoms()
+    smiles_to_serial: Dict[int, int] = {}
+    serials_seen: set = set()
+    pairs = [(flat_pairs[index], flat_pairs[index + 1]) for index in range(0, len(flat_pairs), 2)]
+    for smiles_index_1based, serial in pairs:
+        if not 1 <= smiles_index_1based <= smiles_atom_count:
+            raise LineageError("invalid_lineage_idx")
+        smiles_index = smiles_index_1based - 1
+        if smiles_index not in smiles_heavy or serial in hydrogen_serials:
+            raise LineageError("lineage_idx_references_hydrogen")
+        if serial not in serial_to_position:
+            raise LineageError("invalid_lineage_idx")
+        if smiles_index in smiles_to_serial or serial in serials_seen:
+            raise LineageError("ambiguous_lineage_idx")
+        smiles_to_serial[smiles_index] = serial
+        serials_seen.add(serial)
+    if set(smiles_to_serial) != smiles_heavy or serials_seen != set(serial_to_position):
+        raise LineageError("incomplete_lineage_idx")
+    for smiles_index, serial in smiles_to_serial.items():
+        if mol.GetAtomWithIdx(smiles_index).GetSymbol() != pose_element[serial]:
+            raise LineageError("lineage_idx_element_mismatch")
+
+    graph = nx.Graph()
+    smiles_to_node: Dict[int, int] = {}
+    for smiles_index, serial in smiles_to_serial.items():
+        node = serial_to_position[serial]
+        smiles_to_node[smiles_index] = node
+        atom = mol.GetAtomWithIdx(smiles_index)
+        graph.add_node(
+            node,
+            element=pose_element[serial],
+            formal_charge=int(atom.GetFormalCharge()),
+            stereo="0",
+            total_h=int(atom.GetTotalNumHs(includeNeighbors=True)),
+        )
+    for bond in mol.GetBonds():
+        begin, end = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        if begin not in smiles_to_node or end not in smiles_to_node:
+            continue
+        bond_type = bond.GetBondType()
+        if bond_type == Chem.BondType.AROMATIC:
+            order = "aromatic"
+        elif bond_type == Chem.BondType.SINGLE:
+            order = "1"
+        elif bond_type == Chem.BondType.DOUBLE:
+            order = "2"
+        elif bond_type == Chem.BondType.TRIPLE:
+            order = "3"
+        else:
+            raise LineageError(f"unsupported_lineage_bond_type:{bond_type}")
+        graph.add_edge(smiles_to_node[begin], smiles_to_node[end], order=order, stereo="0")
+
+    coords = np.asarray([xyz for _, _, xyz in heavy], dtype=float)
+    return GraphPose(
+        coords=coords,
+        elements=tuple(element for _, element, _ in heavy),
+        graph=graph,
+        topology_path=source.as_posix(),
+        topology_sha256=_sha256(source),
+        topology_pose_index=int(model_index),
+        lineage_source=LINEAGE_METHOD,
+    )
+
+
+def _aromatic_convention_graph(graph) -> "nx.Graph":
+    """Return ``graph`` with bond labels in one convention: aromatic rings as ``aromatic``.
+
+    Aromatic labels are Kekulise-then-perceive: Kekule forms of one ring are not unique,
+    so a Kekule assignment copied from another source is not a stable label.  RDKit
+    aromaticity perception is Kekule-independent and is applied to both sides of a
+    lineage comparison.  Element, formal charge and stereo labels are unchanged.
+    """
+    Chem = _load_rdkit_chem()
+    rw = Chem.RWMol()
+    nodes = sorted(graph.nodes())
+    atom_index: Dict[object, int] = {}
+    for node in nodes:
+        data = graph.nodes[node]
+        atom = Chem.Atom(str(data["element"]))
+        atom.SetFormalCharge(int(data.get("formal_charge", 0)))
+        if "total_h" in data:
+            atom.SetNoImplicit(True)
+            atom.SetNumExplicitHs(int(data["total_h"]))
+        atom_index[node] = rw.AddAtom(atom)
+    aromatic_nodes: set = set()
+    bond_types = {"1": Chem.BondType.SINGLE, "2": Chem.BondType.DOUBLE, "3": Chem.BondType.TRIPLE}
+    for begin, end, data in graph.edges(data=True):
+        order = str(data.get("order"))
+        if order == "aromatic":
+            bond_type = Chem.BondType.AROMATIC
+            aromatic_nodes.update((begin, end))
+        elif order in bond_types:
+            bond_type = bond_types[order]
+        else:
+            raise ValueError(f"unsupported_bond_order:{order}")
+        rw.AddBond(atom_index[begin], atom_index[end], bond_type)
+        if order == "aromatic":
+            rw.GetBondBetweenAtoms(atom_index[begin], atom_index[end]).SetIsAromatic(True)
+    for node in aromatic_nodes:
+        rw.GetAtomWithIdx(atom_index[node]).SetIsAromatic(True)
+    mol = rw.GetMol()
+    if aromatic_nodes:
+        Chem.Kekulize(mol, clearAromaticFlags=True)
+    Chem.SanitizeMol(mol)
+
+    inverse = {index: node for node, index in atom_index.items()}
+    normalized = nx.Graph()
+    for node in nodes:
+        normalized.add_node(node, **dict(graph.nodes[node]))
+    for bond in mol.GetBonds():
+        begin = inverse[bond.GetBeginAtomIdx()]
+        end = inverse[bond.GetEndAtomIdx()]
+        if bond.GetIsAromatic():
+            order = "aromatic"
+        elif bond.GetBondType() == Chem.BondType.SINGLE:
+            order = "1"
+        elif bond.GetBondType() == Chem.BondType.DOUBLE:
+            order = "2"
+        elif bond.GetBondType() == Chem.BondType.TRIPLE:
+            order = "3"
+        else:
+            raise ValueError(f"unsupported_normalized_bond:{bond.GetBondType()}")
+        stereo = graph.edges[begin, end].get("stereo", "0")
+        normalized.add_edge(begin, end, order=order, stereo=str(stereo))
+    return normalized
+
+
+def _normalize_pose_convention(pose: GraphPose) -> GraphPose:
+    return replace(pose, graph=_aromatic_convention_graph(pose.graph))
+
+
+def compare_lineage_graph_poses(
+    pose_a: GraphPose,
+    pose_b: GraphPose,
+    *,
+    max_isomorphisms: int = DEFAULT_MAX_ISOMORPHISMS,
+) -> AtomMappingResult:
+    """Compare a lineage pose with a reference graph under one bond-order convention.
+
+    Both graphs go through ``_aromatic_convention_graph`` before the unchanged Spec 031
+    ``compare_graph_poses``.  Failure to normalise is ``not_comparable``; nothing is
+    loosened.  At least one side must carry the lineage source.
+    """
+    if LINEAGE_METHOD not in (pose_a.lineage_source, pose_b.lineage_source):
+        raise ValueError("lineage_pose_required")
+    try:
+        normalized_a = _normalize_pose_convention(pose_a)
+        normalized_b = _normalize_pose_convention(pose_b)
+    except RuntimeError as exc:
+        reason = str(exc) if str(exc).startswith("skipped_missing_dependency") else f"bond_convention_failed:{exc}"
+        return AtomMappingResult(status="not_comparable", reason=reason, **_pair_base_fields(pose_a, pose_b))
+    except Exception as exc:  # RDKit sanitisation errors do not share a base class
+        return AtomMappingResult(
+            status="not_comparable",
+            reason=f"bond_convention_failed:{exc.__class__.__name__}",
+            **_pair_base_fields(pose_a, pose_b),
+        )
+    return compare_graph_poses(normalized_a, normalized_b, max_isomorphisms=max_isomorphisms)

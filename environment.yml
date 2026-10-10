@@ -18,6 +18,7 @@ dependencies:
   - networkx>=3.2,<4  # Spec 031 graph/symmetry-aware atom mapping
   - pdb2pqr>=3.4.1  # Spec 033 R2c: receptor protonation (pdb2pqr30); verified 3.4.1
   - meeko>=0.7.1  # Spec 033 R2: receptor PDBQT conversion (mk_prepare_receptor.py); verified 0.7.1, brings rdkit
+  - rdkit>=2024.03  # Spec 034: direct use for Meeko SMILES lineage graphs; verified 2026.03.6
   - pip
   - pip:
     - plip

@@ -20,8 +20,11 @@ import pandas as pd
 from docking.project_layout import shared_ligands_dir
 from post_docking_analysis.atom_mapping import (
     MAPPING_METHOD,
+    LineageError,
     attach_coordinates_to_topology,
     compare_graph_poses,
+    compare_lineage_graph_poses,
+    load_pdbqt_lineage_pose,
     load_sdf_graph_pose,
     not_comparable_result,
 )
@@ -103,6 +106,31 @@ def _compute_pose_rmsd(
         if error or coords.size == 0:
             raise ValueError(f"pose_parse_failed:{error or 'no_heavy_atoms'}")
         return attach_coordinates_to_topology(coords, elements, topology_file)
+
+    # Spec 034 R1d: a PDBQT pose with Meeko lineage remarks uses its lineage graph.
+    # Without remarks the existing explicit-topology path is unchanged.
+    try:
+        lineage_docked = (
+            load_pdbqt_lineage_pose(docked_pose_file, docked_pose_index)
+            if docked_pose_file.suffix.lower() == ".pdbqt"
+            else None
+        )
+    except (LineageError, TypeError, ValueError) as exc:
+        reason = exc.reason if isinstance(exc, LineageError) else f"invalid_pose_index:{exc}"
+        if reason != "no_lineage_remarks":
+            result = not_comparable_result(f"docked_pose_not_comparable:{reason}")
+            return None, result.reason, result.to_dict()
+        lineage_docked = None
+    if lineage_docked is not None:
+        try:
+            reference = _load_pose(reference_pose_file, reference_pose_index, reference_topology_file)
+        except (OSError, RuntimeError, ValueError) as exc:
+            result = not_comparable_result(f"reference_pose_not_comparable:{exc}")
+            return None, result.reason, result.to_dict()
+        lineage_result = compare_lineage_graph_poses(lineage_docked, reference)
+        if not lineage_result.comparable:
+            return None, f"not_comparable:{lineage_result.reason}", lineage_result.to_dict()
+        return float(lineage_result.rmsd_angstrom), "", lineage_result.to_dict()
 
     try:
         docked = _load_pose(docked_pose_file, docked_pose_index, docked_topology_file)
@@ -267,6 +295,7 @@ def run_redocking_validation(
         "mapping_backend_version",
         "docked_topology_sha256",
         "reference_topology_sha256",
+        "lineage_source",
     ]
     baseline_columns = [
         "protein",
@@ -391,6 +420,7 @@ def run_redocking_validation(
                 "mapping_backend_version": mapping_details.get("backend_version", ""),
                 "docked_topology_sha256": mapping_details.get("topology_sha256_a", ""),
                 "reference_topology_sha256": mapping_details.get("topology_sha256_b", ""),
+                "lineage_source": mapping_details.get("lineage_source", ""),
             }
         )
 

@@ -52,6 +52,7 @@ pipeline_output/
 *.csv
 *.pdb
 *.pdbqt
+!test/fixtures/spec034/*.pdbqt
 *.sdf
 temp/
 tmp/

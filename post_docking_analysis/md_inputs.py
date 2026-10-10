@@ -17,6 +17,14 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 import pandas as pd
 
 from docking.project_layout import ensure_numbered_output_layout, load_manifest, manifest_path
+from post_docking_analysis.atom_mapping import (
+    AUTODOCK_ELEMENTS as _AUTODOCK_ELEMENTS,
+    LINEAGE_METHOD,
+    LineageError,
+    compare_lineage_graph_poses,
+    load_pdbqt_lineage_pose,
+    load_sdf_graph_pose,
+)
 from post_docking_analysis.complex_validation import validate_md_receptor_pdb, validate_md_system_pdb
 from post_docking_analysis.docking_parser import parse_vina_pdbqt
 from post_docking_analysis.md_chemistry import (
@@ -41,15 +49,6 @@ ROW_STATUSES = {
     "not_comparable",
 }
 _SAFE_KEY = re.compile(r"[^A-Za-z0-9._-]+")
-_AUTODOCK_ELEMENTS = {
-    "A": "C", "C": "C", "N": "N", "NA": "N", "NS": "N",
-    "OA": "O", "OS": "O", "O": "O", "S": "S", "SA": "S",
-    "P": "P", "F": "F", "CL": "Cl", "BR": "Br", "I": "I",
-    "H": "H", "HD": "H", "HS": "H", "MG": "Mg", "MN": "Mn",
-    "ZN": "Zn", "CA": "Ca", "FE": "Fe", "CU": "Cu",
-}
-
-
 @dataclass(frozen=True)
 class MDInputsRequest:
     project_dir: Path
@@ -380,9 +379,54 @@ def _parse_atom_map(raw: str, atom_count: int) -> List[int]:
             raise MDExportError("not_comparable", "G3", "invalid_pose_to_topology_atom_map") from exc
     if mapping and min(mapping) == 1 and max(mapping) == atom_count:
         mapping = [item - 1 for item in mapping]
+    return _validate_atom_permutation(mapping, atom_count)
+
+
+def _validate_atom_permutation(mapping: Sequence[int], atom_count: int) -> List[int]:
+    """Pose heavy-atom index -> topology heavy-atom index; must be a 0-based permutation."""
+    mapping = [int(item) for item in mapping]
     if len(mapping) != atom_count or sorted(mapping) != list(range(atom_count)):
         raise MDExportError("not_comparable", "G3", "pose_to_topology_atom_map_not_permutation")
     return mapping
+
+
+def _derive_lineage_atom_map(
+    pose_file: Path,
+    pose: int,
+    topology_file: Path,
+    topology_pose: int,
+) -> Tuple[List[Tuple[float, float, float]], List[str], List[int], Dict[str, object]]:
+    """Spec 034 R1c: pose-to-topology atom_map from the Meeko SMILES/IDX lineage.
+
+    Uses the same ``compare_lineage_graph_poses`` / selected mapping as the Spec 031 module.
+    The returned permutation has the same semantics as ``_parse_atom_map``:
+    ``atom_map[pose_heavy_index] == topology_heavy_index``.
+    """
+    try:
+        lineage_pose = load_pdbqt_lineage_pose(pose_file, pose)
+    except LineageError as exc:
+        if exc.reason == "no_lineage_remarks":
+            raise MDExportError("not_comparable", "G3", "missing_pose_to_topology_atom_map:no_lineage_remarks") from exc
+        raise MDExportError("not_comparable", "G3", exc.reason) from exc
+    try:
+        topology_graph = load_sdf_graph_pose(topology_file, topology_pose)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise MDExportError("not_comparable", "G3", f"topology_not_comparable:{exc}") from exc
+    result = compare_lineage_graph_poses(lineage_pose, topology_graph)
+    if not result.comparable or result.selected_mapping is None:
+        raise MDExportError("not_comparable", "G3", f"lineage_mapping_not_comparable:{result.reason}")
+    atom_count = len(lineage_pose.elements)
+    atom_map = _validate_atom_permutation(list(result.selected_mapping), atom_count)
+    coordinates = [tuple(float(value) for value in row) for row in lineage_pose.coords]
+    evidence = {
+        "lineage_source": result.lineage_source,
+        "reference_lineage_source": result.reference_lineage_source,
+        "mapping_reason": result.reason,
+        "mapped_heavy_atoms": int(result.mapped_heavy_atoms),
+        "mapping_coverage": float(result.mapping_coverage),
+        "valid_mapping_count": int(result.valid_mapping_count),
+    }
+    return coordinates, list(lineage_pose.elements), atom_map, evidence
 
 
 def _charge_for_row(rows: Sequence[Dict[str, str]], selected: Dict[str, object]) -> Optional[int]:
@@ -769,6 +813,8 @@ def export_md_inputs(
             pose_coords: Optional[List[Tuple[float, float, float]]] = None
             pose_elements: Optional[List[str]] = None
             atom_map: Optional[List[int]] = None
+            atom_map_source = "native_sdf_order"
+            lineage_evidence: Optional[Dict[str, object]] = None
             if request.engine != "gnina":
                 if request.topology_map is None:
                     raise MDExportError("not_comparable", "G3", "pdbqt_requires_explicit_topology_map")
@@ -777,8 +823,18 @@ def export_md_inputs(
                     raise MDExportError("not_comparable", "G3", f"topology_map_missing_row:{tag}")
                 topology_file = _resolve_mapped_path(topology_row["topology_file"], request.topology_map, request.project_dir)
                 topology_pose = int(topology_row.get("topology_pose") or 1)
-                pose_coords, pose_elements = _pdbqt_pose_coordinates(pose_file, pose)
-                atom_map = _parse_atom_map(topology_row.get("atom_map", ""), len(pose_coords))
+                explicit_atom_map = str(topology_row.get("atom_map") or "").strip()
+                if explicit_atom_map:
+                    # An explicit atom_map always wins over lineage derivation.
+                    pose_coords, pose_elements = _pdbqt_pose_coordinates(pose_file, pose)
+                    atom_map = _parse_atom_map(explicit_atom_map, len(pose_coords))
+                    atom_map_source = "explicit_topology_map"
+                else:
+                    # Spec 034 R1c: derive the permutation from the Meeko SMILES/IDX lineage.
+                    pose_coords, pose_elements, atom_map, lineage_evidence = _derive_lineage_atom_map(
+                        pose_file, pose, topology_file, topology_pose
+                    )
+                    atom_map_source = LINEAGE_METHOD
             elif pose_file.suffix.lower() != ".sdf":
                 raise MDExportError("not_comparable", "G3", "gnina_pose_source_must_be_sdf")
             topology_input = _input_descriptor(topology_file)
@@ -795,6 +851,8 @@ def export_md_inputs(
                 topology_pose=topology_pose,
                 atom_mapping="native_sdf_order" if request.engine == "gnina" else "explicit_pose_to_topology_permutation",
                 atom_map=atom_map,
+                atom_map_source=atom_map_source,
+                lineage=lineage_evidence,
             )
 
             receptor_pdb, receptor_materialization = _materialize_receptor_pdb(receptor_file, request.project_dir)
@@ -836,6 +894,8 @@ def export_md_inputs(
                 "backend": {"name": backend.name, "version": backend.version},
                 "expected_charge": expected_charge,
                 "docking_provenance": docking_provenance,
+                "atom_map": atom_map,
+                "atom_map_source": atom_map_source,
             }
             row_fingerprint = _json_hash(fingerprint_payload)
             existing_provenance = destination / "provenance.json"
@@ -963,6 +1023,7 @@ def export_md_inputs(
                     "inputs": fingerprint_payload["inputs"],
                     "chemistry_backend": fingerprint_payload["backend"],
                     "docking_provenance": docking_provenance,
+                    "atom_map_source": atom_map_source,
                     "gates": gates,
                     "outputs": {},
                 }
