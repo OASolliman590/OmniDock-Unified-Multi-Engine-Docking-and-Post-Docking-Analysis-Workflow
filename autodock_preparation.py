@@ -37,8 +37,15 @@ class PreparationConfig:
     receptors_input: str
     ligands_output: str
     receptors_output: str
-    force_field: str = "AMBER"
-    ph: float = 7.4
+    # Spec 034 R3: no silent pH or force field. Each is an explicit value with its source
+    # ("user_entered" from CLI/prompt, "config_file" from an explicit configuration value).
+    force_field: Optional[str] = None
+    force_field_source: Optional[str] = None
+    ph: Optional[float] = None
+    ph_source: Optional[str] = None
+    # Spec 034 R2c: per-ligand protonation policy and the explicit state map (CSV) when required.
+    protonation_policy: str = "ph_model"
+    protonation_state_map: str = ""
     # Strict receptor preparation refuses permissive bad-residue deletion (Spec 033).
     allow_bad_res: bool = False
     default_altloc: str = "A"
@@ -261,7 +268,11 @@ class AutoDockPreparationPipeline:
             },
             "preparation": {
                 "force_field": self.config.force_field,
+                "force_field_source": self.config.force_field_source,
                 "ph": self.config.ph,
+                "ph_source": self.config.ph_source,
+                "protonation_policy": self.config.protonation_policy,
+                "protonation_state_map": self.config.protonation_state_map or "",
                 "allow_bad_res": self.config.allow_bad_res,
                 "default_altloc": self.config.default_altloc,
                 "receptor_use_pdb2pqr": bool(self.config.receptor_use_pdb2pqr),
@@ -430,7 +441,16 @@ class AutoDockPreparationPipeline:
             )
             env["PDBWIZARD_LIGAND_PREP_BACKEND"] = profile
             env["PDBWIZARD_LIGAND_PREP_PROFILE"] = profile
-            env["PDBWIZARD_LIGAND_PREP_PH"] = str(self.config.ph)
+            # Spec 034: pH, its source, the protonation policy and the state map reach the ligand module.
+            env.pop("PDBWIZARD_LIGAND_PREP_PH", None)
+            env.pop("PDBWIZARD_LIGAND_PREP_PH_SOURCE", None)
+            if self.config.ph is not None:
+                env["PDBWIZARD_LIGAND_PREP_PH"] = str(self.config.ph)
+                env["PDBWIZARD_LIGAND_PREP_PH_SOURCE"] = str(self.config.ph_source or "")
+            env["PDBWIZARD_LIGAND_PREP_PROTONATION_POLICY"] = str(self.config.protonation_policy or "ph_model")
+            env.pop("PDBWIZARD_LIGAND_PREP_STATE_MAP", None)
+            if self.config.protonation_state_map:
+                env["PDBWIZARD_LIGAND_PREP_STATE_MAP"] = str(Path(self.config.protonation_state_map).expanduser().resolve())
             # Receptor preparation runs under this same interpreter (Spec 033 R2b).
             env["PDBWIZARD_PYTHON"] = sys.executable
             if self.config.selected_engines:
@@ -606,8 +626,12 @@ def main():
     parser.add_argument("--receptors-input", help="Input directory or file for receptors")
     parser.add_argument("--ligands-output", help="Output directory for prepared ligands")
     parser.add_argument("--receptors-output", help="Output directory for prepared receptors")
-    parser.add_argument("--force-field", default="AMBER", help="Force field for PDB2PQR")
-    parser.add_argument("--ph", type=float, default=7.4, help="pH for protonation")
+    parser.add_argument("--force-field", choices=["AMBER", "CHARMM", "PARSE", "TYL06", "PEOEPB", "SWANSON"], default=None,
+                        help="PDB2PQR force field (required to run; suggested: AMBER)")
+    parser.add_argument("--ph", type=float, default=None, help="PDB2PQR pH (required to run; suggested: 7.4)")
+    parser.add_argument("--protonation-policy", choices=["ph_model", "explicit_state", "as_input"], default="ph_model",
+                        help="Per-ligand protonation policy (Spec 034)")
+    parser.add_argument("--protonation-state-map", default="", help="CSV: ligand,smiles,net_charge (explicit_state)")
     parser.add_argument(
         "--ligand-profile",
         default="engine_aware_full",
@@ -633,13 +657,19 @@ def main():
     receptors_input = handle_input_path(args.receptors_input)
 
     # Create configuration
+    if not args.create_config and (args.ph is None or args.force_field is None):
+        parser.error("--ph and --force-field are required; no default pH or force field is applied")
     config = PreparationConfig(
         ligands_input=ligands_input or "./ligands_raw",
         receptors_input=receptors_input or "./receptors_raw",
         ligands_output=args.ligands_output or "./ligands_prep", 
         receptors_output=args.receptors_output or "./receptors_prep",
         force_field=args.force_field,
+        force_field_source="user_entered" if args.force_field else None,
         ph=args.ph,
+        ph_source="user_entered" if args.ph is not None else None,
+        protonation_policy=args.protonation_policy,
+        protonation_state_map=str(Path(args.protonation_state_map).expanduser().resolve()) if args.protonation_state_map else "",
         ligand_preparation_profile=normalize_ligand_preparation_profile(args.ligand_profile),
         ligand_preparation_backend=normalize_ligand_preparation_profile(args.ligand_profile),
         selected_engines=[token.strip().lower() for token in str(args.selected_engines or "").split(",") if token.strip()],

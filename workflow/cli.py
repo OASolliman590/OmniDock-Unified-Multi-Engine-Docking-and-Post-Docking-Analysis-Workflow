@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from docking.models import MAX_PREPARATION_PH, MIN_PREPARATION_PH
+from docking.preparation.receptor_preparation import PDB2PQR_FORCE_FIELDS
 
 ALL_ANALYSIS_TARGETS = [
     "analyze.stage.hierarchical",
@@ -333,12 +334,37 @@ Examples:
         command.add_argument("--ligands-input", help="Raw ligands input directory")
         command.add_argument("--receptors-output", help="Prepared receptors output directory")
         command.add_argument("--ligands-output", help="Prepared ligands output directory")
-        command.add_argument("--force-field", default="AMBER", help="Force field")
+        # Spec 034 R3a: no default pH or force field. prepare-protein and prepare-both fail without them.
+        command.add_argument(
+            "--force-field",
+            type=str.upper,
+            choices=list(PDB2PQR_FORCE_FIELDS),
+            default=None,
+            help="PDB2PQR force field (required for prepare-protein and prepare-both; suggested: AMBER)",
+        )
         command.add_argument(
             "--ph",
             type=float,
-            default=7.4,
-            help=f"Protonation pH ({MIN_PREPARATION_PH:.1f}-{MAX_PREPARATION_PH:.1f})",
+            default=None,
+            help=(
+                f"PDB2PQR and ligand pH model ({MIN_PREPARATION_PH:.1f}-{MAX_PREPARATION_PH:.1f}); required for "
+                "prepare-protein and prepare-both (suggested: 7.4)"
+            ),
+        )
+        command.add_argument(
+            "--protonation-policy",
+            choices=["ph_model", "explicit_state", "as_input"],
+            default="ph_model",
+            help=(
+                "Ligand protonation policy. ph_model (default, human review flagged): Open Babel pH model. "
+                "explicit_state: exact microspecies or approved net charge from --protonation-state-map. "
+                "as_input: keep the input hydrogens and charges."
+            ),
+        )
+        command.add_argument(
+            "--protonation-state-map",
+            default=None,
+            help="CSV with columns ligand, smiles and/or net_charge (required for explicit_state)",
         )
         command.add_argument(
             "--ligand-backend",
@@ -1403,6 +1429,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "prepare-ligand": "pdb.prepare_ligand",
                 "prepare-both": "pdb.prepare_both",
             }[args.pdb_command]
+            if args.pdb_command in {"prepare-protein", "prepare-both"}:
+                if args.ph is None:
+                    parser.error(
+                        f"pdb {args.pdb_command} requires --ph (the PDB2PQR pH). No default pH is applied; "
+                        "pass it explicitly, for example --ph 7.4."
+                    )
+                if args.force_field is None:
+                    parser.error(
+                        f"pdb {args.pdb_command} requires --force-field (one of: {', '.join(PDB2PQR_FORCE_FIELDS)}). "
+                        "No default is applied; AMBER is the usual choice."
+                    )
+            if args.pdb_command == "prepare-ligand" and args.protonation_policy == "ph_model" and args.ph is None:
+                parser.error(
+                    "pdb prepare-ligand with the default ph_model policy requires --ph. No default pH is applied; "
+                    "pass it explicitly, or choose --protonation-policy explicit_state or as_input."
+                )
+            if args.protonation_policy == "explicit_state" and not args.protonation_state_map:
+                parser.error("--protonation-policy explicit_state requires --protonation-state-map <csv>")
             result = run_autodock_prepare(
                 target,
                 args.receptors_input,
@@ -1410,12 +1454,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 args.receptors_output,
                 args.ligands_output,
                 force_field=args.force_field,
+                force_field_source="user_entered" if args.force_field is not None else None,
                 ph=args.ph,
+                ph_source="user_entered" if args.ph is not None else None,
                 ligand_preparation_backend=args.ligand_backend,
                 selected_engines=[token.strip().lower() for token in str(getattr(args, "selected_engines", "") or "").split(",") if token.strip()],
                 autodocktools_prepare_ligand4=args.autodocktools_prepare_ligand4,
                 autodocktools_prepare_receptor4=args.autodocktools_prepare_receptor4,
                 autodocktools_python=args.autodocktools_python,
+                protonation_policy=args.protonation_policy,
+                protonation_state_map=args.protonation_state_map,
             )
             return 0 if result.status == "completed" else 1
         parser.error("A pdb subcommand is required")

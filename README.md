@@ -238,11 +238,14 @@ python main.py pdb collect --project-dir docking_project/ -p 7CMD
 python main.py pdb fetch -p 7CMD -o results/
 python main.py pdb run -p "7CMD,6WX4" -o results/
 python main.py pdb batch -c pdb_batch_config.yaml -o batch_results/
+# --ph and --force-field have no default (Spec 034): pass the PDB2PQR pH and force field explicitly
 python main.py pdb prepare-both \
   --receptors-input receptors_raw/ \
   --ligands-input ligands_raw/ \
   --receptors-output receptors_prep/ \
-  --ligands-output ligands_prep/
+  --ligands-output ligands_prep/ \
+  --ph 7.4 --force-field AMBER \
+  --protonation-policy ph_model
 
 # Legacy aliases still work
 python main.py cli -p 7CMD

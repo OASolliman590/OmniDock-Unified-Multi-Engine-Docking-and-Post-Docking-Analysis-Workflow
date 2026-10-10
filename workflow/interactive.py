@@ -22,6 +22,7 @@ from docking.models import (
     validate_preparation_ph,
 )
 from docking.preparation.ligand_quality import audit_project_ligands
+from docking.preparation.receptor_preparation import PDB2PQR_FORCE_FIELDS, SUGGESTED_FORCE_FIELD, SUGGESTED_PH
 from docking.preparation.receptor_quality import audit_project_receptors
 from docking.preparation.pairlist_builder import list_prepared_asset_names
 from docking.project_layout import (
@@ -1085,9 +1086,39 @@ def _prepare_assets(questionary, project_root: Path) -> None:
     ligands_input = _text(questionary, "Raw ligands input", default=str(layout["raw_ligands"])) if action != "pdb.prepare_protein" else ""
     receptors_output = _text(questionary, "Prepared proteins output", default=str(layout["prepared_proteins"])) if action != "pdb.prepare_ligand" else ""
     ligands_output = _text(questionary, "Prepared ligands output", default=str(layout["prepared_ligands"])) if action != "pdb.prepare_protein" else ""
-    force_field = _text(questionary, "Force field", default="AMBER", required=True)
-    while True:
-        raw_ph = _text(questionary, "pH", default="7.4", required=True)
+    # Spec 034 R2c/R3: nothing is applied silently. The user confirms or types each value.
+    ligand_policy = "ph_model"
+    protonation_state_map = ""
+    if action != "pdb.prepare_protein":
+        ligand_policy = _select(
+            questionary,
+            "Ligand protonation policy",
+            [
+                ("ph_model", "Open Babel pH model (default; you confirm the measured charges afterwards)"),
+                ("explicit_state", "Explicit state map (CSV: ligand, smiles and/or net_charge)"),
+                ("as_input", "Keep the input hydrogens and charges (no pH model)"),
+            ],
+            default="ph_model",
+        )
+        if ligand_policy == "explicit_state":
+            protonation_state_map = _text(questionary, "Path to the protonation state map (CSV)", required=True)
+    force_field = ""
+    if action != "pdb.prepare_ligand":
+        force_field = _select(
+            questionary,
+            "PDB2PQR force field",
+            [(name, name + ("  (suggested)" if name == SUGGESTED_FORCE_FIELD else "")) for name in PDB2PQR_FORCE_FIELDS],
+            default=SUGGESTED_FORCE_FIELD,
+        )
+    ph = None
+    needs_ph = action != "pdb.prepare_ligand" or ligand_policy in {"ph_model", "explicit_state"}
+    while needs_ph:
+        raw_ph = _text(
+            questionary,
+            f"pH (suggested {SUGGESTED_PH:.1f}: press Enter to confirm, or type another value)",
+            default=f"{SUGGESTED_PH:.1f}",
+            required=True,
+        )
         try:
             parsed_ph = float(raw_ph)
         except ValueError:
@@ -1151,14 +1182,48 @@ def _prepare_assets(questionary, project_root: Path) -> None:
         ligands_input or None,
         receptors_output or None,
         ligands_output or None,
-        force_field=force_field,
+        force_field=force_field or None,
+        force_field_source="user_entered" if force_field else None,
         ph=ph,
+        ph_source="user_entered" if ph is not None else None,
         ligand_preparation_backend=ligand_backend,
         selected_engines=selected_engines,
         autodocktools_prepare_ligand4=autodocktools_prepare_ligand4 or None,
         autodocktools_prepare_receptor4=autodocktools_prepare_receptor4 or None,
         autodocktools_python=autodocktools_python or None,
+        protonation_policy=ligand_policy,
+        protonation_state_map=protonation_state_map or None,
     )
+    _print_prepare_result(result)
+    if action != "pdb.prepare_protein" and ligand_policy == "ph_model" and result.status != "blocked":
+        states = result.outputs.get("ligand_protonation_states") or []
+        if states:
+            _print_measured_protonation(states)
+            # One confirmation for the whole ligand batch; declining asks for an explicit state map.
+            if not _confirm(questionary, "Accept the measured protonation states for these ligands?", default=True):
+                map_path = _text(questionary, "Path to a protonation state map (CSV: ligand, smiles and/or net_charge)", required=True)
+                result = run_autodock_prepare(
+                    "pdb.prepare_ligand",
+                    None,
+                    ligands_input or None,
+                    None,
+                    ligands_output or None,
+                    ph=ph,
+                    ph_source="user_entered" if ph is not None else None,
+                    ligand_preparation_backend=ligand_backend,
+                    selected_engines=selected_engines,
+                    autodocktools_prepare_ligand4=autodocktools_prepare_ligand4 or None,
+                    autodocktools_prepare_receptor4=autodocktools_prepare_receptor4 or None,
+                    autodocktools_python=autodocktools_python or None,
+                    protonation_policy="explicit_state",
+                    protonation_state_map=map_path,
+                )
+                print("Ligands re-prepared from the explicit state map.")
+                _print_prepare_result(result)
+                _print_measured_protonation(result.outputs.get("ligand_protonation_states") or [])
+
+
+def _print_prepare_result(result) -> None:
     print(f"Preparation status: {result.status}")
     ligand_count = result.outputs.get("ligand_prepared_count")
     receptor_count = result.outputs.get("receptor_prepared_count")
@@ -1166,6 +1231,19 @@ def _prepare_assets(questionary, project_root: Path) -> None:
         print(f"Prepared assets: ligands={ligand_count or 0}, receptors={receptor_count or 0}")
     for note in result.notes:
         print(f" - {note}")
+
+
+def _print_measured_protonation(states) -> None:
+    """Measured ligand states (Spec 034 R2b): what was actually prepared, not what was requested."""
+    print("Measured protonation state of each prepared ligand:")
+    for row in states:
+        charge = row.get("net_formal_charge")
+        charge_text = "unmeasured" if charge in (None, "") else f"{int(charge):+d}"
+        print(
+            f" - {row.get('ligand')}: policy={row.get('protonation_policy')}, net charge {charge_text}, "
+            f"charged atoms [{row.get('charged_atoms') or 'none'}], microspecies {row.get('microspecies_smiles') or 'n/a'}, "
+            f"PDBQT check {row.get('pdbqt_state_check')}"
+        )
 
 
 def _build_pairlist(questionary, project_root: Path) -> None:

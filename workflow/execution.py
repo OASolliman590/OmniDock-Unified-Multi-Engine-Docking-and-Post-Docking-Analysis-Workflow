@@ -960,20 +960,90 @@ def run_pdb_batch(config_file: str, output_dir: str) -> WorkflowStepResult:
     )
 
 
+def _protonation_field(payload: Dict[str, object], key: str) -> object:
+    protonation = payload.get("protonation")
+    return protonation.get(key) if isinstance(protonation, dict) else None
+
+
+def _state_field(payload: Dict[str, object], key: str) -> object:
+    """Measured prepared-state field (net charge, charged atoms, microspecies SMILES) for a report row."""
+    state = _protonation_field(payload, "prepared_state")
+    if not isinstance(state, dict):
+        return None
+    value = state.get(key)
+    if key == "charged_atoms" and isinstance(value, list):
+        return "; ".join(f"{atom.get('element')}{atom.get('index')}{atom.get('charge', 0):+d}" for atom in value)
+    return value
+
+
+def _preparation_requirement_notes(
+    target: str,
+    *,
+    ph: Optional[float],
+    ph_source: Optional[str],
+    force_field: Optional[str],
+    force_field_source: Optional[str],
+    policy: str,
+    protonation_state_map: Optional[str],
+) -> List[str]:
+    """Explicit-value checks (Spec 034 R2c, R3). Empty list when every required value is present."""
+    from docking.preparation.ligand_preparation import (
+        PROTONATION_POLICIES,
+        ProtonationStateError,
+        load_protonation_state_map,
+    )
+
+    sources = ("user_entered", "config_file")
+    notes: List[str] = []
+    receptor_prep = target in {"pdb.prepare_protein", "pdb.prepare_both"}
+    ligand_prep = target in {"pdb.prepare_ligand", "pdb.prepare_both"}
+    if policy not in PROTONATION_POLICIES:
+        notes.append(f"protonation policy {policy!r} is not one of: {', '.join(PROTONATION_POLICIES)}")
+    if receptor_prep:
+        if ph is None:
+            notes.append("pH is required for PDB2PQR receptor preparation. No default is applied: enter it explicitly (7.4 is only a suggestion).")
+        if not force_field:
+            notes.append("PDB2PQR force field is required for receptor preparation (AMBER is a suggestion). Choose one of: AMBER, CHARMM, PARSE, TYL06, PEOEPB, SWANSON.")
+        elif force_field_source not in sources:
+            notes.append("force_field_source must be 'user_entered' or 'config_file' for receptor preparation.")
+    if ph is not None and ph_source not in sources:
+        notes.append("ph_source must be 'user_entered' (CLI or prompt) or 'config_file' (explicit configuration value).")
+    if ligand_prep and policy == "explicit_state":
+        if not protonation_state_map:
+            notes.append("explicit_state needs a protonation state map (CSV: ligand, smiles and/or net_charge).")
+        else:
+            try:
+                entries = load_protonation_state_map(Path(protonation_state_map).expanduser())
+            except ProtonationStateError as exc:
+                notes.append(f"{exc.reason}: {exc.details}")
+                entries = {}
+            if any(not entry.get("smiles") for entry in entries.values()) and ph is None:
+                notes.append("the state map has net_charge-only rows, which run the pH model: a pH is required.")
+    if ligand_prep and policy == "ph_model" and ph is None:
+        notes.append("pH is required for the ligand pH model. No default is applied: enter it explicitly (7.4 is only a suggestion).")
+    return notes
+
+
 def run_autodock_prepare(
     target: str,
     receptors_input: Optional[str],
     ligands_input: Optional[str],
     receptors_output: Optional[str],
     ligands_output: Optional[str],
-    force_field: str = "AMBER",
-    ph: float = 7.4,
+    force_field: Optional[str] = None,
+    ph: Optional[float] = None,
     ligand_preparation_backend: str = "engine_aware_full",
     selected_engines: Optional[List[str]] = None,
     autodocktools_prepare_ligand4: Optional[str] = None,
     autodocktools_prepare_receptor4: Optional[str] = None,
     autodocktools_python: Optional[str] = None,
+    ph_source: Optional[str] = None,
+    force_field_source: Optional[str] = None,
+    protonation_policy: str = "ph_model",
+    protonation_state_map: Optional[str] = None,
 ) -> WorkflowStepResult:
+    # Spec 034 R3: pH and force field have no default here. Each is an explicit value with its source
+    # ("user_entered" from the CLI or prompt, "config_file" from an explicit configuration value).
     from autodock_preparation import AutoDockPreparationPipeline, PreparationConfig
     from docking.models import (
         DEFAULT_PREPARATION_PH,
@@ -1065,6 +1135,13 @@ def run_autodock_prepare(
                     "effective_profile": str(payload.get("effective_profile") or contract.get("effective_profile") or ""),
                     "selected_engines": ",".join([str(token).strip().lower() for token in selected if str(token).strip()]),
                     "protonation_ph": payload.get("protonation_ph"),
+                    "protonation_policy": str(payload.get("protonation_policy") or ""),
+                    "protonation_applied": bool(payload.get("protonation_applied", False)),
+                    "net_formal_charge": _state_field(payload, "net_formal_charge"),
+                    "charged_atoms": _state_field(payload, "charged_atoms"),
+                    "microspecies_smiles": _state_field(payload, "microspecies_smiles"),
+                    "pdbqt_state_check": str(_protonation_field(payload, "pdbqt_state_check") or ""),
+                    "human_review_required": bool(_protonation_field(payload, "human_review_required")),
                     "is_valid": bool(contract.get("is_valid", False)),
                     "errors": "; ".join(errors),
                     "warnings": "; ".join(warnings),
@@ -1073,7 +1150,36 @@ def run_autodock_prepare(
         return reports
 
     root = _safe_root(output_dir=receptors_output or ligands_output)
-    ph_ok, normalized_ph, ph_error = validate_preparation_ph(ph)
+    policy = str(protonation_policy or "ph_model").strip().lower()
+    requirement_notes = _preparation_requirement_notes(
+        target,
+        ph=ph,
+        ph_source=ph_source,
+        force_field=force_field,
+        force_field_source=force_field_source,
+        policy=policy,
+        protonation_state_map=protonation_state_map,
+    )
+    if requirement_notes:
+        return _result(
+            target,
+            "blocked",
+            root,
+            inputs={
+                "receptors_input": receptors_input or "",
+                "ligands_input": ligands_input or "",
+                "requested_ph": ph,
+                "ph_source": ph_source or "",
+                "force_field_source": force_field_source or "",
+                "protonation_policy": policy,
+            },
+            notes=requirement_notes,
+        )
+    # No pH is needed for as_input or an explicit SMILES map; a missing pH is then not validated.
+    if ph is None:
+        ph_ok, normalized_ph, ph_error = True, None, ""
+    else:
+        ph_ok, normalized_ph, ph_error = validate_preparation_ph(ph)
     if not ph_ok:
         return _result(
             target,
@@ -1109,6 +1215,10 @@ def run_autodock_prepare(
             ligand_preparation_backend=str(ligand_preparation_backend or "engine_aware_full").strip().lower() or "engine_aware_full",
             ligand_preparation_profile=str(ligand_preparation_backend or "engine_aware_full").strip().lower() or "engine_aware_full",
             selected_engines=[str(engine).strip().lower() for engine in (selected_engines or []) if str(engine).strip()],
+            ph_source=ph_source,
+            force_field_source=force_field_source,
+            protonation_policy=policy,
+            protonation_state_map=str(Path(protonation_state_map).expanduser().resolve()) if protonation_state_map else "",
             autodocktools_prepare_ligand4=str(autodocktools_prepare_ligand4 or "").strip(),
             autodocktools_prepare_receptor4=str(autodocktools_prepare_receptor4 or "").strip(),
             autodocktools_python=str(autodocktools_python or "").strip(),
@@ -1180,6 +1290,13 @@ def run_autodock_prepare(
             "effective_profile",
             "selected_engines",
             "protonation_ph",
+            "protonation_policy",
+            "protonation_applied",
+            "net_formal_charge",
+            "charged_atoms",
+            "microspecies_smiles",
+            "pdbqt_state_check",
+            "human_review_required",
             "is_valid",
             "errors",
             "warnings",
@@ -1225,8 +1342,8 @@ def run_autodock_prepare(
             "target": target,
             "status": status,
             "force_field": str(force_field),
-            "requested_ph": float(ph),
-            "normalized_ph": float(normalized_ph),
+            "requested_ph": None if ph is None else float(ph),
+            "normalized_ph": None if normalized_ph is None else float(normalized_ph),
             "ph_min": float(MIN_PREPARATION_PH),
             "ph_max": float(MAX_PREPARATION_PH),
             "ligand_preparation_profile": str(cfg.ligand_preparation_profile),
@@ -1266,10 +1383,24 @@ def run_autodock_prepare(
             "ligand_prepared_count": ligand_outputs,
             "receptor_prepared_count": receptor_outputs,
             "ligand_preparation_compatibility": compatibility.to_dict(),
+            "ligand_protonation_states": [
+                {
+                    "ligand": row.get("ligand"),
+                    "protonation_policy": row.get("protonation_policy"),
+                    "protonation_applied": row.get("protonation_applied"),
+                    "net_formal_charge": row.get("net_formal_charge"),
+                    "charged_atoms": row.get("charged_atoms"),
+                    "microspecies_smiles": row.get("microspecies_smiles"),
+                    "pdbqt_state_check": row.get("pdbqt_state_check"),
+                    "human_review_required": row.get("human_review_required"),
+                    "is_valid": row.get("is_valid"),
+                }
+                for row in validation_rows
+            ],
             "ph_validation": {
                 "is_valid": True,
-                "requested_ph": float(ph),
-                "normalized_ph": float(normalized_ph),
+                "requested_ph": None if ph is None else float(ph),
+                "normalized_ph": None if normalized_ph is None else float(normalized_ph),
                 "min": float(MIN_PREPARATION_PH),
                 "max": float(MAX_PREPARATION_PH),
                 "error": "",
@@ -1295,7 +1426,10 @@ def run_autodock_prepare(
             root,
             inputs={
                 "force_field": force_field,
-                "ph": float(normalized_ph),
+                "force_field_source": force_field_source or "",
+                "ph": None if normalized_ph is None else float(normalized_ph),
+                "ph_source": ph_source or "",
+                "protonation_policy": policy,
                 "ligand_preparation_backend": cfg.ligand_preparation_profile,
                 "selected_engines": cfg.selected_engines,
                 "autodocktools_prepare_ligand4": cfg.autodocktools_prepare_ligand4,

@@ -63,7 +63,15 @@ def _write(path: Path, text: str) -> Path:
 
 
 def _config(**preparation) -> dict:
-    base = {"force_field": "AMBER", "ph": 7.4, "allow_bad_res": False, "ligand_preparation_profile": "engine_aware_full"}
+    # Spec 034 R3: pH and force field are explicit values with a recorded source. The harness passes both.
+    base = {
+        "force_field": "AMBER",
+        "force_field_source": "user_entered",
+        "ph": 7.4,
+        "ph_source": "user_entered",
+        "allow_bad_res": False,
+        "ligand_preparation_profile": "engine_aware_full",
+    }
     base.update(preparation)
     return {"preparation": base}
 
@@ -461,6 +469,10 @@ def test_shell_records_backend_unavailable_receptor_failure_and_no_pdbqt(tmp_pat
             receptors_input=str(raw),
             ligands_output=str(ligands_out),
             receptors_output=str(receptors_out),
+            force_field="AMBER",
+            force_field_source="user_entered",
+            ph=7.4,
+            ph_source="user_entered",
         )
     )
     config_path = pipeline.create_config_file()

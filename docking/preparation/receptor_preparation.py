@@ -46,8 +46,11 @@ PDB2PQR_EXECUTABLE = "pdb2pqr30"
 OPEN_BABEL_EXECUTABLE = "obabel"
 MEEKO_EXECUTABLE = "mk_prepare_receptor.py"
 PDB2PQR_FORCE_FIELDS = ("AMBER", "CHARMM", "PARSE", "TYL06", "PEOEPB", "SWANSON")
-DEFAULT_PH = 7.4
-DEFAULT_FORCE_FIELD = "AMBER"
+# Suggestions shown to the user only (interactive prompt). Preparation never falls back to them (Spec 034 R3a).
+SUGGESTED_PH = 7.4
+SUGGESTED_FORCE_FIELD = "AMBER"
+# Where a pH or force field came from (Spec 034 R3b): an explicit CLI/prompt entry, or an explicit config value.
+PARAMETER_SOURCES = ("user_entered", "config_file")
 HD_NITROGEN_MAX_DISTANCE = 1.1  # Angstrom; N-H bond length ceiling for HD-N association
 # Spec 033 decision (option 1): no side-chain flip or debump optimisation. --keep-chain only labels
 # chains so that terminal additions can be attributed to a chain; it does not move atoms.
@@ -106,6 +109,24 @@ def _ph_option(value: Any) -> float:
     if not math.isfinite(ph) or not 0.0 <= ph <= 14.0:
         raise ReceptorPreparationError("invalid_configuration", f"preparation.ph must be within [0, 14], got {ph}")
     return ph
+
+
+def _required_parameter(preparation: Dict[str, Any], key: str, reason: str, guidance: str) -> Any:
+    value = preparation.get(key)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        raise ReceptorPreparationError(reason, f"preparation.{key} is required for PDB2PQR protonation. {guidance}")
+    return value
+
+
+def _parameter_source(preparation: Dict[str, Any], key: str) -> str:
+    source = preparation.get(f"{key}_source")
+    if source not in PARAMETER_SOURCES:
+        raise ReceptorPreparationError(
+            f"{key}_source_missing",
+            f"preparation.{key}_source must be 'user_entered' (CLI or prompt) or 'config_file' "
+            f"(an explicit configuration value), got {source!r}",
+        )
+    return str(source)
 
 
 def _atom_element(line: str, pdbqt: bool) -> str:
@@ -310,10 +331,22 @@ def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_l
             "Permissive bad-residue deletion is unsupported: repair or explicitly remove individual residues first",
         )
     use_pdb2pqr = _bool_option(preparation, "receptor_use_pdb2pqr", True)
-    ph = _ph_option(preparation.get("ph", DEFAULT_PH))
-    force_field = str(preparation.get("force_field", DEFAULT_FORCE_FIELD)).strip().upper() or DEFAULT_FORCE_FIELD
-    if use_pdb2pqr and force_field not in PDB2PQR_FORCE_FIELDS:
-        raise ReceptorPreparationError("invalid_configuration", f"preparation.force_field {force_field!r} is not a PDB2PQR force field")
+    # Spec 034 R3a: no silent pH or force field. PDB2PQR needs both as explicit values with a recorded source.
+    ph: Optional[float] = None
+    ph_source: Optional[str] = None
+    force_field = ""
+    force_field_source: Optional[str] = None
+    if use_pdb2pqr:
+        ph_guidance = "Enter it with --ph or in the configuration (preparation.ph and preparation.ph_source)."
+        ph = _ph_option(_required_parameter(preparation, "ph", "ph_required", ph_guidance))
+        ph_source = _parameter_source(preparation, "ph")
+        force_field_guidance = "Choose one of: " + ", ".join(PDB2PQR_FORCE_FIELDS) + "."
+        force_field = str(
+            _required_parameter(preparation, "force_field", "force_field_required", force_field_guidance)
+        ).strip().upper()
+        force_field_source = _parameter_source(preparation, "force_field")
+        if force_field not in PDB2PQR_FORCE_FIELDS:
+            raise ReceptorPreparationError("invalid_configuration", f"preparation.force_field {force_field!r} is not a PDB2PQR force field")
     profile = str(
         preparation.get("ligand_preparation_profile", preparation.get("ligand_preparation_backend", "engine_aware_full")) or "engine_aware_full"
     ).strip().lower()
@@ -437,7 +470,9 @@ def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_l
         "preparation_config": preparation,
         "commands": commands,
         "requested_ph": ph,
-        "requested_force_field": force_field,
+        "ph_source": ph_source,
+        "requested_force_field": force_field or None,
+        "force_field_source": force_field_source,
         "protonation_status": protonation_status,
         "receptor_frame_id": prior.get("receptor_frame_id", prior.get("reference_frame_id", "")),
         "pdb2pqr_options": list(PDB2PQR_OPTIONS) if use_pdb2pqr else [],

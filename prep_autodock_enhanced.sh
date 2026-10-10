@@ -39,7 +39,11 @@ DEFAULT_CONFIG='{
   },
   "preparation": {
     "force_field": "AMBER",
+    "force_field_source": null,
     "ph": 7.4,
+    "ph_source": null,
+    "protonation_policy": "ph_model",
+    "protonation_state_map": "",
     "allow_bad_res": false,
     "default_altloc": "A",
     "receptor_use_pdb2pqr": true,
@@ -531,8 +535,17 @@ prepare_ligand_to_pdbqt() {
     profile=$(normalize_ligand_profile "$profile_raw")
     local selected_engines
     selected_engines=$(jq -r '.preparation.selected_engines // [] | join(",")' "$CONFIG_FILE")
-    local ph_value
-    ph_value=$(jq -r '.preparation.ph // 7.4' "$CONFIG_FILE")
+    # Spec 034 R2c/R3: no silent pH. The pH and its source reach the module only through
+    # PDBWIZARD_LIGAND_PREP_PH(_SOURCE), exported from the configuration in the main path; without them the
+    # module refuses ph_model.
+    local protonation_policy
+    protonation_policy=$(jq -r '.preparation.protonation_policy // "ph_model"' "$CONFIG_FILE")
+    local state_map
+    state_map=$(jq -r '.preparation.protonation_state_map // ""' "$CONFIG_FILE")
+    local state_map_args=()
+    if [[ -n "$state_map" ]]; then
+        state_map_args=(--protonation-state-map "$state_map")
+    fi
 
     if command -v python3 >/dev/null 2>&1; then
         if PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
@@ -540,7 +553,8 @@ prepare_ligand_to_pdbqt() {
                 --input "$input_file" \
                 --output "$output_file" \
                 --backend-profile "$profile" \
-                --ph "$ph_value" \
+                --protonation-policy "$protonation_policy" \
+                ${state_map_args[@]+"${state_map_args[@]}"} \
                 --engines "$selected_engines" >/dev/null 2>&1; then
             return 0
         fi
@@ -548,11 +562,20 @@ prepare_ligand_to_pdbqt() {
             log_error "Central ligand preparation failed in forced profile mode ($profile) for $(basename "$input_file")."
             return 1
         fi
-        log_info "Central ligand normalization failed for $(basename "$input_file"). Falling back to direct CLI conversion."
+        if [[ "$protonation_policy" != "as_input" ]]; then
+            # The direct fallback below applies no pH model and no state map. It is allowed only for as_input.
+            log_error "Central ligand preparation failed for $(basename "$input_file") under protonation policy '$protonation_policy'. Refusing the direct fallback, which cannot apply it."
+            return 1
+        fi
+        log_info "Central ligand normalization failed for $(basename "$input_file"). Falling back to direct CLI conversion (as_input)."
     fi
 
     if [[ "$profile" != "engine_aware_full" ]]; then
         log_error "python3-based central ligand preparation is required for profile '$profile'."
+        return 1
+    fi
+    if [[ "$protonation_policy" != "as_input" ]]; then
+        log_error "python3-based central ligand preparation is required for protonation policy '$protonation_policy'."
         return 1
     fi
 
@@ -918,7 +941,23 @@ main() {
 
     export PDBWIZARD_LIGAND_PREP_BACKEND="$ligand_profile"
     export PDBWIZARD_LIGAND_PREP_PROFILE="$ligand_profile"
-    export PDBWIZARD_LIGAND_PREP_PH="$(jq -r '.preparation.ph // 7.4' "$CONFIG_FILE")"
+    # Spec 034: an absent pH is not exported. The ligand module then refuses ph_model rather than using 7.4.
+    local ligand_ph
+    ligand_ph=$(jq -r '.preparation.ph // empty' "$CONFIG_FILE")
+    if [[ -n "$ligand_ph" ]]; then
+        export PDBWIZARD_LIGAND_PREP_PH="$ligand_ph"
+        export PDBWIZARD_LIGAND_PREP_PH_SOURCE="$(jq -r '.preparation.ph_source // ""' "$CONFIG_FILE")"
+    else
+        unset PDBWIZARD_LIGAND_PREP_PH PDBWIZARD_LIGAND_PREP_PH_SOURCE
+    fi
+    export PDBWIZARD_LIGAND_PREP_PROTONATION_POLICY="$(jq -r '.preparation.protonation_policy // "ph_model"' "$CONFIG_FILE")"
+    local exported_state_map
+    exported_state_map="$(jq -r '.preparation.protonation_state_map // ""' "$CONFIG_FILE")"
+    if [[ -n "$exported_state_map" ]]; then
+        export PDBWIZARD_LIGAND_PREP_STATE_MAP="$exported_state_map"
+    else
+        unset PDBWIZARD_LIGAND_PREP_STATE_MAP
+    fi
     export PDBWIZARD_SELECTED_ENGINES="$selected_engines"
     if [[ -n "$adt_script" && -f "$adt_script" ]]; then
         export AUTODOCKTOOLS_PREPARE_LIGAND4="$adt_script"

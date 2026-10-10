@@ -83,9 +83,8 @@ class BatchPDBPreparationPipeline:
                     "distance_cutoff": 5.0,
                     "method": "plip"
                 },
+                # Spec 034 R3: no pH or force field here. Set autodock.ph and autodock.force_field explicitly.
                 "autodock": {
-                    "force_field": "AMBER",
-                    "ph": 7.4,
                     "allow_bad_res": True,
                     "default_altloc": "A"
                 }
@@ -390,8 +389,12 @@ class BatchPDBPreparationPipeline:
             receptors_dir.mkdir(exist_ok=True)
             
             # Get AutoDock settings
-            force_field = self._get_pdb_setting(pdb_config, "autodock.force_field", "AMBER")
-            ph = self._get_pdb_setting(pdb_config, "autodock.ph", 7.4)
+            # Spec 034 R3: an absent value stays absent (no silent 7.4 or AMBER). A present value is an explicit
+            # configuration value, recorded as config_file; receptor preparation refuses a missing one.
+            force_field = self._get_pdb_setting(pdb_config, "autodock.force_field", None)
+            ph = self._get_pdb_setting(pdb_config, "autodock.ph", None)
+            force_field_source = "config_file" if force_field is not None else None
+            ph_source = "config_file" if ph is not None else None
             allow_bad_res = self._get_pdb_setting(pdb_config, "autodock.allow_bad_res", True)
             default_altloc = self._get_pdb_setting(pdb_config, "autodock.default_altloc", "A")
             
@@ -402,7 +405,9 @@ class BatchPDBPreparationPipeline:
                 ligands_output=str(ligands_dir),
                 receptors_output=str(receptors_dir),
                 force_field=force_field,
+                force_field_source=force_field_source,
                 ph=ph,
+                ph_source=ph_source,
                 allow_bad_res=allow_bad_res,
                 default_altloc=default_altloc
             )

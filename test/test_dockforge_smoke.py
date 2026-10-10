@@ -3644,6 +3644,8 @@ def _smoke_prepare_guard() -> None:
             ligands_output=str(ligands_out),
             ligand_preparation_backend="meeko_only",
             selected_engines=["autodock4"],
+            ph=7.4,
+            ph_source="user_entered",
         )
         _assert(result.status == "blocked", f"Expected blocked status for invalid profile combo, got: {result.status}")
         _assert(
@@ -3674,6 +3676,7 @@ def _smoke_prepare_ph_guard() -> None:
             receptors_output=str(receptors_out),
             ligands_output=str(ligands_out),
             ph=22.0,
+            ph_source="user_entered",
             ligand_preparation_backend="openbabel_only",
             selected_engines=["vina"],
         )
@@ -3782,6 +3785,8 @@ def _smoke_preparation_preflight_artifacts() -> None:
                 ligands_output=str(ligands_out),
                 ligand_preparation_backend="openbabel_only",
                 selected_engines=["vina"],
+                ph=7.4,
+                ph_source="user_entered",
             )
         finally:
             adprep.AutoDockPreparationPipeline.check_dependencies = original_check_dependencies
@@ -3864,6 +3869,8 @@ def _smoke_preparation_mode_matrix() -> None:
                     ligands_output=str(ligands_out),
                     ligand_preparation_backend=profile,
                     selected_engines=engines,
+                    ph=7.4,
+                    ph_source="user_entered",
                 )
 
                 if not compatibility.is_valid:
