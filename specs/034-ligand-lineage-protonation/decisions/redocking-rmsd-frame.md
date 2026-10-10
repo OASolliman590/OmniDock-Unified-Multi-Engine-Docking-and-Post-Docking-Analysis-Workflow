@@ -1,6 +1,6 @@
 # Decision needed — redocking RMSD frame (in place vs Kabsch-superposed)
 
-**Status:** open; Scientific Lead decision required. No code change is made under Spec 034.
+**Status:** decided 2026-10-10 by the Scientific Lead: option 1. Redocking validation reports in-place heavy-atom RMSD as the primary value, with Kabsch-superposed RMSD as secondary. Inter-engine geometric consensus keeps Kabsch. Both values use the same Spec 031 symmetry-aware mapping.
 
 The accepted Spec 031 method (`spec031-atom-mapping-v1`) computes RMSD after Kabsch superposition. Redocking validation conventionally reports **in-place** heavy-atom RMSD: the docked pose and the crystal ligand already share the receptor frame, and superposition can hide a misplaced or rotated pose.
 

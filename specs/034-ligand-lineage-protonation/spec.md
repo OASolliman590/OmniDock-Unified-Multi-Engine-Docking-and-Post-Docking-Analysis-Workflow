@@ -32,7 +32,7 @@
 - R3b: Provenance records `ph_source: user_entered` (or `config_file` when it comes from an explicit project configuration value), plus the value.
 
 ## Non-goals
-- No change to Spec 031 scoring, consensus or reference policy, and no change to the accepted Kabsch alignment method. See `decisions/redocking-rmsd-frame.md`.
+- No change to Spec 031 scoring, consensus or reference policy, Redocking RMSD changes from Kabsch-only to in-place primary with Kabsch secondary, per the decision in `decisions/redocking-rmsd-frame.md`. Geometric consensus is unchanged.
 - No new docking engines, uploads or MD.
 - No automatic pKa prediction beyond Open Babel's existing model. Better predictors are a separate decision.
 
