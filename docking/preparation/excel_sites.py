@@ -11,6 +11,9 @@ REQUIRED_PROPERTIES = {
     "active_site_center_y",
     "active_site_center_z",
 }
+# Spec 036 R6: every Excel/pairlist box centre must carry a recorded method.
+ALLOWED_CENTER_METHODS = {"binding_site_center_v1", "user_explicit"}
+CENTER_METHOD_PROPERTY = "binding_site_center_method"
 
 
 def load_site_catalog_from_summary(
@@ -77,13 +80,27 @@ def load_site_catalog_from_summary(
             raise ValueError(f"Missing active site coordinates for: {', '.join(missing_coordinate_ids)}")
         catalog = catalog[catalog[["center_x", "center_y", "center_z"]].notna().all(axis=1)].copy()
 
+    if CENTER_METHOD_PROPERTY in catalog.columns:
+        catalog["center_method"] = catalog[CENTER_METHOD_PROPERTY].fillna("").astype(str).str.strip()
+    else:
+        catalog["center_method"] = ""
+    refused = catalog[~catalog["center_method"].isin(ALLOWED_CENTER_METHODS)]
+    if not refused.empty:
+        refused_ids = ", ".join(sorted(refused["pdb_id"].astype(str).str.upper().tolist()))
+        raise ValueError(
+            "Refusing Excel box centre(s) without a recorded method "
+            f"(`{CENTER_METHOD_PROPERTY}` must be one of: {', '.join(sorted(ALLOWED_CENTER_METHODS))}) "
+            f"for PDB(s): {refused_ids}. Re-run the PDB preparation step that records the centre method, "
+            "or record `user_explicit` for a hand-entered centre."
+        )
+
     if "selected_ligand" not in catalog.columns:
         catalog["selected_ligand"] = ""
     if "protein_display_name" not in catalog.columns:
         catalog["protein_display_name"] = ""
 
     result = catalog[
-        ["pdb_id", "selected_ligand", "protein_display_name", "center_x", "center_y", "center_z"]
+        ["pdb_id", "selected_ligand", "protein_display_name", "center_x", "center_y", "center_z", "center_method"]
     ].copy()
     if return_missing_coordinates:
         return result, missing_coordinate_ids

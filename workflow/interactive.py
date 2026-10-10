@@ -23,6 +23,12 @@ from docking.models import (
 )
 from docking.preparation.ligand_quality import audit_project_ligands
 from docking.preparation.receptor_preparation import PDB2PQR_FORCE_FIELDS, SUGGESTED_FORCE_FIELD, SUGGESTED_PH
+from docking.project_layout import (
+    build_protonation_policy_block,
+    load_protonation_policy,
+    protonation_state_map_path,
+    set_protonation_policy,
+)
 from docking.preparation.receptor_quality import audit_project_receptors
 from docking.preparation.pairlist_builder import list_prepared_asset_names
 from docking.project_layout import (
@@ -1067,6 +1073,81 @@ def _collect_pdbs(questionary, project_root: Path) -> None:
             return
 
 
+def _ask_ph(questionary, purpose: str) -> float:
+    while True:
+        raw_ph = _text(
+            questionary,
+            f"pH (suggested {SUGGESTED_PH:.1f}: press Enter to confirm, or type another value) - {purpose}",
+            default=f"{SUGGESTED_PH:.1f}",
+            required=True,
+        )
+        try:
+            parsed_ph = float(raw_ph)
+        except ValueError:
+            print("pH must be a numeric value.")
+            continue
+        ph_ok, normalized_ph, ph_error = validate_preparation_ph(parsed_ph)
+        if ph_ok:
+            return float(normalized_ph)
+        print(f"❌ {ph_error} (allowed range: {MIN_PREPARATION_PH:.1f}-{MAX_PREPARATION_PH:.1f})")
+
+
+def _ask_protonation_policy(questionary, project_root: Path) -> Optional[Dict[str, object]]:
+    """Spec 036 R1a: ask the project's one protonation policy once and store it in the manifest."""
+    _header("Protonation Policy (asked once per project)")
+    print("These values apply to every preparation step of this project and are stored in the manifest.")
+    receptor_ph = _ask_ph(questionary, "PDB2PQR receptor")
+    force_field = _select(
+        questionary,
+        "PDB2PQR force field",
+        [(name, name + ("  (suggested)" if name == SUGGESTED_FORCE_FIELD else "")) for name in PDB2PQR_FORCE_FIELDS],
+        default=SUGGESTED_FORCE_FIELD,
+    )
+    ligand_policy = _select(
+        questionary,
+        "Ligand protonation policy",
+        [
+            ("ph_model", "Open Babel pH model (human review flagged; you confirm the measured charges afterwards)"),
+            ("explicit_state", "Explicit state map (CSV: ligand, smiles and/or net_charge)"),
+            ("as_input", "Keep the input hydrogens and charges (no pH model)"),
+        ],
+        default="ph_model",
+    )
+    ligand_ph = _ask_ph(questionary, "ligand pH model") if ligand_policy == "ph_model" else None
+    state_map = None
+    if ligand_policy == "explicit_state":
+        state_map = Path(_text(questionary, "Path to the protonation state map (CSV)", required=True)).expanduser()
+    try:
+        block = build_protonation_policy_block(
+            project_root,
+            receptor_ph=receptor_ph,
+            receptor_force_field=force_field,
+            ligand_policy=ligand_policy,
+            ligand_ph=ligand_ph,
+            ligand_state_map=state_map,
+            source="user_entered",
+        )
+    except (ValueError, OSError) as exc:
+        print(f"The protonation policy was not stored: {exc}")
+        return None
+    try:
+        return set_protonation_policy(
+            project_root,
+            receptor_ph=receptor_ph,
+            receptor_force_field=force_field,
+            ligand_policy=ligand_policy,
+            ligand_ph=ligand_ph,
+            ligand_state_map=state_map,
+            source="user_entered",
+        )
+    except FileNotFoundError:
+        print("This project has no manifest yet, so the policy applies to this run only. Run workflow init to store it.")
+        return block
+    except ValueError as exc:
+        print(f"The protonation policy was not stored: {exc}")
+        return None
+
+
 def _prepare_assets(questionary, project_root: Path) -> None:
     _header("Prepare Proteins And Ligands")
     layout = _project_layout(project_root)
@@ -1086,49 +1167,35 @@ def _prepare_assets(questionary, project_root: Path) -> None:
     ligands_input = _text(questionary, "Raw ligands input", default=str(layout["raw_ligands"])) if action != "pdb.prepare_protein" else ""
     receptors_output = _text(questionary, "Prepared proteins output", default=str(layout["prepared_proteins"])) if action != "pdb.prepare_ligand" else ""
     ligands_output = _text(questionary, "Prepared ligands output", default=str(layout["prepared_ligands"])) if action != "pdb.prepare_protein" else ""
-    # Spec 034 R2c/R3: nothing is applied silently. The user confirms or types each value.
-    ligand_policy = "ph_model"
+    # Spec 036 R1a: one protonation policy per project, asked once and then reused by every prep step.
+    policy_block = load_protonation_policy(project_root)
+    if policy_block is None:
+        policy_block = _ask_protonation_policy(questionary, project_root)
+        if policy_block is None:
+            return
+    else:
+        print(
+            "Using the project protonation policy: "
+            f"receptor pH {policy_block.get('receptor_ph')} ({policy_block.get('receptor_force_field')}), "
+            f"ligand policy {policy_block.get('ligand_policy')}"
+            + (f", ligand pH {policy_block.get('ligand_ph')}" if policy_block.get("ligand_ph") is not None else "")
+            + f" (set {policy_block.get('set_at')})."
+        )
+    ligand_policy = str(policy_block.get("ligand_policy") or "ph_model")
     protonation_state_map = ""
-    if action != "pdb.prepare_protein":
-        ligand_policy = _select(
-            questionary,
-            "Ligand protonation policy",
-            [
-                ("ph_model", "Open Babel pH model (default; you confirm the measured charges afterwards)"),
-                ("explicit_state", "Explicit state map (CSV: ligand, smiles and/or net_charge)"),
-                ("as_input", "Keep the input hydrogens and charges (no pH model)"),
-            ],
-            default="ph_model",
+    if ligand_policy == "explicit_state":
+        protonation_state_map = str(protonation_state_map_path(project_root, policy_block) or "")
+    force_field = str(policy_block.get("receptor_force_field") or "")
+    receptor_ph = policy_block.get("receptor_ph")
+    ligand_ph = policy_block.get("ligand_ph")
+    if action == "pdb.prepare_both" and receptor_ph is not None and ligand_ph is not None and float(receptor_ph) != float(ligand_ph):
+        print(
+            "The project policy holds different receptor and ligand pH values, which one run cannot apply. "
+            "Prepare proteins and ligands in separate steps."
         )
-        if ligand_policy == "explicit_state":
-            protonation_state_map = _text(questionary, "Path to the protonation state map (CSV)", required=True)
-    force_field = ""
-    if action != "pdb.prepare_ligand":
-        force_field = _select(
-            questionary,
-            "PDB2PQR force field",
-            [(name, name + ("  (suggested)" if name == SUGGESTED_FORCE_FIELD else "")) for name in PDB2PQR_FORCE_FIELDS],
-            default=SUGGESTED_FORCE_FIELD,
-        )
-    ph = None
-    needs_ph = action != "pdb.prepare_ligand" or ligand_policy in {"ph_model", "explicit_state"}
-    while needs_ph:
-        raw_ph = _text(
-            questionary,
-            f"pH (suggested {SUGGESTED_PH:.1f}: press Enter to confirm, or type another value)",
-            default=f"{SUGGESTED_PH:.1f}",
-            required=True,
-        )
-        try:
-            parsed_ph = float(raw_ph)
-        except ValueError:
-            print("pH must be a numeric value.")
-            continue
-        ph_ok, normalized_ph, ph_error = validate_preparation_ph(parsed_ph)
-        if ph_ok:
-            ph = normalized_ph
-            break
-        print(f"❌ {ph_error} (allowed range: {MIN_PREPARATION_PH:.1f}-{MAX_PREPARATION_PH:.1f})")
+        return
+    ph = ligand_ph if action == "pdb.prepare_ligand" else receptor_ph
+    ph = float(ph) if ph is not None else None
     while True:
         ligand_backend = _select(
             questionary,
@@ -1219,6 +1286,19 @@ def _prepare_assets(questionary, project_root: Path) -> None:
                     protonation_state_map=map_path,
                 )
                 print("Ligands re-prepared from the explicit state map.")
+                try:
+                    set_protonation_policy(
+                        project_root,
+                        receptor_ph=float(policy_block["receptor_ph"]),
+                        receptor_force_field=str(policy_block["receptor_force_field"]),
+                        ligand_policy="explicit_state",
+                        ligand_state_map=Path(map_path).expanduser(),
+                        source="user_entered",
+                        replace=True,
+                    )
+                    print("Project protonation policy updated: ligand policy explicit_state.")
+                except (ValueError, OSError) as exc:
+                    print(f"The project protonation policy was not updated: {exc}")
                 _print_prepare_result(result)
                 _print_measured_protonation(result.outputs.get("ligand_protonation_states") or [])
 
@@ -1461,8 +1541,8 @@ def _run_docking_stage(questionary, project_root: Path) -> None:
         [("basic", "Basic (preset-driven)"), ("advanced", "Advanced (manual controls)")],
         default="basic",
     )
-    parameter_preset = "balanced"
-    exhaustiveness = 16
+    parameter_preset = "exhaustive"
+    exhaustiveness = 32
     num_modes = 20
     seed = ""
     box_scale = "1.0"
@@ -1476,12 +1556,12 @@ def _run_docking_stage(questionary, project_root: Path) -> None:
                 ("balanced", "Balanced (16/20)"),
                 ("exhaustive", "Exhaustive (32/40)"),
             ],
-            default="balanced",
+            default="exhaustive",
         )
     else:
-        exhaustiveness = _int_input(questionary, "Exhaustiveness", default=16, minimum=1)
+        exhaustiveness = _int_input(questionary, "Exhaustiveness", default=32, minimum=1)
         num_modes = _int_input(questionary, "Number of modes", default=20, minimum=1)
-        seed = _text(questionary, "Seed (optional, Enter skips)", default="", required=False)
+        seed = _text(questionary, "Seed (required; replicates use seed, seed+1, ...)", default="", required=True)
         box_scale = str(_float_input(questionary, "Box scale (>0)", default=1.0))
         box_padding = str(_float_input(questionary, "Box padding (>=0)", default=0.0))
 
@@ -1651,8 +1731,7 @@ def _run_docking_stage(questionary, project_root: Path) -> None:
                 str(box_padding),
             ]
         )
-        if seed.strip():
-            argv.extend(["--seed", seed.strip()])
+        argv.extend(["--seed", seed.strip()])
     if shared_conda_env:
         argv.extend(["--shared-conda-env", shared_conda_env])
     if container_image:
@@ -2610,7 +2689,7 @@ def _run_analysis_stage(questionary, project_root: Path) -> None:
     positive_affinity_threshold = 0.0
     minimum_pose_count = 1
     rmsd_workers = 0
-    consensus_mode = "dockbox_geometric"
+    consensus_mode = "consensus_rank_geometry_qc_v2"
     rescoring_scope = "top_n_per_protein"
     rescoring_top_n = 3
     analysis_scope = "full"
@@ -2763,10 +2842,7 @@ def _run_analysis_stage(questionary, project_root: Path) -> None:
                     questionary,
                     "Consensus mode for comparative hit ranking",
                     [
-                        ("dockbox_geometric", "DockBox geometric consensus (recommended)"),
-                        ("weighted_hybrid", "Weighted hybrid"),
-                        ("strict_consensus", "Strict consensus (requires >=2 engines per pair)"),
-                        ("favorite_guardrails", "Favorite + guardrails"),
+                        ("consensus_rank_geometry_qc_v2", "Consensus v2: Spec 031 policy (default)"),
                     ],
                     default=consensus_mode,
                 )

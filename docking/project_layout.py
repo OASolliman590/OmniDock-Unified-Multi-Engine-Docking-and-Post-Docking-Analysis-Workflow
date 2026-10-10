@@ -436,6 +436,269 @@ def save_manifest(project_root: Path, payload: Dict[str, object], layout_profile
     return path
 
 
+# ---------------------------------------------------------------- Spec 036 R1a: one protonation policy per project
+
+PROTONATION_POLICY_KEY = "protonation_policy"
+PROTONATION_LIGAND_POLICIES = ("ph_model", "explicit_state", "as_input")
+PROTONATION_CONFLICT_REASON = "protonation_policy_conflict"
+
+
+class ProtonationPolicyConflict(ValueError):
+    """An explicit value disagrees with the project's stored protonation policy (Spec 036 R1a)."""
+
+    def __init__(self, field: str, stored: object, requested: object) -> None:
+        self.field = str(field)
+        self.stored = stored
+        self.requested = requested
+        self.reason = PROTONATION_CONFLICT_REASON
+        super().__init__(
+            f"{PROTONATION_CONFLICT_REASON}:{self.field}: project policy has {stored!r}, "
+            f"this command requested {requested!r}. Use the stored value, or change the project policy "
+            "with `workflow protonation-policy --replace`."
+        )
+
+
+def _manifest_file_for_update(project_root: Path) -> Optional[Path]:
+    """The manifest file that load_manifest would read (so a write goes back to the same file)."""
+    root = Path(project_root).expanduser().resolve()
+    for candidate in (
+        manifest_path(root),
+        root / "project_manifest.json",
+        root / DOCKING_LEGACY_DIRS["docking_root"] / "project_manifest.json",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def load_protonation_policy(project_root: Path) -> Optional[Dict[str, object]]:
+    """The project's stored ``protonation_policy`` block, or None when the project has none."""
+    root = Path(project_root).expanduser().resolve()
+    if _manifest_file_for_update(root) is None:
+        return None
+    block = load_manifest(root).get(PROTONATION_POLICY_KEY)
+    return dict(block) if isinstance(block, dict) and block else None
+
+
+def _policy_path_text(project_root: Path, path: Path) -> str:
+    resolved = Path(path).expanduser().resolve()
+    try:
+        return resolved.relative_to(Path(project_root).expanduser().resolve()).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def protonation_state_map_path(project_root: Path, block: Optional[Dict[str, object]]) -> Optional[Path]:
+    """Resolve the stored ligand state map and verify its SHA-256 (fails closed when it changed)."""
+    if not block or not block.get("ligand_state_map"):
+        return None
+    record = block["ligand_state_map"]
+    raw = Path(str(record.get("path") or "")).expanduser()
+    candidate = raw if raw.is_absolute() else (Path(project_root).expanduser().resolve() / raw)
+    if not candidate.is_file():
+        raise ValueError(f"protonation_state_map_missing:{candidate}")
+    if _file_sha256(candidate) != str(record.get("sha256") or ""):
+        raise ValueError(f"protonation_state_map_hash_mismatch:{candidate}")
+    return candidate.resolve()
+
+
+def build_protonation_policy_block(
+    project_root: Path,
+    *,
+    receptor_ph: float,
+    receptor_force_field: str,
+    ligand_policy: str,
+    ligand_ph: Optional[float] = None,
+    ligand_state_map: Optional[Path] = None,
+    source: str = "user_entered",
+    set_at: Optional[str] = None,
+) -> Dict[str, object]:
+    """Validate explicit protonation values and return the manifest block (no file is written)."""
+    from datetime import datetime, timezone
+
+    from .models import validate_preparation_ph
+    from .preparation.receptor_preparation import PDB2PQR_FORCE_FIELDS
+
+    ok, normalized_receptor_ph, error = validate_preparation_ph(receptor_ph)
+    if not ok:
+        raise ValueError(f"invalid_receptor_ph:{error}")
+    force_field = str(receptor_force_field or "").strip().upper()
+    if force_field not in PDB2PQR_FORCE_FIELDS:
+        raise ValueError(f"invalid_receptor_force_field:{receptor_force_field!r}")
+    policy = str(ligand_policy or "").strip().lower()
+    if policy not in PROTONATION_LIGAND_POLICIES:
+        raise ValueError(f"invalid_ligand_policy:{ligand_policy!r}")
+    normalized_ligand_ph: Optional[float] = None
+    if ligand_ph is not None:
+        ok, normalized_ligand_ph, error = validate_preparation_ph(ligand_ph)
+        if not ok:
+            raise ValueError(f"invalid_ligand_ph:{error}")
+    if policy == "ph_model" and normalized_ligand_ph is None:
+        raise ValueError("ligand_ph_required_for_ph_model")
+    state_map_record = None
+    if policy == "explicit_state":
+        if ligand_state_map is None:
+            raise ValueError("ligand_state_map_required_for_explicit_state")
+        state_map = Path(ligand_state_map).expanduser().resolve()
+        if not state_map.is_file():
+            raise ValueError(f"ligand_state_map_missing:{state_map}")
+        state_map_record = {"path": _policy_path_text(project_root, state_map), "sha256": _file_sha256(state_map)}
+    elif ligand_state_map is not None:
+        raise ValueError(f"ligand_state_map_only_for_explicit_state:{policy}")
+    return {
+        "receptor_ph": float(normalized_receptor_ph),
+        "receptor_force_field": force_field,
+        "ligand_policy": policy,
+        "ligand_ph": float(normalized_ligand_ph) if normalized_ligand_ph is not None else None,
+        "ligand_state_map": state_map_record,
+        "source": str(source or "user_entered"),
+        "set_at": set_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+
+
+def check_protonation_policy_conflicts(
+    stored: Optional[Dict[str, object]],
+    requested: Dict[str, object],
+) -> List[Tuple[str, object, object]]:
+    """Explicit values that disagree with the stored policy. ``None`` requested values are not checked."""
+    if not stored:
+        return []
+    conflicts: List[Tuple[str, object, object]] = []
+    for field, value in requested.items():
+        if value is None:
+            continue
+        if field == "ligand_state_map":
+            record = stored.get("ligand_state_map") or {}
+            stored_value: object = record.get("sha256") if isinstance(record, dict) else None
+            requested_value: object = _file_sha256(Path(str(value)).expanduser()) if Path(str(value)).expanduser().is_file() else value
+            same = stored_value == requested_value
+        elif field in {"receptor_ph", "ligand_ph"}:
+            stored_value = stored.get(field)
+            requested_value = float(value)
+            same = stored_value is not None and abs(float(stored_value) - requested_value) <= 1e-9
+        elif field == "receptor_force_field":
+            stored_value = stored.get(field)
+            requested_value = str(value).strip().upper()
+            same = str(stored_value or "").upper() == requested_value
+        else:
+            stored_value = stored.get(field)
+            requested_value = str(value).strip().lower()
+            same = str(stored_value or "").lower() == requested_value
+        if not same:
+            conflicts.append((field, stored_value, requested_value))
+    return conflicts
+
+
+def require_matching_protonation_policy(stored: Optional[Dict[str, object]], requested: Dict[str, object]) -> None:
+    conflicts = check_protonation_policy_conflicts(stored, requested)
+    if conflicts:
+        field, stored_value, requested_value = conflicts[0]
+        raise ProtonationPolicyConflict(field, stored_value, requested_value)
+
+
+def resolve_protonation_inputs(
+    project_root: Path,
+    *,
+    receptor_ph: Optional[float] = None,
+    receptor_force_field: Optional[str] = None,
+    ligand_policy: Optional[str] = None,
+    ligand_ph: Optional[float] = None,
+    ligand_state_map: Optional[str] = None,
+) -> Dict[str, object]:
+    """Explicit values, falling back to the project policy (R1a). Conflicts raise ``ProtonationPolicyConflict``."""
+    stored = load_protonation_policy(project_root)
+    require_matching_protonation_policy(
+        stored,
+        {
+            "receptor_ph": receptor_ph,
+            "receptor_force_field": receptor_force_field,
+            "ligand_policy": ligand_policy,
+            "ligand_ph": ligand_ph,
+            "ligand_state_map": ligand_state_map,
+        },
+    )
+    resolved: Dict[str, object] = {
+        "project_policy": stored is not None,
+        "receptor_ph": receptor_ph,
+        "receptor_ph_source": "user_entered" if receptor_ph is not None else None,
+        "receptor_force_field": receptor_force_field,
+        "force_field_source": "user_entered" if receptor_force_field else None,
+        "ligand_policy": ligand_policy,
+        "ligand_ph": ligand_ph,
+        "ligand_ph_source": "user_entered" if ligand_ph is not None else None,
+        "ligand_state_map": ligand_state_map,
+    }
+    if stored:
+        source = str(stored.get("source") or "user_entered")
+        if resolved["receptor_ph"] is None and stored.get("receptor_ph") is not None:
+            resolved["receptor_ph"] = float(stored["receptor_ph"])
+            resolved["receptor_ph_source"] = source
+        if resolved["receptor_force_field"] is None and stored.get("receptor_force_field"):
+            resolved["receptor_force_field"] = str(stored["receptor_force_field"])
+            resolved["force_field_source"] = source
+        if resolved["ligand_policy"] is None and stored.get("ligand_policy"):
+            resolved["ligand_policy"] = str(stored["ligand_policy"])
+        if resolved["ligand_ph"] is None and stored.get("ligand_ph") is not None:
+            resolved["ligand_ph"] = float(stored["ligand_ph"])
+            resolved["ligand_ph_source"] = source
+        if resolved["ligand_state_map"] is None:
+            state_map = protonation_state_map_path(project_root, stored)
+            if state_map is not None:
+                resolved["ligand_state_map"] = str(state_map)
+    return resolved
+
+
+def set_protonation_policy(
+    project_root: Path,
+    *,
+    receptor_ph: float,
+    receptor_force_field: str,
+    ligand_policy: str,
+    ligand_ph: Optional[float] = None,
+    ligand_state_map: Optional[Path] = None,
+    source: str = "user_entered",
+    replace: bool = False,
+) -> Dict[str, object]:
+    """Store the project protonation policy. A different stored policy needs ``replace=True``."""
+    root = Path(project_root).expanduser().resolve()
+    block = build_protonation_policy_block(
+        root,
+        receptor_ph=receptor_ph,
+        receptor_force_field=receptor_force_field,
+        ligand_policy=ligand_policy,
+        ligand_ph=ligand_ph,
+        ligand_state_map=ligand_state_map,
+        source=source,
+    )
+    stored = load_protonation_policy(root)
+    if stored and not replace:
+        comparable = {k: block[k] for k in ("receptor_ph", "receptor_force_field", "ligand_policy", "ligand_ph")}
+        conflicts = check_protonation_policy_conflicts(stored, comparable)
+        if block.get("ligand_state_map"):
+            conflicts += check_protonation_policy_conflicts(stored, {"ligand_state_map": str(ligand_state_map)})
+        if conflicts:
+            field, stored_value, requested_value = conflicts[0]
+            raise ProtonationPolicyConflict(field, stored_value, requested_value)
+        return stored
+    file_path = _manifest_file_for_update(root)
+    if file_path is None:
+        raise FileNotFoundError(f"No project manifest found under {root}; run workflow init first.")
+    payload = json.loads(file_path.read_text(encoding="utf-8"))
+    payload[PROTONATION_POLICY_KEY] = block
+    file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return block
+
+
 def ensure_pairlist_stub(project_root: Path, layout_profile: Optional[str] = None) -> Path:
     path = pairlist_path(project_root, layout_profile)
     if path.exists():

@@ -9,7 +9,7 @@ import pandas as pd
 
 from post_docking_analysis.docking_parser import parse_autodock4_dlg
 from ..models import PairlistRow
-from .base import DockingEngineRunner
+from .base import DockingEngineRunner, build_pair_index, split_replicate_stem
 
 
 class AutoDock4Runner(DockingEngineRunner):
@@ -175,6 +175,7 @@ class AutoDock4Runner(DockingEngineRunner):
         ligand_file: Path,
         ligand_types: List[str],
         about: Tuple[float, float, float],
+        seed: Optional[int] = None,
     ) -> None:
         ga_pop_size = int(self.runtime.get("ga_pop_size", 150))
         ga_num_evals = int(self.runtime.get("ga_num_evals", 25000000))
@@ -184,7 +185,6 @@ class AutoDock4Runner(DockingEngineRunner):
         torsdof_override = int(self.runtime.get("torsdof", 0))
         torsdof = torsdof_override if torsdof_override > 0 else (self._extract_torsdof(ligand_file) or 0)
         parameter_file = self._resolve_parameter_file()
-        seed = self.runtime.get("seed")
         if seed in (None, ""):
             seed_line = "seed pid time"
         else:
@@ -238,7 +238,13 @@ class AutoDock4Runner(DockingEngineRunner):
         )
         dpf_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    def build_command(self, row: PairlistRow, pose_file: Path, log_file: Path) -> List[str]:
+    def build_command(
+        self,
+        row: PairlistRow,
+        pose_file: Path,
+        log_file: Path,
+        seed: Optional[int] = None,
+    ) -> List[str]:
         autogrid_binary = str(self.runtime.get("autogrid_binary") or "autogrid4")
         autodock_binary = str(self.runtime.get("binary") or self.runtime.get("autodock_binary") or self.binary_name)
         spacing = float(self.runtime.get("spacing", 0.375))
@@ -306,7 +312,8 @@ class AutoDock4Runner(DockingEngineRunner):
             torsdof_override = int(self.runtime.get("torsdof", 0))
             if torsdof_override > 0:
                 dpf_parts.extend(["-p", shlex.quote(f"torsdof={torsdof_override}")])
-            seed = self.runtime.get("seed")
+            if seed in (None, ""):
+                seed = self.runtime.get("seed")
             if seed not in (None, ""):
                 seed_int = int(seed)
                 dpf_parts.extend(["-p", shlex.quote(f"seed={seed_int},{seed_int}")])
@@ -339,6 +346,7 @@ class AutoDock4Runner(DockingEngineRunner):
                 ligand_file=ligand_file,
                 ligand_types=ligand_types,
                 about=about,
+                seed=seed,
             )
             shell_cmd = (
                 "set -euo pipefail; "
@@ -348,10 +356,10 @@ class AutoDock4Runner(DockingEngineRunner):
         return ["bash", "-lc", shell_cmd]
 
     def collect_normalized_scores(self, pairlist_rows: List[PairlistRow]) -> pd.DataFrame:
-        pair_index: Dict[str, PairlistRow] = {row.tag: row for row in pairlist_rows}
+        pair_index = build_pair_index(pairlist_rows)
         rows = []
         for dlg_file in sorted(self.layout["poses"].glob(f"*{self.pose_extension}")):
-            tag = dlg_file.stem
+            tag, replicate_id = split_replicate_stem(dlg_file.stem)
             parsed = parse_autodock4_dlg(dlg_file)
             pair = pair_index.get(tag)
             for _, record in parsed.iterrows():
@@ -360,6 +368,8 @@ class AutoDock4Runner(DockingEngineRunner):
                     {
                         "engine": self.name,
                         "tag": tag,
+                        "replicate_id": replicate_id,
+                        "seed": self.seed_for_replicate(replicate_id),
                         "protein": pair.receptor if pair else "",
                         "ligand": pair.ligand if pair else "",
                         "site_id": pair.site_id if pair else "",

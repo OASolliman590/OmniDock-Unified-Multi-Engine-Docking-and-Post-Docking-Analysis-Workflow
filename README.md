@@ -841,7 +841,7 @@ pdb-prepare-wizard/
 │   ├── rmsd_analyzer.py         # RMSD and clustering analysis
 │   └── ...
 ├── autodock/                    # AutoDock preparation scripts
-│   └── prep_autodock.sh         # Basic bash script
+│   └── prep_autodock.sh         # Retired (Spec 036): exits with a pointer to pdb prepare-protein
 ├── requirements.txt             # Python dependencies
 ├── environment.yml              # Conda environment
 └── setup.py                     # Package installation

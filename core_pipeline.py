@@ -22,6 +22,7 @@ import subprocess
 import urllib.request
 import copy
 import shutil
+import json
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -29,6 +30,20 @@ from typing import List, Tuple, Dict, Optional, Any
 import warnings
 from docking.preparation.binding_site_center import resolve_binding_site_center
 warnings.filterwarnings("ignore")
+
+
+def centre_method_from_provenance(provenance) -> str:
+    """Centre method recorded by the binding-site resolver (Spec 036 R6)."""
+    if isinstance(provenance, dict):
+        return str(provenance.get("center_method") or "")
+    return ""
+
+
+def excel_cell_value(value):
+    """Serialise values openpyxl cannot write (dicts, lists) as JSON text (Spec 036 R6)."""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, default=str, sort_keys=True)
+    return value
 
 # Add Excel support
 try:
@@ -1191,6 +1206,7 @@ def extract_residue_level_coordinates(pdb_file: str, ligand_name: str,
                                         'ligand_centroid': binding_site_center,
                                         'contact_residue_centroid': contact_residue_centroid,
                                         'center_provenance': center_provenance,
+                                        'binding_site_center_method': centre_method_from_provenance(center_provenance),
                                         'num_interacting_residues': len(interacting_residues),
                                         'num_interacting_atoms': len(all_coords),
                                         'plip_enhanced': True,
@@ -1289,6 +1305,7 @@ def extract_residue_level_coordinates(pdb_file: str, ligand_name: str,
             'ligand_centroid': ligand_center,
             'contact_residue_centroid': contact_residue_centroid,
             'center_provenance': center_provenance,
+            'binding_site_center_method': centre_method_from_provenance(center_provenance),
             'num_interacting_residues': len(residue_averages),
             'num_interacting_atoms': len(all_coords),
             'plip_enhanced': False

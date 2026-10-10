@@ -121,10 +121,9 @@ def _build_analysis_targets() -> dict[str, LaunchTarget]:
                 FormField("output", "Output directory", "path"),
                 FormField("config_file", "Config file", "path"),
                 FormField("consensus_mode", "Consensus mode", "select",
-                          default="dockbox_geometric",
+                          default="consensus_rank_geometry_qc_v2",
                           choices=[{"value": v, "label": v} for v in
-                                   ["dockbox_geometric", "weighted_hybrid",
-                                    "strict_consensus", "favorite_guardrails"]]),
+                                   ["consensus_rank_geometry_qc_v2"]]),
                 FormField("rescoring_scope", "Rescoring scope", "select",
                           default="top_n_per_protein",
                           choices=[{"value": v, "label": v} for v in

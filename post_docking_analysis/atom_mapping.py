@@ -690,6 +690,25 @@ def _lineage_remarks(lines: Sequence[str]) -> Tuple[str, List[int]]:
     return smiles[0], flat_pairs
 
 
+def read_pdbqt_lineage_smiles(path: Path, model_index: int = 1) -> Optional[str]:
+    """Return the Meeko ``REMARK SMILES`` text of one PDBQT model (Spec 036 R1c).
+
+    Returns None when the model carries no SMILES remark. Raises ``LineageError`` when the
+    file or model cannot be read. Only the SMILES text is read here; the strict lineage
+    checks stay in ``load_pdbqt_lineage_pose``.
+    """
+    source = Path(path).expanduser().resolve()
+    if source.suffix.lower() != ".pdbqt":
+        raise LineageError("unsupported_pose_format")
+    if int(model_index) < 1:
+        raise LineageError("invalid_pose_index")
+    for line in _pdbqt_model_lines(source, int(model_index)):
+        if line.startswith("REMARK SMILES ") and not line.startswith("REMARK SMILES IDX"):
+            text = line[len("REMARK SMILES "):].strip()
+            return text or None
+    return None
+
+
 def load_pdbqt_lineage_pose(path: Path, model_index: int = 1) -> GraphPose:
     """Build a heavy-atom, bond-labelled pose graph from Meeko lineage remarks.
 

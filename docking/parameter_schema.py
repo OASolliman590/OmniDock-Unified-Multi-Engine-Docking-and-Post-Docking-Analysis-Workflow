@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, List, Literal, Optional, Tuple
 
 from .models import PairlistRow
@@ -14,15 +14,25 @@ BASIC_PRESETS: Dict[str, Dict[str, int]] = {
     "balanced": {"exhaustiveness": 16, "num_modes": 20},
     "exhaustive": {"exhaustiveness": 32, "num_modes": 40},
 }
+# Spec 036 R5c: highest preset level, unified across engines.
+DEFAULT_PARAMETER_PRESET = "exhaustive"
+EXHAUSTIVENESS_LEVEL = 32
+# Vina documented default for --energy_range (kcal/mol). Spec 036 R5d.
+DEFAULT_ENERGY_RANGE = 3.0
+# Spec 036 R5b default number of independent seeded replicates per pair.
+DEFAULT_REPLICATES = 3
 
 
 @dataclass
 class CommonDockingParameters:
-    exhaustiveness: int = 16
+    exhaustiveness: int = EXHAUSTIVENESS_LEVEL
     num_modes: int = 20
     seed: Optional[int] = None
     box_scale: float = 1.0
     box_padding: float = 0.0
+    energy_range: float = DEFAULT_ENERGY_RANGE
+    replicates: int = DEFAULT_REPLICATES
+    exhaustiveness_overridden: bool = False
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -31,7 +41,7 @@ class CommonDockingParameters:
 @dataclass
 class DockingParameterSchema:
     mode: str = "basic"
-    preset: str = "balanced"
+    preset: str = DEFAULT_PARAMETER_PRESET
     common: CommonDockingParameters = field(default_factory=CommonDockingParameters)
     engine_extensions: Dict[str, Dict[str, object]] = field(default_factory=dict)
 
@@ -51,11 +61,13 @@ def resolve_parameter_schema(
     box_scale: float,
     box_padding: float,
     runtime_by_engine: Dict[str, Dict[str, object]],
+    energy_range: float = DEFAULT_ENERGY_RANGE,
+    replicates: int = DEFAULT_REPLICATES,
 ) -> DockingParameterSchema:
     normalized_mode = str(mode or "basic").strip().lower()
     normalized_mode = normalized_mode if normalized_mode in {"basic", "advanced"} else "basic"
-    normalized_preset = str(preset or "balanced").strip().lower()
-    normalized_preset = normalized_preset if normalized_preset in BASIC_PRESETS else "balanced"
+    normalized_preset = str(preset or DEFAULT_PARAMETER_PRESET).strip().lower()
+    normalized_preset = normalized_preset if normalized_preset in BASIC_PRESETS else DEFAULT_PARAMETER_PRESET
 
     common = CommonDockingParameters(
         exhaustiveness=int(exhaustiveness),
@@ -63,11 +75,15 @@ def resolve_parameter_schema(
         seed=int(seed) if seed is not None else None,
         box_scale=float(box_scale),
         box_padding=float(box_padding),
+        energy_range=float(energy_range),
+        replicates=int(replicates),
     )
     if normalized_mode == "basic":
         preset_values = BASIC_PRESETS[normalized_preset]
         common.exhaustiveness = int(preset_values["exhaustiveness"])
         common.num_modes = int(preset_values["num_modes"])
+    # Spec 036 R5c: advanced overrides stay possible but are recorded.
+    common.exhaustiveness_overridden = normalized_mode == "advanced" and common.exhaustiveness != EXHAUSTIVENESS_LEVEL
 
     extensions: Dict[str, Dict[str, object]] = {}
     for engine, payload in runtime_by_engine.items():
@@ -93,6 +109,15 @@ def validate_parameter_schema(schema: DockingParameterSchema, selected_engines: 
     warnings: List[str] = []
 
     common = schema.common
+    if common.seed is None:
+        errors.append(
+            "`seed` is required for every docking run (Spec 036 R5b). Pass `--seed <int>`; "
+            "with `--replicates N` the seeds are seed, seed+1, ..., seed+N-1."
+        )
+    if common.replicates < 1:
+        errors.append("`replicates` must be >= 1.")
+    if common.energy_range <= 0:
+        errors.append("`energy_range` must be > 0 kcal/mol.")
     if common.exhaustiveness < 1:
         errors.append("`exhaustiveness` must be >= 1.")
     if common.num_modes < 1:
@@ -132,6 +157,8 @@ def apply_schema_to_runtime(
             runtime["seed"] = int(common.seed)
         runtime["box_scale"] = float(common.box_scale)
         runtime["box_padding"] = float(common.box_padding)
+        runtime["energy_range"] = float(common.energy_range)
+        runtime["replicates"] = int(common.replicates)
         runtime["parameter_mode"] = schema.mode
         runtime["parameter_preset"] = schema.preset
         updated[engine] = runtime
@@ -139,21 +166,24 @@ def apply_schema_to_runtime(
 
 
 def transform_pairlist_rows(rows: List[PairlistRow], schema: DockingParameterSchema) -> List[PairlistRow]:
+    """Apply box_scale/box_padding. The effective edge is written back to edge_angstrom (Spec 036 R5a)."""
     scale = float(schema.common.box_scale)
     padding = float(schema.common.box_padding)
     transformed: List[PairlistRow] = []
     for row in rows:
+        size_x = float(row.size_x) * scale + (2.0 * padding)
+        size_y = float(row.size_y) * scale + (2.0 * padding)
+        size_z = float(row.size_z) * scale + (2.0 * padding)
         transformed.append(
-            PairlistRow(
-                receptor=row.receptor,
-                site_id=row.site_id,
-                ligand=row.ligand,
+            replace(
+                row,
                 center_x=float(row.center_x),
                 center_y=float(row.center_y),
                 center_z=float(row.center_z),
-                size_x=float(row.size_x) * scale + (2.0 * padding),
-                size_y=float(row.size_y) * scale + (2.0 * padding),
-                size_z=float(row.size_z) * scale + (2.0 * padding),
+                size_x=size_x,
+                size_y=size_y,
+                size_z=size_z,
+                edge_angstrom=size_x,
             )
         )
     return transformed

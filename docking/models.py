@@ -46,9 +46,29 @@ class PairlistRow:
     size_x: float
     size_y: float
     size_z: float
+    # Spec 036 R5a box provenance. Empty/None for legacy pairlists.
+    box_method: str = ""
+    ligand_rg_angstrom: Optional[float] = None
+    edge_angstrom: Optional[float] = None
+    box_containment_status: str = ""
+    box_warnings: str = ""
+
+    @property
+    def receptor_stem(self) -> str:
+        """Receptor file stem without the .pdbqt/.pdb suffix (Spec 036 R6)."""
+        name = str(self.receptor)
+        for suffix in (".pdbqt", ".pdb"):
+            if name.lower().endswith(suffix):
+                return name[: -len(suffix)]
+        return name
 
     @property
     def tag(self) -> str:
+        return f"{self.receptor_stem}_{self.site_id}_{self.ligand}"
+
+    @property
+    def legacy_tag(self) -> str:
+        """Pre-Spec 036 tag (receptor file name with suffix). Read-only compatibility."""
         return f"{self.receptor}_{self.site_id}_{self.ligand}"
 
     def to_dict(self) -> Dict[str, object]:
@@ -107,6 +127,8 @@ class ProjectManifest:
 
 @dataclass
 class EngineJobResult:
+    """One engine run: a pair for single-replicate engines, or one pair replicate."""
+
     tag: str
     command: List[str]
     pose_file: str
@@ -114,9 +136,33 @@ class EngineJobResult:
     status: str
     returncode: Optional[int] = None
     error: str = ""
+    # Spec 036 R5b/R5c/R5d provenance (replicate_contract.md).
+    pair_tag: str = ""
+    replicate_id: int = 1
+    seed: Optional[int] = None
+    replicates: List[Dict[str, object]] = field(default_factory=list)
+    exhaustiveness: Optional[int] = None
+    num_modes: Optional[int] = None
+    energy_range: Optional[float] = None
+    poses_returned: Optional[int] = None
+    box_method: str = ""
+    ligand_rg_angstrom: Optional[float] = None
+    edge_angstrom: Optional[float] = None
+    warnings: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
+
+
+# Informational notes are not warnings. A preparation step whose only notes are
+# informational reports `completed` with exit 0 (Spec 036 R6).
+def classify_preparation_status(errors: List[str], warnings: List[str]) -> str:
+    """``failed`` on any error, ``completed_with_warnings`` on warnings, else ``completed``."""
+    if errors:
+        return "failed"
+    if warnings:
+        return "completed_with_warnings"
+    return "completed"
 
 
 @dataclass
@@ -127,9 +173,21 @@ class LigandPreparationCompatibility:
     is_valid: bool
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    info: List[str] = field(default_factory=list)
+
+    @property
+    def status(self) -> str:
+        return classify_preparation_status(self.errors, self.warnings)
+
+    @property
+    def exit_code(self) -> int:
+        return 0 if self.status != "failed" else 1
 
     def to_dict(self) -> Dict[str, object]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["status"] = self.status
+        payload["exit_code"] = self.exit_code
+        return payload
 
 
 @dataclass
@@ -226,8 +284,9 @@ def validate_ligand_preparation_profile(
             "Use engine_aware_full, openbabel_meeko_autodock, openbabel_autodocktools, or autodocktools_only."
         )
 
+    info: List[str] = []
     if not engines:
-        warnings.append(
+        info.append(
             "No engines were selected; engine_aware_full resolves to Open Babel -> Meeko by default."
         )
 
@@ -244,6 +303,7 @@ def validate_ligand_preparation_profile(
         is_valid=not errors,
         errors=errors,
         warnings=warnings,
+        info=info,
     )
 
 

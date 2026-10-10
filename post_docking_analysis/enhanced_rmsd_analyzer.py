@@ -24,6 +24,26 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# Spec 036 R3d: this module's RMSD is a mapping-free, diagnostic value. Its plots must say so.
+DIAGNOSTIC_LABEL = "diagnostic_not_spec031"
+
+
+def _stamp_diagnostic_label() -> None:
+    """Stamp the current figure so no plot can be read as Spec 031 agreement."""
+    try:
+        plt.gcf().text(
+            0.01,
+            0.005,
+            f"{DIAGNOSTIC_LABEL}: mapping-free RMSD; not Spec 031 agreement or validation",
+            fontsize=8,
+            color="#555555",
+            ha="left",
+            va="bottom",
+        )
+    except Exception:
+        pass
+
+
 def _rmsd_pair_worker(payload: Tuple[int, int, str, str, bool]) -> Tuple[int, int, float]:
     i, j, file_a, file_b, ligand_only = payload
     rmsd_value = calculate_rmsd_between_structures(Path(file_a), Path(file_b), ligand_only=ligand_only)
@@ -615,6 +635,7 @@ def create_rmsd_visualizations_enhanced(
         plt.tight_layout()
 
     heatmap_file = output_dir / 'rmsd_heatmap.png'
+    _stamp_diagnostic_label()
     plt.savefig(heatmap_file, dpi=dpi, bbox_inches='tight')
     plt.close()
     created_files.append(heatmap_file)
@@ -669,6 +690,7 @@ def create_rmsd_visualizations_enhanced(
         ax2.axis('off')
     plt.tight_layout()
     cluster_file = output_dir / 'cluster_analysis.png'
+    _stamp_diagnostic_label()
     plt.savefig(cluster_file, dpi=dpi, bbox_inches='tight')
     plt.close()
     created_files.append(cluster_file)
@@ -714,6 +736,7 @@ def create_rmsd_visualizations_enhanced(
         ax2.axis('off')
     plt.tight_layout()
     diversity_file = output_dir / 'diversity_analysis.png'
+    _stamp_diagnostic_label()
     plt.savefig(diversity_file, dpi=dpi, bbox_inches='tight')
     plt.close()
     created_files.append(diversity_file)

@@ -246,6 +246,8 @@ class UnifiedPostDockingPipeline(MultiEngineAnalysisPipeline):
             target_engine = str(self.engine or self.favorite_engine or "").strip().lower()
             if target_engine:
                 scores = self._load_or_build_scores()
+                # Spec 036 R6: single-engine analyze writes best_pose_per_tag_by_engine.csv (same writer).
+                self._write_single_engine_best_pose_table(scores, target_engine)
                 self._write_single_engine_reports(scores, target_engine, self.output_dir / target_engine)
         try:
             step_states = [

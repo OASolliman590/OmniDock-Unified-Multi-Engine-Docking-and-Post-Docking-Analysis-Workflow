@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
+from typing import List
 
 import pandas as pd
 
 from post_docking_analysis.generate_scores_csv import generate_all_scores_csv
+from typing import Optional
+
 from ..models import PairlistRow
-from .base import DockingEngineRunner
+from .base import DockingEngineRunner, build_pair_index, split_replicate_stem
 
 
 class GninaRunner(DockingEngineRunner):
@@ -15,19 +17,26 @@ class GninaRunner(DockingEngineRunner):
     binary_name = "gnina"
     pose_extension = ".sdf"
 
-    def build_command(self, row: PairlistRow, pose_file: Path, log_file: Path) -> List[str]:
+    def build_command(
+        self,
+        row: PairlistRow,
+        pose_file: Path,
+        log_file: Path,
+        seed: Optional[int] = None,
+    ) -> List[str]:
         runtime = self.runtime
         image = str(runtime.get("image") or "")
         binary = str(runtime.get("binary") or self.binary_name)
         raw_use_gpu = runtime.get("use_gpu")
         use_gpu = True if raw_use_gpu in (None, "") else bool(raw_use_gpu)
         score_only = bool(runtime.get("score_only", False))
-        exhaustiveness = int(runtime.get("exhaustiveness", 16))
+        exhaustiveness = int(runtime.get("exhaustiveness", 32))
         num_modes = int(runtime.get("num_modes", 20))
         cnn_scoring = str(runtime.get("cnn_scoring", "rescore"))
         device = runtime.get("device")
         cpu = runtime.get("cpu")
-        seed = runtime.get("seed")
+        if seed is None:
+            seed = runtime.get("seed")
 
         command: List[str] = []
         if image:
@@ -89,15 +98,18 @@ class GninaRunner(DockingEngineRunner):
             return pd.DataFrame()
 
         df = pd.read_csv(all_scores)
-        pair_index: Dict[str, PairlistRow] = {row.tag: row for row in pairlist_rows}
+        pair_index = build_pair_index(pairlist_rows)
         rows = []
         for _, record in df.iterrows():
-            tag = str(record.get("tag", ""))
+            pose_stem = str(record.get("tag", ""))
+            tag, replicate_id = split_replicate_stem(pose_stem)
             pair = pair_index.get(tag)
             rows.append(
                 {
                     "engine": self.name,
                     "tag": tag,
+                    "replicate_id": replicate_id,
+                    "seed": self.seed_for_replicate(replicate_id),
                     "protein": pair.receptor if pair else "",
                     "ligand": pair.ligand if pair else "",
                     "site_id": pair.site_id if pair else "",
@@ -109,8 +121,8 @@ class GninaRunner(DockingEngineRunner):
                     "score_secondary": float(record.get("cnn_score")) if pd.notna(record.get("cnn_score")) else None,
                     "rmsd_lb": None,
                     "rmsd_ub": None,
-                    "pose_file": str(self.layout["poses"] / f"{tag}{self.pose_extension}"),
-                    "log_file": str(self.layout["logs"] / f"{tag}.log"),
+                    "pose_file": str(self.layout["poses"] / f"{pose_stem}{self.pose_extension}"),
+                    "log_file": str(self.layout["logs"] / f"{pose_stem}.log"),
                 }
             )
         return pd.DataFrame(rows)

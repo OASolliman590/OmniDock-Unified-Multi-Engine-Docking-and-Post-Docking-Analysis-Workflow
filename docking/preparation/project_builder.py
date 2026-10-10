@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from ..box_policy import compute_ligand_box
 from ..models import PairlistRow, ProjectManifest
 from ..project_layout import (
     LAYOUT_DOCKING_LEGACY,
@@ -70,13 +71,33 @@ class DockingPreparationConfig:
     raw_proteins: Optional[Path] = None
     raw_ligands: Optional[Path] = None
     default_site_id: str = "site_1"
-    default_box_size: float = 20.0
+    # Spec 036 R5a: None -> rg_scaled_v1 per ligand; a number -> explicit user_fixed edge.
+    default_box_size: Optional[float] = None
     asset_mode: str = "symlink"
     engines: Optional[List[str]] = None
     project_name: str = ""
     pair_mode: str = "manual"
     dock_all_proteins_to_all_ligands: bool = False
     layout_profile: str = LAYOUT_DOCKING_LEGACY
+
+
+def _recorded_box_provenance(raw_row: pd.Series) -> Dict[str, object]:
+    """Box provenance carried from a pairlist file. Legacy pairlists yield empty fields."""
+
+    def _value(key: str):
+        raw = raw_row.get(key)
+        return None if raw is None or pd.isna(raw) else raw
+
+    method = _value("box_method")
+    rg_value = _value("ligand_rg_angstrom")
+    edge_value = _value("edge_angstrom")
+    return {
+        "box_method": "" if method is None else str(method),
+        "ligand_rg_angstrom": None if rg_value is None else float(rg_value),
+        "edge_angstrom": None if edge_value is None else float(edge_value),
+        "box_containment_status": str(_value("box_containment_status") or ""),
+        "box_warnings": str(_value("box_warnings") or ""),
+    }
 
 
 class DockingProjectBuilder:
@@ -229,7 +250,7 @@ class DockingProjectBuilder:
                 f"pair_mode={self.config.pair_mode}",
                 f"dock_all_proteins_to_all_ligands={self.config.dock_all_proteins_to_all_ligands}",
                 f"default site_id={self.config.default_site_id}",
-                f"default box size={self.config.default_box_size}",
+                f"box size={'user_fixed:' + str(self.config.default_box_size) if self.config.default_box_size is not None else 'rg_scaled_v1'}",
             ],
         )
         if "gnina" in engines:
@@ -352,7 +373,13 @@ class DockingProjectBuilder:
                 )
 
             site_id = str(raw_row.get("site_id") or self.config.default_site_id)
-            size_value = float(raw_row.get("size_x") or self.config.default_box_size)
+            explicit_size = raw_row.get("size_x")
+            explicit_edge = float(explicit_size) if pd.notna(explicit_size) and float(explicit_size) > 0 else None
+            box = compute_ligand_box(
+                ligand_source,
+                fixed_edge=explicit_edge if explicit_edge is not None else self.config.default_box_size,
+            )
+            size_value = box.edge_angstrom
             row = PairlistRow(
                 receptor=receptor_source.name,
                 site_id=site_id,
@@ -363,6 +390,9 @@ class DockingProjectBuilder:
                 size_x=float(raw_row.get("size_x") if pd.notna(raw_row.get("size_x")) else size_value),
                 size_y=float(raw_row.get("size_y") if pd.notna(raw_row.get("size_y")) else size_value),
                 size_z=float(raw_row.get("size_z") if pd.notna(raw_row.get("size_z")) else size_value),
+                box_method=box.box_method,
+                ligand_rg_angstrom=box.ligand_rg_angstrom,
+                edge_angstrom=box.edge_angstrom,
             )
             rows.append(row)
             receptor_links.append((receptor_source, Path("receptors")))
@@ -403,6 +433,7 @@ class DockingProjectBuilder:
                     size_x=float(raw_row["size_x"]),
                     size_y=float(raw_row["size_y"]),
                     size_z=float(raw_row["size_z"]),
+                    **_recorded_box_provenance(raw_row),
                 )
             )
             receptor_links.append((receptor_source, Path("receptors")))
@@ -444,6 +475,7 @@ class DockingProjectBuilder:
                     continue
 
             for ligand_source in ligand_sources:
+                box = compute_ligand_box(ligand_source, fixed_edge=self.config.default_box_size)
                 row = PairlistRow(
                     receptor=receptor_source.name,
                     site_id=self.config.default_site_id,
@@ -451,9 +483,12 @@ class DockingProjectBuilder:
                     center_x=float(site_row["center_x"]),
                     center_y=float(site_row["center_y"]),
                     center_z=float(site_row["center_z"]),
-                    size_x=float(self.config.default_box_size),
-                    size_y=float(self.config.default_box_size),
-                    size_z=float(self.config.default_box_size),
+                    size_x=float(box.edge_angstrom),
+                    size_y=float(box.edge_angstrom),
+                    size_z=float(box.edge_angstrom),
+                    box_method=box.box_method,
+                    ligand_rg_angstrom=box.ligand_rg_angstrom,
+                    edge_angstrom=box.edge_angstrom,
                 )
                 rows.append(row)
                 receptor_links.append((receptor_source, Path("receptors")))

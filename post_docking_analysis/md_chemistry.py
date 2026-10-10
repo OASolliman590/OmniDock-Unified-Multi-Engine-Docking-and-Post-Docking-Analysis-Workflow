@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Protocol, Sequence
+from typing import Dict, List, Optional, Protocol, Sequence, Tuple
 
 
 @dataclass
@@ -38,7 +38,7 @@ class PreparedLigand:
     backend: str
     backend_version: str
     protonated: bool
-    pH: float
+    pH: Optional[float]  # None for a docked microspecies (no pH model was run)
     implicit_hydrogen_count: int
     heavy_coordinate_max_delta: float
     native: object = field(default=None, repr=False)
@@ -58,6 +58,19 @@ class ChemistryBackend(Protocol):
         pose_heavy_coordinates: Optional[Sequence[Sequence[float]]] = None,
         pose_heavy_elements: Optional[Sequence[str]] = None,
         pose_to_topology: Optional[Sequence[int]] = None,
+    ) -> PreparedLigand: ...
+
+    def prepare_docked_state(
+        self,
+        source_file: Path,
+        *,
+        source_pose: int,
+        expected_net_charge: int,
+        add_hydrogens: bool,
+        pose_heavy_coordinates: Optional[Sequence[Sequence[float]]] = None,
+        pose_heavy_elements: Optional[Sequence[str]] = None,
+        pose_to_smiles: Optional[Sequence[int]] = None,
+        microspecies_smiles: Optional[str] = None,
     ) -> PreparedLigand: ...
 
     def write(self, ligand: PreparedLigand, output_dir: Path, formats: Sequence[str]) -> Dict[str, Path]: ...
@@ -223,7 +236,100 @@ class OpenBabelChemistryBackend:
             maximum_delta = max(maximum_delta, delta)
         if maximum_delta > 1.0e-4:
             raise ValueError(f"heavy_atom_coordinates_changed:{maximum_delta:.8f}")
+        return self._package(mol, protonated=bool(protonate), pH=float(pH), maximum_delta=maximum_delta)
 
+    def prepare_docked_state(
+        self,
+        source_file: Path,
+        *,
+        source_pose: int,
+        expected_net_charge: int,
+        add_hydrogens: bool,
+        pose_heavy_coordinates: Optional[Sequence[Sequence[float]]] = None,
+        pose_heavy_elements: Optional[Sequence[str]] = None,
+        pose_to_smiles: Optional[Sequence[int]] = None,
+        microspecies_smiles: Optional[str] = None,
+    ) -> PreparedLigand:
+        """Spec 036 R1b: build the MD ligand from the docked microspecies, with no pH model.
+
+        With ``microspecies_smiles`` (Meeko lineage), the heavy atoms are taken from the pose
+        coordinates through ``pose_to_smiles`` (pose heavy index -> 0-based SMILES heavy index)
+        and the formal charges come from the SMILES. Without it, the docked SDF record is used
+        as supplied (its charges and hydrogens are the docked state). Hydrogens are added at
+        the pose coordinates without ``-p``; the net charge must equal ``expected_net_charge``.
+        """
+        if microspecies_smiles is None:
+            mol = self._read_source(Path(source_file), int(source_pose))
+            reference: List[Tuple[float, float, float]] = []
+            before_h = sum(1 for atom in self.ob.OBMolAtomIter(mol) if int(atom.GetAtomicNum()) == 1)
+        else:
+            mol, reference = self._molecule_from_microspecies(
+                microspecies_smiles,
+                pose_heavy_coordinates=pose_heavy_coordinates,
+                pose_heavy_elements=pose_heavy_elements,
+                pose_to_smiles=pose_to_smiles,
+            )
+            before_h = sum(1 for atom in self.ob.OBMolAtomIter(mol) if int(atom.GetAtomicNum()) == 1)
+        implicit_before = sum(int(atom.GetImplicitHCount()) for atom in self.ob.OBMolAtomIter(mol))
+        if add_hydrogens:
+            mol.SetDimension(3)
+            mol.AddHydrogens()
+        after_h = sum(1 for atom in self.ob.OBMolAtomIter(mol) if int(atom.GetAtomicNum()) == 1)
+        if after_h - before_h != (implicit_before if add_hydrogens else 0):
+            raise ValueError(f"hydrogen_count_inconsistent_with_docked_state:{after_h - before_h}!={implicit_before}")
+        net = int(mol.GetTotalCharge())
+        if net != int(expected_net_charge):
+            raise ValueError(f"md_state_differs_from_docked_state:{net}!={int(expected_net_charge)}")
+        maximum_delta = 0.0
+        if reference:
+            heavy_atoms = [atom for atom in self.ob.OBMolAtomIter(mol) if int(atom.GetAtomicNum()) != 1]
+            for index, atom in enumerate(heavy_atoms):
+                x, y, z = reference[index]
+                delta = max(abs(float(atom.GetX()) - x), abs(float(atom.GetY()) - y), abs(float(atom.GetZ()) - z))
+                maximum_delta = max(maximum_delta, delta)
+            if maximum_delta > 1.0e-4:
+                raise ValueError(f"heavy_atom_coordinates_changed:{maximum_delta:.8f}")
+        return self._package(mol, protonated=bool(add_hydrogens), pH=None, maximum_delta=maximum_delta)
+
+    def _molecule_from_microspecies(
+        self,
+        smiles: str,
+        *,
+        pose_heavy_coordinates: Optional[Sequence[Sequence[float]]],
+        pose_heavy_elements: Optional[Sequence[str]],
+        pose_to_smiles: Optional[Sequence[int]],
+    ):
+        if pose_heavy_coordinates is None or pose_heavy_elements is None or pose_to_smiles is None:
+            raise ValueError("docked_state_requires_pose_coordinates_and_lineage")
+        conversion = self.ob.OBConversion()
+        if not conversion.SetInFormat("smi"):
+            raise RuntimeError("openbabel_smiles_format_unavailable")
+        mol = self.ob.OBMol()
+        if not conversion.ReadString(mol, smiles) or mol.NumAtoms() <= 0:
+            raise ValueError("microspecies_smiles_unreadable")
+        if any(int(atom.GetAtomicNum()) == 1 for atom in self.ob.OBMolAtomIter(mol)):
+            raise ValueError("microspecies_smiles_must_be_heavy_atoms_only")
+        mapping = [int(item) for item in pose_to_smiles]
+        if len(mapping) != mol.NumAtoms() or sorted(mapping) != list(range(mol.NumAtoms())):
+            raise ValueError("pose_to_smiles_not_permutation")
+        coords = [tuple(float(value) for value in row) for row in pose_heavy_coordinates]
+        elements = [_normalize_element(value) for value in pose_heavy_elements]
+        if len(coords) != len(mapping) or len(elements) != len(mapping):
+            raise ValueError("docked_state_heavy_atom_count_mismatch")
+        reference: List[Tuple[float, float, float]] = [(0.0, 0.0, 0.0)] * len(mapping)
+        for pose_index, smiles_index in enumerate(mapping):
+            atom = mol.GetAtom(smiles_index + 1)
+            if _normalize_element(self.ob.GetSymbol(atom.GetAtomicNum())) != elements[pose_index]:
+                raise ValueError("docked_state_atom_map_element_mismatch")
+            x, y, z = coords[pose_index]
+            atom.SetVector(x, y, z)
+            reference[smiles_index] = (x, y, z)
+        # Reference is kept in SMILES order for the coordinate check, which walks the OBMol in order.
+        ordered_reference = [reference[index] for index in range(mol.NumAtoms())]
+        return mol, ordered_reference
+
+    def _package(self, mol, *, protonated: bool, pH: Optional[float], maximum_delta: float) -> PreparedLigand:
+        """Measure a finished OBMol and return the MD-facing ligand record (shared by every path)."""
         atoms: List[MDAtom] = []
         implicit_hydrogen_count = 0
         for ordinal, atom in enumerate(self.ob.OBMolAtomIter(mol), start=1):
@@ -240,7 +346,7 @@ class OpenBabelChemistryBackend:
             )
         if implicit_hydrogen_count != 0:
             raise ValueError(f"implicit_hydrogens_remain:{implicit_hydrogen_count}")
-        if protonate and not any(atom.element.upper() == "H" for atom in atoms):
+        if protonated and not any(atom.element.upper() == "H" for atom in atoms):
             raise ValueError("protonation_added_no_explicit_hydrogens")
 
         bonds: List[MDBond] = []
@@ -262,8 +368,8 @@ class OpenBabelChemistryBackend:
             net_charge=int(mol.GetTotalCharge()),
             backend=self.name,
             backend_version=self.version,
-            protonated=bool(protonate),
-            pH=float(pH),
+            protonated=bool(protonated),
+            pH=pH,
             implicit_hydrogen_count=implicit_hydrogen_count,
             heavy_coordinate_max_delta=maximum_delta,
             native=mol,
@@ -321,3 +427,84 @@ class OpenBabelChemistryBackend:
                 )
             written[fmt] = output
         return written
+
+
+# ---------------------------------------------------------------- Spec 036 R1b: docked microspecies
+
+
+def _rdkit_chem():
+    try:
+        from rdkit import Chem  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("rdkit_unavailable") from exc
+    return Chem
+
+
+def docked_microspecies_from_pdbqt(pose_file: Path, pose: int) -> Dict[str, object]:
+    """Docked microspecies of one Vina/Smina pose from its Meeko ``REMARK SMILES`` lineage.
+
+    ``pose_to_smiles[i]`` is the 0-based SMILES heavy-atom index of pose heavy atom ``i``, in the
+    same heavy-atom order that ``load_pdbqt_lineage_pose`` uses for the coordinates. Raises
+    ``ValueError`` with a machine-readable reason when the lineage cannot be used.
+    """
+    from docking.preparation.ligand_preparation import canonical_microspecies
+    from post_docking_analysis.atom_mapping import _lineage_remarks, _pdbqt_atoms, _pdbqt_model_lines
+
+    lines = _pdbqt_model_lines(Path(pose_file), int(pose))
+    smiles, flat_pairs = _lineage_remarks(lines)
+    heavy_serials = [serial for serial, _, _, is_heavy in _pdbqt_atoms(lines) if is_heavy]
+    position = {serial: index for index, serial in enumerate(heavy_serials)}
+    pose_to_smiles: List[int] = [-1] * len(heavy_serials)
+    for index in range(0, len(flat_pairs), 2):
+        smiles_index_1based, serial = flat_pairs[index], flat_pairs[index + 1]
+        if serial not in position:
+            raise ValueError("lineage_idx_serial_not_a_heavy_atom")
+        pose_to_smiles[position[serial]] = smiles_index_1based - 1
+    if any(item < 0 for item in pose_to_smiles):
+        raise ValueError("incomplete_lineage_idx")
+    Chem = _rdkit_chem()
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError("invalid_lineage_smiles")
+    if mol.GetNumAtoms() != len(heavy_serials):
+        raise ValueError("lineage_smiles_heavy_atom_count_mismatch")
+    return {
+        "source": "meeko_remark_smiles",
+        "smiles": smiles,
+        "canonical_smiles": canonical_microspecies(mol),
+        "net_formal_charge": int(Chem.GetFormalCharge(mol)),
+        "formal_charges": [int(atom.GetFormalCharge()) for atom in mol.GetAtoms()],
+        "pose_to_smiles": pose_to_smiles,
+        "heavy_atom_count": len(heavy_serials),
+    }
+
+
+def docked_microspecies_from_sdf(pose_file: Path, pose: int) -> Dict[str, object]:
+    """Docked microspecies of one GNINA SDF pose record: its own charges and hydrogens."""
+    from docking.preparation.ligand_preparation import canonical_microspecies
+
+    records = [record for record in Path(pose_file).read_text(encoding="utf-8", errors="strict").split("$$$$") if record.strip()]
+    if pose < 1 or pose > len(records):
+        raise ValueError(f"pose_index_out_of_range:{pose}>{len(records)}")
+    Chem = _rdkit_chem()
+    mol = Chem.MolFromMolBlock(records[pose - 1].lstrip("\r\n"), sanitize=False, removeHs=False)
+    if mol is None:
+        raise ValueError("pose_sdf_record_unreadable")
+    canonical = ""
+    sanitized = False
+    try:
+        Chem.SanitizeMol(mol)
+        canonical = canonical_microspecies(mol)
+        sanitized = True
+    except Exception:
+        canonical = ""
+    return {
+        "source": "native_pose_sdf",
+        "smiles": canonical,
+        "canonical_smiles": canonical,
+        "sanitized": sanitized,
+        "net_formal_charge": int(Chem.GetFormalCharge(mol)),
+        "formal_charges": [int(atom.GetFormalCharge()) for atom in mol.GetAtoms()],
+        "pose_to_smiles": None,
+        "heavy_atom_count": sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() > 1),
+    }

@@ -92,6 +92,8 @@ def test_deploy_pairlist_file_uses_exact_rows_and_preserves_canonical_state(
         [
             "--project-dir",
             str(project_root),
+            "--seed",
+            "12345",
             "--pairlist-file",
             str(exact_pairlist),
             "--engines",
@@ -103,9 +105,10 @@ def test_deploy_pairlist_file_uses_exact_rows_and_preserves_canonical_state(
 
     assert exit_code == 0
     rows = captured["pairlist_rows"]
+    # Spec 036 R6: tags use the receptor file stem (no .pdbqt).
     assert [row.tag for row in rows] == [
-        "R7.pdbqt_site_1_L7.pdbqt",
-        "R9.pdbqt_site_1_L9.pdbqt",
+        "R7_site_1_L7.pdbqt",
+        "R9_site_1_L9.pdbqt",
     ]
     assert captured["pair_source_file"] == str(exact_pairlist.resolve())
     assert captured["pair_source_kind"] == "exact_pairlist"

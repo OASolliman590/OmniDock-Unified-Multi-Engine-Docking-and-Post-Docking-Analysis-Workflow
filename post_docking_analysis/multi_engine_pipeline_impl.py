@@ -33,6 +33,7 @@ from docking.project_layout import (
 )
 from post_docking_analysis.complex_query import filter_frame_by_complex_query, tags_from_frame
 from post_docking_analysis.consensus import (
+    SINGLE_ENGINE_NATIVE_METHOD,
     build_consensus_explainability,
     build_consensus_rankings,
     classify_hits_target_aware,
@@ -72,7 +73,13 @@ from post_docking_analysis.report_generator import (
     generate_dashboard_index,
     generate_start_here_index,
 )
-from post_docking_analysis.redocking_validation import run_redocking_validation
+from post_docking_analysis.redocking_validation import (
+    attach_redocking_status,
+    build_target_redocking_status,
+    run_redocking_validation,
+)
+from post_docking_analysis.docked_microspecies import annotate_docked_microspecies
+from post_docking_analysis.pose_selection import select_best_pose_rows
 from post_docking_analysis.reference_policy import reference_mask
 from post_docking_analysis.storage_sqlite import validate_csv_sqlite_parity, write_comparative_bundle
 from post_docking_analysis.complex_validation import validate_complex_pdb_structure
@@ -273,6 +280,14 @@ def _optional_feature_record(
     }
 
 
+def _restore_integer_pose(series: pd.Series) -> pd.Series:
+    """Keep pose indices as integers in CSV output when every row has one."""
+    numeric = pd.to_numeric(series, errors="coerce")
+    if numeric.notna().all():
+        return numeric.astype(int)
+    return numeric
+
+
 class MultiEngineAnalysisPipeline:
     def __init__(
         self,
@@ -288,7 +303,7 @@ class MultiEngineAnalysisPipeline:
         min_affinity_advantage: float = 0.0,
         max_rerun_pairs: int = 0,
         pair_allowlist: Optional[str] = None,
-        consensus_mode: str = "dockbox_geometric",
+        consensus_mode: str = "consensus_rank_geometry_qc_v2",
         rescoring_scope: str = "top_n_per_protein",
         rescoring_top_n: int = 3,
         complex_query: Optional[str] = None,
@@ -616,9 +631,7 @@ class MultiEngineAnalysisPipeline:
             paths["validation_gate"].parent.mkdir(parents=True, exist_ok=True)
             paths["validation_gate"].write_text(json.dumps(payload, indent=2), encoding="utf-8")
             return {"details": "no scores available for validation gate"}
-        best_by_engine = self._best_rows_by_group(scores, ["engine", "tag"], "affinity_kcal_mol").sort_values(
-            ["engine", "affinity_kcal_mol", "tag"]
-        )
+        best_by_engine = select_best_pose_rows(scores).sort_values(["engine", "affinity_kcal_mol", "tag"])
         validation_bundle = run_redocking_validation(
             project_dir=self.project_dir,
             best_by_engine=best_by_engine,
@@ -636,20 +649,21 @@ class MultiEngineAnalysisPipeline:
             pd.DataFrame().to_csv(paths["engine_agreement"], index=False)
             return {"warnings": ["no_valid_scores"], "details": "no normalized scores available"}
         strategy = self._resolve_dag_consensus_strategy(paths)
-        if self.consensus_mode == "consensus_rank_geometry_qc_v2":
-            best_by_engine = normalized_scores
-            strategy_details = {
-                "warnings": [],
-                "primary_score_name": "equal_weight_engine_rank_percentiles",
-            }
-        else:
-            best_by_engine, strategy_details = self._prepare_dag_consensus_inputs(normalized_scores, strategy)
+        best_by_engine = normalized_scores
+        strategy_details = {
+            "warnings": [],
+            "primary_score_name": (
+                "equal_weight_engine_rank_percentiles" if strategy == "multi" else "native_metric_within_target_percentile"
+            ),
+        }
         consensus_df = self._run_dag_consensus_strategy(best_by_engine, strategy=strategy)
         consensus_df = self._finalize_dag_consensus_output(consensus_df, strategy=strategy)
+        redocking_status_df = self._load_redocking_status(paths["validation_gate"].parent)
+        consensus_df = attach_redocking_status(consensus_df, redocking_status_df)
         consensus_df.to_csv(paths["consensus_ranked"], index=False)
         if strategy == "multi":
             engine_agreement = (
-                best_by_engine.groupby("tag", dropna=False)
+                select_best_pose_rows(best_by_engine).groupby("tag", dropna=False)
                 .agg(
                     engine_support_count=("engine", "nunique"),
                     best_affinity_kcal_mol=("affinity_kcal_mol", "min"),
@@ -693,92 +707,64 @@ class MultiEngineAnalysisPipeline:
             return "single/smina"
         return "single/vina"
 
-    def _prepare_dag_consensus_inputs(
-        self,
-        normalized_scores: pd.DataFrame,
-        strategy: str,
-    ) -> Tuple[pd.DataFrame, Dict[str, object]]:
-        frame = normalized_scores.copy()
-        frame["engine"] = frame["engine"].astype(str).str.strip().str.lower()
-        warnings: List[str] = []
-        ranking_column = "affinity_kcal_mol"
-        primary_name = "vina_affinity"
-        secondary_name = ""
-        secondary_column = ""
-
-        if strategy != "multi":
-            target_engine = strategy.split("/", 1)[-1].strip().lower()
-            frame = frame[frame["engine"] == target_engine].copy()
-            if frame.empty:
-                return frame, {"warnings": [f"no_scores_for_{target_engine}"], "primary_score_name": primary_name}
-            if target_engine == "gnina":
-                cnn_affinity = pd.to_numeric(frame.get("cnn_affinity"), errors="coerce")
-                if cnn_affinity.notna().any():
-                    ranking_column = "cnn_affinity"
-                    primary_name = "cnn_affinity"
-                    secondary_name = "vina_affinity"
-                    secondary_column = "affinity_kcal_mol"
-                else:
-                    warnings.append("gnina_cnn_affinity_unavailable_fallback_to_vina_affinity")
-            elif target_engine == "smina":
-                primary_name = "vina_affinity"
-                secondary_name = "smina_scoring_function"
-                secondary_column = "smina_scoring_function"
-                smina_meta = (
-                    (self.engine_detection_report.get("engines") or {}).get("smina", {})
-                    if isinstance(self.engine_detection_report, dict)
-                    else {}
-                )
-                frame["smina_scoring_function"] = json.dumps(smina_meta.get("smina_scoring_weights", {}) or {})
-                if bool(smina_meta.get("inconsistent_scoring_weights", False)):
-                    warnings.append("smina_inconsistent_scoring_weights")
-            else:
-                primary_name = "vina_affinity"
-                secondary_name = "rmsd_lb"
-                secondary_column = "rmsd_lb"
-
-        best_by_engine = self._best_rows_by_group(frame, ["engine", "tag"], ranking_column).sort_values(
-            ["engine", ranking_column, "tag"],
-            ascending=[True, True, True],
-        )
-        best_by_engine["score_name_primary"] = primary_name
-        best_by_engine["score_primary"] = pd.to_numeric(best_by_engine.get(ranking_column), errors="coerce")
-        if secondary_name:
-            best_by_engine["score_name_secondary"] = secondary_name
-            if secondary_column in best_by_engine.columns:
-                best_by_engine["score_secondary"] = best_by_engine.get(secondary_column)
-            else:
-                best_by_engine["score_secondary"] = np.nan
-        else:
-            best_by_engine["score_name_secondary"] = ""
-            best_by_engine["score_secondary"] = np.nan
-        return best_by_engine, {
-            "warnings": warnings,
-            "ranking_column": ranking_column,
-            "primary_score_name": primary_name,
-            "secondary_score_name": secondary_name,
-        }
-
     def _run_dag_consensus_strategy(self, best_by_engine: pd.DataFrame, *, strategy: str) -> pd.DataFrame:
+        """Multi-engine projects use the configured consensus mode (v2 by default).
+
+        Single-engine projects use the explicit single-engine native ranking (Spec 036 R3c). It
+        is not the forced weighted hybrid used before this spec.
+        """
         if best_by_engine is None or best_by_engine.empty:
             return pd.DataFrame()
-        ranking_column = "affinity_kcal_mol"
-        if strategy == "single/gnina" and pd.to_numeric(best_by_engine.get("cnn_affinity"), errors="coerce").notna().any():
-            ranking_column = "cnn_affinity"
-        consensus_mode = (
-            self.consensus_mode
-            if strategy == "multi" or self.consensus_mode == "consensus_rank_geometry_qc_v2"
-            else "weighted_hybrid"
-        )
+        frame = best_by_engine
+        consensus_mode = self.consensus_mode
+        target_engine = ""
+        if strategy != "multi":
+            target_engine = strategy.split("/", 1)[-1].strip().lower()
+            frame = frame[frame["engine"].astype(str).str.strip().str.lower() == target_engine].copy()
+            if frame.empty:
+                return pd.DataFrame()
+            consensus_mode = SINGLE_ENGINE_NATIVE_METHOD
         consensus_df = build_consensus_rankings(
-            best_by_engine=best_by_engine,
+            best_by_engine=frame,
             consensus_mode=consensus_mode,
             favorite_engine=self.favorite_engine or self.rerun_engine or self._dag_preferred_engine(),
             normalization_method=self.normalization_method,
-            score_column=ranking_column,
+            score_column="affinity_kcal_mol",
             requested_engines=list(self.engines_in_scope),
         )
+        if target_engine and not consensus_df.empty:
+            consensus_df = self._annotate_single_engine_secondary(consensus_df, frame, target_engine)
         return consensus_df
+
+    def _annotate_single_engine_secondary(
+        self,
+        consensus_df: pd.DataFrame,
+        engine_frame: pd.DataFrame,
+        target_engine: str,
+    ) -> pd.DataFrame:
+        """Secondary provenance for a single-engine ranking, taken from each ligand's selected pose."""
+        out = consensus_df.copy()
+        selected = select_best_pose_rows(engine_frame).drop_duplicates("tag").set_index("tag")
+        if target_engine == "gnina":
+            out["score_name_secondary"] = "vina_affinity"
+            out["score_secondary"] = out["tag"].map(pd.to_numeric(selected["affinity_kcal_mol"], errors="coerce"))
+        elif target_engine == "smina":
+            smina_meta = (
+                (self.engine_detection_report.get("engines") or {}).get("smina", {})
+                if isinstance(self.engine_detection_report, dict)
+                else {}
+            )
+            out["score_name_secondary"] = "smina_scoring_function"
+            out["score_secondary"] = json.dumps(smina_meta.get("smina_scoring_weights", {}) or {})
+        else:
+            out["score_name_secondary"] = "rmsd_lb"
+            rmsd_lb = (
+                pd.to_numeric(selected["rmsd_lb"], errors="coerce")
+                if "rmsd_lb" in selected.columns
+                else pd.Series(np.nan, index=selected.index)
+            )
+            out["score_secondary"] = out["tag"].map(rmsd_lb)
+        return out
 
     def _finalize_dag_consensus_output(self, frame: pd.DataFrame, *, strategy: str) -> pd.DataFrame:
         if frame is None:
@@ -830,7 +816,7 @@ class MultiEngineAnalysisPipeline:
         normalized_file = paths["normalized_scores"]
         classified = pd.read_csv(classified_file) if classified_file.exists() else pd.DataFrame()
         normalized_scores = pd.read_csv(normalized_file) if normalized_file.exists() else self._load_or_build_scores()
-        best_by_engine = self._best_rows_by_group(normalized_scores, ["engine", "tag"], "affinity_kcal_mol").sort_values(
+        best_by_engine = select_best_pose_rows(normalized_scores).sort_values(
             ["engine", "affinity_kcal_mol", "tag"]
         ) if not normalized_scores.empty else pd.DataFrame()
         top_pose_payload = build_top_pose_atlas(
@@ -848,6 +834,10 @@ class MultiEngineAnalysisPipeline:
                 "normalization_method": self.normalization_method,
             },
         )
+        redocking_status_df = self._load_redocking_status(paths["validation_gate"].parent)
+        per_protein = top_pose_payload.get("top_pose_per_ligand_per_protein")
+        if isinstance(per_protein, pd.DataFrame) and "protein" in per_protein.columns:
+            top_pose_payload["top_pose_per_ligand_per_protein"] = attach_redocking_status(per_protein, redocking_status_df)
         outputs = write_top_pose_atlas(top_pose_payload, paths["best_poses"].parent)
         details = f"top_pose_global={outputs.get('top_pose_per_ligand_global_file', '')}"
         return {"details": details}
@@ -877,8 +867,8 @@ class MultiEngineAnalysisPipeline:
             return manifest_df
         manifest_df["bridge_output_name"] = manifest_df["tag"].astype(str)
         manifest_df["selection_criterion"] = selection_metric
-        if selection_metric == "cnn_affinity" and "cnn_affinity" in manifest_df.columns:
-            manifest_df["selected_score"] = pd.to_numeric(manifest_df.get("cnn_affinity"), errors="coerce")
+        if selection_metric == "cnn_score" and "cnn_score" in manifest_df.columns:
+            manifest_df["selected_score"] = pd.to_numeric(manifest_df.get("cnn_score"), errors="coerce")
         else:
             manifest_df["selected_score"] = pd.to_numeric(manifest_df.get("affinity_kcal_mol"), errors="coerce")
         return manifest_df
@@ -1502,7 +1492,8 @@ class MultiEngineAnalysisPipeline:
         )
         _register(
             "consensus_ranked",
-            [paths["normalized_scores"], paths["engine_scope_config"], paths["analysis_parameters"]],
+            # validation_gate is an input: the consensus rows carry its redocking status (Spec 036 R2).
+            [paths["normalized_scores"], paths["engine_scope_config"], paths["analysis_parameters"], paths["validation_gate"]],
             [paths["consensus_ranked"], paths["engine_agreement"]],
             lambda: self._dag_compute_consensus_ranked_node(paths),
         )
@@ -2212,6 +2203,7 @@ class MultiEngineAnalysisPipeline:
                 target_engine = self.engine or self.favorite_engine
                 if not target_engine:
                     raise ValueError("--engine is required for single_engine analysis")
+                self._write_single_engine_best_pose_table(scores, target_engine)
                 self._write_single_engine_reports(scores, target_engine, self.output_dir / target_engine)
                 _complete_step("single_engine_reports", f"engine={target_engine}")
                 _set_step("favorite_engine_reports", "skipped", "analysis_mode=single_engine")
@@ -2763,12 +2755,7 @@ class MultiEngineAnalysisPipeline:
         normalized_scores.to_csv(reports_dir / "consensus_inputs_all_engines.csv", index=False)
         normalized_scores[UNIFIED_COMPAT_COLUMNS].to_csv(raw_dir / "unified_all_scores.csv", index=False)
 
-        best_by_engine = self._best_rows_by_group(normalized_scores, ["engine", "tag"], "affinity_kcal_mol")
-        best_by_engine = self._merge_pair_metadata(best_by_engine, pair_metadata)
-        best_by_engine = self._annotate_scope_columns(best_by_engine)
-        best_by_engine.sort_values(["engine", "affinity_kcal_mol", "tag"], inplace=True)
-        best_by_engine.to_csv(reports_dir / "best_pose_per_tag_by_engine.csv", index=False)
-        best_by_engine[UNIFIED_COMPAT_COLUMNS].to_csv(raw_dir / "unified_best_poses.csv", index=False)
+        best_by_engine = self._select_best_pose_table(normalized_scores, pair_metadata=pair_metadata)
 
         engine_summary = (
             best_by_engine.groupby("engine")
@@ -2813,6 +2800,13 @@ class MultiEngineAnalysisPipeline:
         reference_baselines_file = Path(
             str(validation_bundle.get("reference_baselines_file", reports_dir / "reference_baselines.csv"))
         )
+        redocking_status_df = build_target_redocking_status(
+            redocking_validation_df,
+            targets=sorted(set(best_by_engine["protein"].astype(str))) if "protein" in best_by_engine.columns else None,
+        )
+        redocking_status_df.to_csv(reports_dir / "redocking_target_status.csv", index=False)
+        best_by_engine = attach_redocking_status(best_by_engine, redocking_status_df)
+        self._write_best_pose_table_outputs(best_by_engine, reports_dir=reports_dir, raw_dir=raw_dir)
         validation_gate = dict(validation_bundle.get("validation_gate") or validation_bundle.get("summary") or {})
         allow_reference_anchor = bool(validation_gate.get("allow_reference_anchor", False))
         effective_hit_class_policy = str(self.hit_class_policy or "target_percentile")
@@ -2831,13 +2825,8 @@ class MultiEngineAnalysisPipeline:
         run_visualizations = scope in {"full", "comparison_only"}
 
         if run_consensus:
-            consensus_inputs = (
-                normalized_scores
-                if self.consensus_mode == "consensus_rank_geometry_qc_v2"
-                else best_by_engine
-            )
             consensus_base = build_consensus_rankings(
-                best_by_engine=consensus_inputs,
+                best_by_engine=normalized_scores,
                 consensus_mode=self.consensus_mode,
                 favorite_engine=self.favorite_engine or self.rerun_engine,
                 normalization_method=self.normalization_method,
@@ -2851,6 +2840,7 @@ class MultiEngineAnalysisPipeline:
                 reference_baselines=reference_baselines_df,
             )
             consensus_df = self._annotate_scope_columns(consensus_df)
+            consensus_df = attach_redocking_status(consensus_df, redocking_status_df)
         else:
             consensus_df = pd.DataFrame()
         consensus_file = reports_dir / "consensus_ranked_hits.csv"
@@ -2975,7 +2965,6 @@ class MultiEngineAnalysisPipeline:
         normalized_scores.to_csv(score_raw_root / "all_scores_raw.csv", index=False)
         redocking_validation_df.to_csv(score_raw_root / "redocking_validation.csv", index=False)
         reference_baselines_df.to_csv(score_raw_root / "reference_baselines.csv", index=False)
-        best_by_engine.to_csv(score_unified_root / "best_pose_per_tag_by_engine.csv", index=False)
         matrix.to_csv(score_unified_root / "engine_affinity_matrix.csv", index=False)
         engine_summary.to_csv(score_unified_root / "engine_summary.csv", index=False)
         cross_engine_best.to_csv(score_unified_root / "best_engine_per_complex.csv", index=False)
@@ -3009,7 +2998,6 @@ class MultiEngineAnalysisPipeline:
         normalized_scores.to_csv(numbered_scores_raw / "all_scores_raw.csv", index=False)
         redocking_validation_df.to_csv(numbered_scores_raw / "redocking_validation.csv", index=False)
         reference_baselines_df.to_csv(numbered_scores_raw / "reference_baselines.csv", index=False)
-        best_by_engine.to_csv(numbered_scores_unified / "best_pose_per_tag_by_engine.csv", index=False)
         matrix.to_csv(numbered_scores_unified / "engine_affinity_matrix.csv", index=False)
         engine_summary.to_csv(numbered_scores_unified / "engine_summary.csv", index=False)
         cross_engine_best.to_csv(numbered_scores_unified / "best_engine_per_complex.csv", index=False)
@@ -3129,6 +3117,11 @@ class MultiEngineAnalysisPipeline:
                 "detected_engine_count": int(self.detected_engine_count or len(self.manifest.get("engines", []))),
             },
         )
+        per_protein_atlas = top_pose_payload.get("top_pose_per_ligand_per_protein")
+        if isinstance(per_protein_atlas, pd.DataFrame) and "protein" in per_protein_atlas.columns:
+            top_pose_payload["top_pose_per_ligand_per_protein"] = attach_redocking_status(
+                per_protein_atlas, redocking_status_df
+            )
         top_pose_session_root = self.output_dir / "top_pose_ligand_performance"
         top_pose_canonical_root = self._canonical_top_pose_root()
         session_top_pose_outputs = write_top_pose_atlas(top_pose_payload, top_pose_session_root)
@@ -3167,6 +3160,7 @@ class MultiEngineAnalysisPipeline:
             f"Scoped engine count: {len(self.engines_in_scope) if self.engines_in_scope else len(self.manifest.get('engines', []))} of {self.detected_engine_count or len(self.manifest.get('engines', []))}",
             "",
         ]
+        summary_lines.extend(self._redocking_banner_lines(redocking_status_df))
         if self.excluded_engines:
             summary_lines.append(
                 "Excluded engines: "
@@ -4122,7 +4116,7 @@ class MultiEngineAnalysisPipeline:
                 "Comparative rerun promotion requires --rerun-engine or a favorite_engine in project_manifest.json"
             )
 
-        best_by_engine = self._best_rows_by_group(scores, ["engine", "tag"], "affinity_kcal_mol")
+        best_by_engine = select_best_pose_rows(scores)
         engine_best = best_by_engine[best_by_engine["engine"] == target_engine].copy()
         if engine_best.empty:
             raise ValueError(f"No comparative scores were available for rerun engine '{target_engine}'")
@@ -4392,8 +4386,12 @@ class MultiEngineAnalysisPipeline:
         engine_scores[UNIFIED_COMPAT_COLUMNS].to_csv(output_dir / "all_scores.csv", index=False)
         best, _selected_metric = self._select_best_pose_rows(engine_scores, requested_metric=ranking_label)
         best["pose"] = pd.to_numeric(best.get("pose"), errors="coerce")
-        if _selected_metric == "cnn_affinity":
-            best.sort_values(["cnn_affinity", "affinity_kcal_mol", "pose", "tag"], inplace=True)
+        if _selected_metric == "cnn_score":
+            best.sort_values(
+                ["cnn_score", "affinity_kcal_mol", "pose", "tag"],
+                ascending=[False, True, True, True],
+                inplace=True,
+            )
         else:
             best.sort_values(["affinity_kcal_mol", "pose", "tag"], inplace=True)
         best = self._annotate_scope_columns(best)
@@ -4448,6 +4446,7 @@ class MultiEngineAnalysisPipeline:
                 [
                     f"Engine: {engine}",
                     f"Primary ranking score: {ranking_label}",
+                    *self._redocking_banner_lines(self._redocking_status_from_reports()),
                     f"Complexes: {best['tag'].nunique()}",
                     f"Best affinity: {best['affinity_kcal_mol'].min():.3f}",
                     f"Mean best affinity: {best['affinity_kcal_mol'].mean():.3f}",
@@ -4921,24 +4920,9 @@ class MultiEngineAnalysisPipeline:
     def _best_by_tag(cls, scores: pd.DataFrame) -> pd.DataFrame:
         if scores.empty:
             return scores.copy()
-        best = cls._best_rows_by_group(scores, ["tag"], "affinity_kcal_mol")
+        best = cls._best_rows_by_group(select_best_pose_rows(scores), ["tag"], "affinity_kcal_mol")
         best.sort_values(["affinity_kcal_mol", "tag"], inplace=True)
         return best
-
-    @staticmethod
-    def _resolve_best_pose_metric_for_frame(scores: pd.DataFrame, requested_metric: str) -> str:
-        metric = normalize_best_pose_selection_metric(requested_metric)
-        if metric != "auto":
-            return metric
-        if scores is None or scores.empty or "engine" not in scores.columns:
-            return "vina_affinity"
-        engine_series = scores["engine"].astype(str).str.strip().str.lower()
-        engines = sorted({value for value in engine_series.tolist() if value})
-        if len(engines) == 1 and engines[0] == "gnina" and "cnn_affinity" in scores.columns:
-            cnn = pd.to_numeric(scores["cnn_affinity"], errors="coerce")
-            if cnn.notna().any():
-                return "cnn_affinity"
-        return "vina_affinity"
 
     def _select_best_pose_rows(
         self,
@@ -4946,52 +4930,140 @@ class MultiEngineAnalysisPipeline:
         *,
         requested_metric: Optional[str] = None,
     ) -> Tuple[pd.DataFrame, str]:
-        """
-        Deterministically select one best row per tag with explicit tie-breaks.
+        """One best row per tag by the shared consensus-v2 pose selector (Spec 036 R4).
 
-        Tie-break priority:
-        1) primary metric (vina_affinity or cnn_affinity; lower is better)
-        2) vina_affinity (lower is better)
-        3) pose index (lower is better)
-        4) engine label (lexical) for deterministic stability
+        GNINA: highest cnn_score (ties: cnn_affinity, Vina affinity, pose, tag).
+        Vina/Smina/AutoDock4: lowest affinity (ties: pose, tag).
+        A requested ``cnn_affinity`` metric no longer selects poses by the lowest CNN affinity, which
+        chose the worst GNINA pose. The label returned is the v2 metric that drove selection.
         """
         if scores is None or scores.empty:
             return pd.DataFrame(columns=scores.columns if isinstance(scores, pd.DataFrame) else []), "vina_affinity"
-
-        metric = self._resolve_best_pose_metric_for_frame(
-            scores,
-            requested_metric if requested_metric is not None else self.best_pose_selection_metric,
+        requested = normalize_best_pose_selection_metric(
+            requested_metric if requested_metric is not None else self.best_pose_selection_metric
         )
+        if requested == "cnn_affinity":
+            logger.info("best-pose metric cnn_affinity: pose selection follows the shared v2 rule (GNINA: highest cnn_score)")
+        best = select_best_pose_rows(scores)
+        best = best.sort_values(["tag"], kind="mergesort")
+        engines = {str(value).strip().lower() for value in best.get("engine", pd.Series(dtype=str)).tolist()}
+        metric = "cnn_score" if engines == {"gnina"} else "vina_affinity"
+        return best.reset_index(drop=True), metric
 
-        working = scores.copy()
-        working["tag"] = working["tag"].astype(str)
-        working["pose"] = pd.to_numeric(working.get("pose"), errors="coerce").fillna(np.inf)
-        working["affinity_kcal_mol"] = pd.to_numeric(working.get("affinity_kcal_mol"), errors="coerce")
-        working["cnn_affinity"] = pd.to_numeric(working.get("cnn_affinity"), errors="coerce")
-        if "engine" in working.columns:
-            working["engine"] = working["engine"].astype(str)
-        else:
-            working["engine"] = ""
+    def _select_best_pose_table(
+        self,
+        normalized_scores: pd.DataFrame,
+        *,
+        pair_metadata: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
+        """Shared best-pose table: one row per (engine, tag) with pair metadata, scope and docked state (R1c)."""
+        best = select_best_pose_rows(normalized_scores)
+        if best.empty:
+            return best
+        best["pose"] = _restore_integer_pose(best["pose"])
+        metadata = pair_metadata if pair_metadata is not None else self._pair_metadata_frame()
+        best = self._merge_pair_metadata(best, metadata)
+        best = self._annotate_scope_columns(best)
+        best = annotate_docked_microspecies(best, self.project_dir)
+        best.sort_values(["engine", "affinity_kcal_mol", "tag"], inplace=True)
+        return best.reset_index(drop=True)
 
-        if metric == "cnn_affinity":
-            primary = pd.to_numeric(working.get("cnn_affinity"), errors="coerce")
-        else:
-            primary = pd.to_numeric(working.get("affinity_kcal_mol"), errors="coerce")
-            metric = "vina_affinity"
+    def _write_best_pose_table_outputs(
+        self,
+        best_by_engine: pd.DataFrame,
+        *,
+        reports_dir: Path,
+        raw_dir: Optional[Path],
+    ) -> List[Path]:
+        """The one writer of best_pose_per_tag_by_engine.csv (comparative and single-engine analyze).
 
-        working["_primary_sort"] = primary.fillna(np.inf)
-        working["_secondary_sort"] = pd.to_numeric(working.get("affinity_kcal_mol"), errors="coerce").fillna(np.inf)
-        working["_pose_sort"] = pd.to_numeric(working.get("pose"), errors="coerce").fillna(np.inf)
-        working["_engine_sort"] = working["engine"].astype(str)
+        ``raw_dir`` is None for single-engine runs, which must not create the multi-engine raw bundle.
+        """
+        numbered_layout = ensure_numbered_output_layout(self.project_dir)
+        score_unified_root = numbered_layout["post_docking_root_numbered"] / "scores" / "unified"
+        targets = [
+            reports_dir / "best_pose_per_tag_by_engine.csv",
+            numbered_layout["post_scores_unified"] / "best_pose_per_tag_by_engine.csv",
+            score_unified_root / "best_pose_per_tag_by_engine.csv",
+        ]
+        folders = {path.parent for path in targets} | ({raw_dir} if raw_dir is not None else set())
+        for folder in folders:
+            folder.mkdir(parents=True, exist_ok=True)
+        for target in targets:
+            best_by_engine.to_csv(target, index=False)
+        if raw_dir is not None:
+            best_by_engine[UNIFIED_COMPAT_COLUMNS].to_csv(raw_dir / "unified_best_poses.csv", index=False)
+        return targets
 
-        sorted_rows = working.sort_values(
-            ["tag", "_primary_sort", "_secondary_sort", "_pose_sort", "_engine_sort"],
-            ascending=[True, True, True, True, True],
+    def _write_single_engine_best_pose_table(self, scores: pd.DataFrame, engine: str) -> pd.DataFrame:
+        """Spec 036 R6: single-engine analyze writes best_pose_per_tag_by_engine.csv through the same writer."""
+        engine_key = str(engine or "").strip().lower()
+        engine_scores = scores[scores["engine"].astype(str).str.strip().str.lower() == engine_key].copy()
+        if engine_scores.empty:
+            raise ValueError(f"No scores found for engine '{engine_key}'")
+        normalized = normalize_engine_scores(
+            engine_scores,
+            method=self.normalization_method,
+            score_column="affinity_kcal_mol",
+            normalized_column="normalized_affinity_score",
+            group_keys=["engine", "protein"],
         )
-        best = sorted_rows.groupby("tag", dropna=False, sort=False).head(1).copy()
-        best.drop(columns=["_primary_sort", "_secondary_sort", "_pose_sort", "_engine_sort"], inplace=True, errors="ignore")
-        best.sort_values(["tag"], inplace=True)
-        return best, metric
+        best = self._select_best_pose_table(normalized)
+        # Solo runs keep their own folder; the multi-engine reports/ bundle is not created for them.
+        table_dir = self.output_dir / "best_pose_table"
+        table_dir.mkdir(parents=True, exist_ok=True)
+        validation_bundle = run_redocking_validation(
+            project_dir=self.project_dir,
+            best_by_engine=best,
+            output_dir=table_dir,
+        )
+        validation_df = validation_bundle.get("validation_df", pd.DataFrame())
+        status_df = build_target_redocking_status(
+            validation_df,
+            targets=sorted(set(best["protein"].astype(str))) if "protein" in best.columns else None,
+        )
+        status_df.to_csv(table_dir / "redocking_target_status.csv", index=False)
+        best = attach_redocking_status(best, status_df)
+        self._write_best_pose_table_outputs(best, reports_dir=table_dir, raw_dir=None)
+        return best
+
+    def _redocking_status_from_reports(self) -> pd.DataFrame:
+        """Per-target status written by the best-pose writer for this run (empty when absent)."""
+        status_file = self.output_dir / "best_pose_table" / "redocking_target_status.csv"
+        if not status_file.exists():
+            return pd.DataFrame()
+        return pd.read_csv(status_file)
+
+    @staticmethod
+    def _load_redocking_status(validation_dir: Path) -> pd.DataFrame:
+        """Per-target redocking status from a validation directory written by run_redocking_validation."""
+        validation_file = Path(validation_dir) / "redocking_validation.csv"
+        validation_df = pd.read_csv(validation_file) if validation_file.exists() else pd.DataFrame()
+        return build_target_redocking_status(validation_df)
+
+    @staticmethod
+    def _redocking_banner_lines(status_df: Optional[pd.DataFrame]) -> List[str]:
+        """Short header block for the summary report: unvalidated targets are shown first (Spec 036 R2)."""
+        lines = ["Redocking validation (Spec 036 R2: marks outputs, blocks nothing):"]
+        if status_df is None or status_df.empty:
+            lines.append("  WARNING: no redocking reference rows; every target is unvalidated (not_evaluated).")
+            return lines + [""]
+        unvalidated = status_df[status_df["redocking_validation_status"].astype(str) != "validated"]
+        if unvalidated.empty:
+            lines.append(f"  All {len(status_df)} target(s) validated by redocking.")
+        else:
+            lines.append(
+                f"  WARNING: {len(unvalidated)} of {len(status_df)} target(s) are NOT validated by redocking. "
+                "Their scores are marked in every table, not blocked."
+            )
+        for _, row in status_df.sort_values(["redocking_validation_status", "protein"]).iterrows():
+            raw_reference = row.get("redocking_reference", "")
+            reference = "none" if pd.isna(raw_reference) or not str(raw_reference).strip() else str(raw_reference)
+            lines.append(
+                f"  - {row.get('protein', '')}: {row.get('redocking_validation_status', '')} "
+                f"({row.get('redocking_validation_reason', '')}); reference: {reference}"
+            )
+        return lines + [""]
 
     def _build_downstream_results(self, engine_scores: pd.DataFrame) -> Dict[str, object]:
         """Build legacy-style result tables from the unified engine score schema."""

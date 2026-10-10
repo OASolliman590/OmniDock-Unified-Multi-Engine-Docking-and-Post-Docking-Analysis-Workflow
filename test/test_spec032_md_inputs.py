@@ -587,25 +587,16 @@ def test_workflow_dispatch_executes_md_inputs_through_dag(tmp_path, monkeypatch)
     assert backend.source_poses == [2, 2]
 
 
-def test_cli_requires_explicit_ph_and_protonation_policy(tmp_path):
-    from workflow.cli import build_parser
+def test_cli_default_is_docked_state_and_a_bare_ph_is_refused(tmp_path):
+    # Spec 036 R1b: the default export uses the docked microspecies, so no pH is required. A bare --ph is
+    # ambiguous and is refused; re-protonation needs --reprotonate-at-ph (or the legacy flag with --ph).
+    from workflow.cli import build_parser, main
 
-    parser = build_parser()
+    base = ["analyze", "md-inputs", "--project-dir", str(tmp_path), "--engine", "gnina", "--tags-file", "tags.csv", "--receptor-map", "receptors.csv"]
+    args = build_parser().parse_args(base)
+    assert args.ph is None and args.protonation_policy is None
     with pytest.raises(SystemExit):
-        parser.parse_args(
-            [
-                "analyze",
-                "md-inputs",
-                "--project-dir",
-                str(tmp_path),
-                "--engine",
-                "gnina",
-                "--tags-file",
-                "tags.csv",
-                "--receptor-map",
-                "receptors.csv",
-            ]
-        )
+        main(base + ["--ph", "7.4"])
 
 
 @pytest.mark.skipif(

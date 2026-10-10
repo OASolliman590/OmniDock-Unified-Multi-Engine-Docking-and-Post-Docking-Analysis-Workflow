@@ -10,23 +10,31 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from post_docking_analysis.geometric_consensus import (
-    compute_geometric_consensus,
-    compute_geometric_consensus_v2,
-)
+from post_docking_analysis.geometric_consensus import compute_geometric_consensus_v2
+from post_docking_analysis.pose_selection import select_best_pose_rows
 
 logger = logging.getLogger(__name__)
 
 
-SUPPORTED_CONSENSUS_MODES = {
-    "consensus_rank_geometry_qc_v2",
-    "dockbox_geometric",
-    "weighted_hybrid",
-    "strict_consensus",
-    "favorite_guardrails",
-}
-
 CONSENSUS_V2_METHOD = "consensus_rank_geometry_qc_v2"
+SINGLE_ENGINE_NATIVE_METHOD = "single_engine_native_v1"
+DEFAULT_CONSENSUS_MODE = CONSENSUS_V2_METHOD
+
+# Spec 036 R3a: these legacy modes were removed. They used a method forbidden by Spec 031
+# (file-order / element-order matching, centroid soft alignment, mapping-free RMSD) or
+# duplicated consensus v2 without a distinct purpose. Requests for them raise.
+REMOVED_CONSENSUS_MODES = frozenset(
+    {
+        "dockbox_geometric",
+        "weighted_hybrid",
+        "strict_consensus",
+        "favorite_guardrails",
+    }
+)
+SUPPORTED_CONSENSUS_MODES = {
+    CONSENSUS_V2_METHOD,
+    SINGLE_ENGINE_NATIVE_METHOD,
+}
 
 SUPPORTED_RESCORING_SCOPES = {
     "top_n_per_protein",
@@ -44,89 +52,33 @@ SUPPORTED_HIT_CLASS_POLICIES = {
     "reference_anchor",
 }
 
-GEOMETRIC_COLUMNS = [
-    "geometric_agreement",
-    "geometric_engine_count",
-    "geometric_expected_pairs",
-    "geometric_valid_pairs",
-    "geometric_pass_pairs",
-    "geometric_pairwise_rmsd_min",
-    "geometric_pairwise_rmsd_mean",
-    "geometric_pairwise_rmsd_max",
-    "geometric_cutoff_angstrom",
-    "geometric_reason",
-    "geometric_pairwise_rmsd_json",
-]
-
-
 def normalize_consensus_mode(value: Optional[str]) -> str:
+    """Return a supported consensus mode; blank means the v2 default.
+
+    Spec 036 R3: removed and unknown names raise. There is no silent fallback to a legacy mode.
+    """
     token = str(value or "").strip().lower()
-    return token if token in SUPPORTED_CONSENSUS_MODES else "dockbox_geometric"
+    if not token:
+        return DEFAULT_CONSENSUS_MODE
+    if token in SUPPORTED_CONSENSUS_MODES:
+        return token
+    if token in REMOVED_CONSENSUS_MODES:
+        raise ValueError(
+            f"consensus mode '{token}' was removed by Spec 036 R3 (it relied on a method forbidden by "
+            f"Spec 031 or duplicated consensus v2). Use '{CONSENSUS_V2_METHOD}', which is the default."
+        )
+    raise ValueError(
+        f"unknown consensus mode '{token}'. Use '{CONSENSUS_V2_METHOD}' (default). "
+        f"'{SINGLE_ENGINE_NATIVE_METHOD}' is selected automatically for single-engine projects."
+    )
 
 
 def select_representative_poses_v2(scores: pd.DataFrame) -> pd.DataFrame:
-    """Select one pose per engine/target/tag using the approved v2 metrics."""
-    if scores is None or scores.empty:
-        return pd.DataFrame(columns=list(scores.columns) if scores is not None else [])
-    frame = scores.copy()
-    for column in ("engine", "protein", "tag", "ligand", "site_id"):
-        if column not in frame.columns:
-            frame[column] = ""
-        frame[column] = frame[column].astype(str)
-    frame["engine"] = frame["engine"].str.strip().str.lower()
-    for column in ("affinity_kcal_mol", "cnn_score", "cnn_affinity", "pose"):
-        frame[column] = pd.to_numeric(frame.get(column), errors="coerce")
+    """Select one pose per engine/target/tag using the approved v2 metrics.
 
-    selected: List[pd.Series] = []
-    for (_, _, _), group in frame.groupby(["engine", "protein", "tag"], dropna=False, sort=True):
-        engine = str(group["engine"].iloc[0])
-        working = group.copy()
-        if engine == "gnina":
-            working = working[np.isfinite(working["cnn_score"])].copy()
-            if working.empty:
-                # Preserve one auditable incomplete row instead of substituting affinity.
-                row = group.sort_values(["tag"], kind="mergesort").iloc[0].copy()
-                row["v2_pose_selection_status"] = "missing_required_cnn_score"
-                row["v2_ranking_metric"] = np.nan
-                row["v2_ranking_metric_name"] = "cnn_affinity"
-                row["v2_ranking_direction"] = "higher_is_better"
-                selected.append(row)
-                continue
-            working["_pose_order"] = working["pose"].fillna(np.inf)
-            working.sort_values(
-                ["cnn_score", "cnn_affinity", "affinity_kcal_mol", "_pose_order", "tag"],
-                ascending=[False, False, True, True, True],
-                kind="mergesort",
-                inplace=True,
-            )
-            row = working.iloc[0].copy()
-            row["v2_ranking_metric"] = row.get("cnn_affinity")
-            row["v2_ranking_metric_name"] = "cnn_affinity"
-            row["v2_ranking_direction"] = "higher_is_better"
-        else:
-            working = working[np.isfinite(working["affinity_kcal_mol"])].copy()
-            if working.empty:
-                row = group.sort_values(["tag"], kind="mergesort").iloc[0].copy()
-                row["v2_pose_selection_status"] = "missing_required_affinity"
-                row["v2_ranking_metric"] = np.nan
-                row["v2_ranking_metric_name"] = "affinity_kcal_mol"
-                row["v2_ranking_direction"] = "lower_is_better"
-                selected.append(row)
-                continue
-            working["_pose_order"] = working["pose"].fillna(np.inf)
-            working.sort_values(
-                ["affinity_kcal_mol", "_pose_order", "tag"],
-                ascending=[True, True, True],
-                kind="mergesort",
-                inplace=True,
-            )
-            row = working.iloc[0].copy()
-            row["v2_ranking_metric"] = row.get("affinity_kcal_mol")
-            row["v2_ranking_metric_name"] = "affinity_kcal_mol"
-            row["v2_ranking_direction"] = "lower_is_better"
-        row["v2_pose_selection_status"] = "completed"
-        selected.append(row)
-    return pd.DataFrame(selected).drop(columns=["_pose_order"], errors="ignore").reset_index(drop=True)
+    Delegates to the shared selector (Spec 036 R4). Behaviour is unchanged.
+    """
+    return select_best_pose_rows(scores)
 
 
 def _build_consensus_v2(scores: pd.DataFrame, requested_engines: Optional[List[str]] = None) -> pd.DataFrame:
@@ -360,287 +312,58 @@ def normalize_engine_scores(
     return working
 
 
+def _build_single_engine_native(best_by_engine: pd.DataFrame, requested_engines: Optional[List[str]] = None) -> pd.DataFrame:
+    """Explicit single-engine ranking (Spec 036 R3c): that engine's native metric with v2 pose selection.
+
+    Not multi-engine consensus. Each ligand's composite is its within-target percentile of the
+    native metric (GNINA: cnn_affinity, higher is better; Vina/Smina/AD4: affinity, lower is better).
+    """
+    if best_by_engine is None or best_by_engine.empty or "engine" not in best_by_engine.columns:
+        return _build_consensus_v2(best_by_engine, requested_engines=requested_engines)
+    engines = sorted({str(value).strip().lower() for value in best_by_engine["engine"].dropna().astype(str)})
+    if len(engines) > 1:
+        raise ValueError(
+            f"{SINGLE_ENGINE_NATIVE_METHOD} requires exactly one engine; found {engines}. "
+            f"Use '{CONSENSUS_V2_METHOD}' for multi-engine projects."
+        )
+    result = _build_consensus_v2(best_by_engine, requested_engines=requested_engines or engines)
+    if result.empty:
+        return result
+    result["consensus_mode"] = SINGLE_ENGINE_NATIVE_METHOD
+    # No engine agreement exists for one engine; never report 1.0 agreement.
+    result["agreement_fraction"] = np.nan
+    # Name and value of the native metric that ranks the ligands (GNINA: cnn_affinity; others: affinity).
+    selected = select_representative_poses_v2(best_by_engine)
+    native = selected.drop_duplicates("tag").set_index("tag")
+    result["score_name_primary"] = result["tag"].map(native["v2_ranking_metric_name"]).map(
+        lambda name: "cnn_affinity" if name == "cnn_affinity" else "vina_affinity"
+    )
+    result["score_primary"] = result["tag"].map(native["v2_ranking_metric"]).astype(float)
+    return result
+
+
 def build_consensus_rankings(
     best_by_engine: pd.DataFrame,
-    consensus_mode: str = "dockbox_geometric",
+    consensus_mode: str = DEFAULT_CONSENSUS_MODE,
     favorite_engine: Optional[str] = None,
     normalization_method: str = "per_engine_rank",
     score_column: str = "affinity_kcal_mol",
     normalized_column: str = "normalized_affinity_score",
     requested_engines: Optional[List[str]] = None,
 ) -> pd.DataFrame:
-    """
-    Build DockBox-style consensus ranking table from one best pose per (engine, tag).
+    """Build the consensus ranking table from the per-(engine, tag) pose rows.
 
-    Note:
-    `strict_consensus` requires multi-engine agreement. In single-engine mode the
-    strict agreement filter cannot be applied; behavior matches weighted/hybrid
-    scoring and a warning is emitted.
+    Modes (Spec 036 R3):
+    - ``consensus_rank_geometry_qc_v2`` (default): approved Spec 031 policy.
+    - ``single_engine_native_v1``: one engine only, native metric with v2 pose selection.
+
+    ``favorite_engine``, ``normalization_method``, ``score_column`` and ``normalized_column``
+    are accepted for call compatibility. They do not change the v2 ranking.
     """
     mode = normalize_consensus_mode(consensus_mode)
-    favorite = str(favorite_engine or "").strip().lower()
-
     if mode == CONSENSUS_V2_METHOD:
         return _build_consensus_v2(best_by_engine, requested_engines=requested_engines)
-
-    if best_by_engine is None or best_by_engine.empty:
-        return pd.DataFrame(
-            columns=[
-                "tag",
-                "protein",
-                "ligand",
-                "site_id",
-                "score_name_primary",
-                "score_primary",
-                "score_name_secondary",
-                "score_secondary",
-                "agreement_count",
-                "agreement_fraction",
-                "winner_engine",
-                "best_affinity_kcal_mol",
-                "mean_affinity_kcal_mol",
-                "affinity_spread_kcal_mol",
-                "mean_rank_pct",
-                "best_affinity_rank_pct",
-                "favorite_rank_pct",
-                "geometric_agreement",
-                "geometric_engine_count",
-                "geometric_expected_pairs",
-                "geometric_valid_pairs",
-                "geometric_pass_pairs",
-                "geometric_pairwise_rmsd_min",
-                "geometric_pairwise_rmsd_mean",
-                "geometric_pairwise_rmsd_max",
-                "geometric_cutoff_angstrom",
-                "geometric_reason",
-                "geometric_pairwise_rmsd_json",
-                "consensus_score",
-                "consensus_mode",
-                "consensus_rank_within_protein",
-                "consensus_rank_global",
-                "engine_votes",
-            ]
-        )
-
-    frame = best_by_engine.copy()
-    frame["engine"] = frame["engine"].astype(str).str.strip().str.lower()
-    frame["tag"] = frame["tag"].astype(str)
-    frame["protein"] = frame["protein"].astype(str)
-    frame["ligand"] = frame["ligand"].astype(str)
-    frame["site_id"] = frame["site_id"].astype(str)
-    frame[score_column] = pd.to_numeric(frame[score_column], errors="coerce")
-    frame = frame[np.isfinite(frame[score_column])].copy()
-    if frame.empty:
-        return pd.DataFrame()
-
-    frame = normalize_engine_scores(
-        frame,
-        method=normalization_method,
-        score_column=score_column,
-        normalized_column=normalized_column,
-        group_keys=["engine", "protein"],
-    )
-    engines = sorted(frame["engine"].dropna().unique().tolist())
-    total_engines = max(len(engines), 1)
-
-    frame["engine_rank_pct"] = (
-        frame.groupby(["engine", "protein"], dropna=False)[normalized_column]
-        .transform(lambda s: _safe_rank_score(s, lower_is_better=False))
-    )
-
-    affinity_matrix = frame.pivot_table(
-        index="tag",
-        columns="engine",
-        values=score_column,
-        aggfunc="min",
-    )
-    agreement_count = affinity_matrix.notna().sum(axis=1).astype(int)
-    single_engine = total_engines <= 1
-    if single_engine:
-        agreement_fraction = pd.Series(np.nan, index=agreement_count.index, dtype=float)
-    else:
-        agreement_fraction = agreement_count / float(total_engines)
-    winner_engine = affinity_matrix.idxmin(axis=1, skipna=True).fillna("").astype(str)
-    spread = affinity_matrix.max(axis=1, skipna=True) - affinity_matrix.min(axis=1, skipna=True)
-
-    by_tag = (
-        frame.sort_values(["tag", "affinity_kcal_mol"])
-        .groupby("tag", as_index=False)
-        .first()[["tag", "protein", "ligand", "site_id"]]
-    )
-    ranking_columns = ["score_name_primary", "score_primary", "score_name_secondary", "score_secondary"]
-    available_ranking_columns = [column for column in ranking_columns if column in frame.columns]
-    if available_ranking_columns:
-        primary_rows = (
-            frame.sort_values(["tag", score_column, "engine"], ascending=[True, True, True])
-            .groupby("tag", as_index=False)
-            .first()[["tag"] + available_ranking_columns]
-        )
-        by_tag = by_tag.merge(primary_rows, on="tag", how="left")
-    for column in ranking_columns:
-        if column not in by_tag.columns:
-            by_tag[column] = np.nan if "score" in column and not column.startswith("score_name") else ""
-    by_tag = by_tag.merge(
-        frame.groupby("tag", as_index=False).agg(
-            best_affinity_kcal_mol=("affinity_kcal_mol", "min"),
-            mean_affinity_kcal_mol=("affinity_kcal_mol", "mean"),
-            mean_normalized_affinity_score=(normalized_column, "mean"),
-            mean_rank_pct=("engine_rank_pct", "mean"),
-        ),
-        on="tag",
-        how="left",
-    )
-    by_tag["agreement_count"] = by_tag["tag"].map(agreement_count).fillna(0).astype(int)
-    by_tag["agreement_fraction"] = by_tag["tag"].map(agreement_fraction)
-    by_tag["single_engine"] = bool(single_engine)
-    by_tag["winner_engine"] = by_tag["tag"].map(winner_engine).fillna("").astype(str)
-    by_tag["affinity_spread_kcal_mol"] = by_tag["tag"].map(spread).fillna(0.0).astype(float)
-    by_tag["engine_votes"] = by_tag["tag"].map(
-        affinity_matrix.apply(lambda row: ",".join([col for col in affinity_matrix.columns if pd.notna(row[col])]), axis=1)
-    ).fillna("")
-
-    by_tag["best_affinity_rank_pct"] = (
-        by_tag.groupby("protein", dropna=False)["best_affinity_kcal_mol"]
-        .transform(lambda s: _safe_rank_score(s, lower_is_better=True))
-    )
-    by_tag["spread_norm"] = by_tag.groupby("protein", dropna=False)["affinity_spread_kcal_mol"].transform(_safe_minmax_scale)
-
-    by_tag["favorite_rank_pct"] = np.nan
-    if favorite:
-        favorite_rows = frame[frame["engine"] == favorite].copy()
-        if not favorite_rows.empty:
-            favorite_rows["favorite_rank_pct"] = (
-                favorite_rows.groupby("protein", dropna=False)[normalized_column]
-                .transform(lambda s: _safe_rank_score(s, lower_is_better=False))
-            )
-            by_tag = by_tag.merge(
-                favorite_rows[["tag", "favorite_rank_pct"]].drop_duplicates("tag"),
-                on="tag",
-                how="left",
-                suffixes=("", "_fav"),
-            )
-            by_tag["favorite_rank_pct"] = pd.to_numeric(
-                by_tag.get("favorite_rank_pct_fav", by_tag["favorite_rank_pct"]),
-                errors="coerce",
-            )
-            by_tag.drop(columns=["favorite_rank_pct_fav"], inplace=True, errors="ignore")
-
-    if mode == "strict_consensus" and not single_engine:
-        by_tag = by_tag[by_tag["agreement_count"] >= 2].copy()
-    elif mode == "strict_consensus" and single_engine:
-        logger.warning(
-            "strict_consensus requested in single-engine mode; agreement filtering is skipped."
-        )
-
-    if by_tag.empty:
-        return by_tag
-
-    for column in GEOMETRIC_COLUMNS:
-        if column not in by_tag.columns:
-            by_tag[column] = np.nan
-    by_tag["geometric_agreement"] = False
-    by_tag["geometric_reason"] = "not_computed"
-    by_tag["geometric_pairwise_rmsd_json"] = "[]"
-
-    if mode == "dockbox_geometric":
-        geometric_df = compute_geometric_consensus(
-            frame[["engine", "tag", "pose_file", "pose"]].copy(),
-            rmsd_cutoff=2.0,
-        )
-        if geometric_df is not None and not geometric_df.empty:
-            by_tag = by_tag.merge(geometric_df, on="tag", how="left", suffixes=("", "_geom"))
-            for column in GEOMETRIC_COLUMNS:
-                geom_col = f"{column}_geom"
-                if geom_col in by_tag.columns:
-                    by_tag[column] = by_tag[geom_col]
-                    by_tag.drop(columns=[geom_col], inplace=True, errors="ignore")
-            by_tag["geometric_agreement"] = by_tag["geometric_agreement"].fillna(False).astype(bool)
-            by_tag["geometric_reason"] = by_tag["geometric_reason"].fillna("not_available")
-            by_tag["geometric_pairwise_rmsd_json"] = by_tag["geometric_pairwise_rmsd_json"].fillna("[]")
-
-    if mode == "dockbox_geometric":
-        agreement_component = by_tag["geometric_agreement"].astype(float)
-        by_tag["consensus_score"] = (
-            agreement_component
-            + by_tag["mean_rank_pct"].fillna(0.0) * 1e-3
-            + (1.0 - by_tag["spread_norm"].fillna(0.0)) * 1e-4
-        )
-    elif mode == "favorite_guardrails":
-        base_favorite = pd.to_numeric(by_tag["favorite_rank_pct"], errors="coerce")
-        base_favorite = base_favorite.fillna(by_tag["mean_rank_pct"])
-        guardrail_penalty = (
-            (
-                (~by_tag["single_engine"].astype(bool))
-                & (by_tag["agreement_count"] < 2)
-            ).astype(float) * 0.25
-            + by_tag["spread_norm"].fillna(0.0) * 0.10
-            + (by_tag["winner_engine"] != favorite).astype(float) * (0.10 if favorite else 0.0)
-        )
-        by_tag["consensus_score"] = base_favorite - guardrail_penalty
-    elif mode == "strict_consensus":
-        by_tag["consensus_score"] = (
-            by_tag["mean_rank_pct"].fillna(0.0) * 0.65
-            + by_tag["best_affinity_rank_pct"].fillna(0.0) * 0.25
-            + (1.0 - by_tag["spread_norm"].fillna(0.0)) * 0.10
-        )
-    else:
-        agreement_component = pd.to_numeric(by_tag["agreement_fraction"], errors="coerce").fillna(1.0)
-        by_tag["consensus_score"] = (
-            by_tag["mean_rank_pct"].fillna(0.0) * 0.55
-            + by_tag["best_affinity_rank_pct"].fillna(0.0) * 0.30
-            + agreement_component * 0.10
-            + (1.0 - by_tag["spread_norm"].fillna(0.0)) * 0.05
-        )
-
-    by_tag["consensus_mode"] = mode
-    by_tag["normalization_method"] = normalize_normalization_method(normalization_method)
-    by_tag.sort_values(
-        ["protein", "consensus_score", "best_affinity_kcal_mol", "tag"],
-        ascending=[True, False, True, True],
-        inplace=True,
-    )
-    by_tag["consensus_rank_within_protein"] = by_tag.groupby("protein", dropna=False).cumcount() + 1
-    by_tag["consensus_rank_global"] = np.arange(1, len(by_tag) + 1, dtype=int)
-
-    ordered_columns = [
-        "tag",
-        "protein",
-        "ligand",
-        "site_id",
-        "score_name_primary",
-        "score_primary",
-        "score_name_secondary",
-        "score_secondary",
-        "agreement_count",
-        "agreement_fraction",
-        "single_engine",
-        "winner_engine",
-        "best_affinity_kcal_mol",
-        "mean_affinity_kcal_mol",
-        "mean_normalized_affinity_score",
-        "affinity_spread_kcal_mol",
-        "mean_rank_pct",
-        "best_affinity_rank_pct",
-        "favorite_rank_pct",
-        "geometric_agreement",
-        "geometric_engine_count",
-        "geometric_expected_pairs",
-        "geometric_valid_pairs",
-        "geometric_pass_pairs",
-        "geometric_pairwise_rmsd_min",
-        "geometric_pairwise_rmsd_mean",
-        "geometric_pairwise_rmsd_max",
-        "geometric_cutoff_angstrom",
-        "geometric_reason",
-        "geometric_pairwise_rmsd_json",
-        "consensus_score",
-        "consensus_mode",
-        "normalization_method",
-        "consensus_rank_within_protein",
-        "consensus_rank_global",
-        "engine_votes",
-    ]
-    return by_tag[ordered_columns].copy()
+    return _build_single_engine_native(best_by_engine, requested_engines=requested_engines)
 
 
 def select_rescoring_candidates(

@@ -89,7 +89,7 @@ def upsert_pair_curation_round(
     excel_path: Path,
     mode: str,
     default_site_id: str = "site_1",
-    default_box_size: float = 20.0,
+    default_box_size: Optional[float] = None,
     curated_receptors: Optional[List[str]] = None,
     curated_ligands: Optional[List[str]] = None,
     curated_mapping: Optional[Dict[str, List[str]]] = None,

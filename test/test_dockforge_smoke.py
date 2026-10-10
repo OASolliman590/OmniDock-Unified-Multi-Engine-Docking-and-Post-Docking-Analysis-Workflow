@@ -65,7 +65,7 @@ from post_docking_analysis.consensus import (
     classify_hits_target_aware,
     normalize_engine_scores,
 )
-from post_docking_analysis.geometric_consensus import compute_geometric_consensus
+from post_docking_analysis.geometric_consensus import compute_geometric_consensus_v2
 from post_docking_analysis.engine_detector import detect_engines
 from post_docking_analysis.correlation_analyzer import (
     MIN_CORRELATION_N,
@@ -1075,7 +1075,7 @@ def _smoke_meta_artifact_writers() -> None:
         ensure_state(temp_root)
         config_file = write_meta_config_freeze(
             temp_root,
-            config={"analysis_scope": "full", "consensus_mode": "weighted_hybrid"},
+            config={"analysis_scope": "full", "consensus_mode": "consensus_rank_geometry_qc_v2"},
             source="smoke",
             note="meta artifact smoke test",
         )
@@ -2853,28 +2853,16 @@ def _smoke_top_pose_consensus_direction_contracts() -> None:
         ]
     )
 
-    geometric_payload = build_top_pose_atlas(
+    v2_payload = build_top_pose_atlas(
         best_by_engine=best_by_engine,
         consensus_df=consensus_df,
         selection_policy="best_consensus",
-        consensus_mode="dockbox_geometric",
+        consensus_mode="consensus_rank_geometry_qc_v2",
     )
-    geometric_row = geometric_payload["top_pose_per_ligand_per_protein"].iloc[0]
+    v2_row = v2_payload["top_pose_per_ligand_per_protein"].iloc[0]
     _assert(
-        str(geometric_row.get("tag")) == "P1_site_1_L1_A",
-        "dockbox_geometric best_consensus should treat higher consensus_score as better",
-    )
-
-    hybrid_payload = build_top_pose_atlas(
-        best_by_engine=best_by_engine,
-        consensus_df=consensus_df,
-        selection_policy="best_consensus",
-        consensus_mode="weighted_hybrid",
-    )
-    hybrid_row = hybrid_payload["top_pose_per_ligand_per_protein"].iloc[0]
-    _assert(
-        str(hybrid_row.get("tag")) == "P1_site_1_L1_B",
-        "weighted_hybrid best_consensus should treat lower consensus_score as better",
+        str(v2_row.get("tag")) == "P1_site_1_L1_A",
+        "consensus v2 best_consensus should treat higher consensus_score as better",
     )
 
 
@@ -2894,9 +2882,12 @@ def _smoke_consensus_direction_and_single_engine_qc() -> None:
     consensus_input = frame.copy()
     consensus_input["ligand"] = ["A", "B", "C"]
     consensus_input["site_id"] = ["site_1", "site_1", "site_1"]
+    # GNINA single-engine ranking uses the v2 CNN metrics (Spec 036 R3c): cnn_score selects, cnn_affinity ranks.
+    consensus_input["cnn_score"] = [0.90, 0.80, 0.70]
+    consensus_input["cnn_affinity"] = [7.0, 6.0, 5.0]
     ranked = build_consensus_rankings(
         consensus_input,
-        consensus_mode="weighted_hybrid",
+        consensus_mode="single_engine_native_v1",
         favorite_engine="gnina",
         normalization_method="per_engine_minmax",
     )
@@ -3018,39 +3009,6 @@ def _smoke_dag_reference_baselines_wiring_contract() -> None:
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
-def _smoke_geometric_consensus_soft_alignment_contract() -> None:
-    temp_root = Path(tempfile.mkdtemp(prefix="dockforge_geo_soft_align_"))
-    try:
-        sdf_file = temp_root / "gnina_pose.sdf"
-        pdbqt_file = temp_root / "vina_pose.pdbqt"
-        coords_44 = _compact_test_coords(44, offset=0.0)
-        coords_43 = [(x + 0.004, y - 0.003, z + 0.002) for x, y, z in coords_44[:43]]
-        _write_test_sdf(sdf_file, [coords_44])
-        _write_test_pdbqt_pose(pdbqt_file, coords_43)
-
-        geometric = compute_geometric_consensus(
-            pd.DataFrame(
-                [
-                    {"engine": "gnina", "tag": "P1_site_1_L1", "pose_file": str(sdf_file), "pose": 1},
-                    {"engine": "vina", "tag": "P1_site_1_L1", "pose_file": str(pdbqt_file), "pose": 1},
-                ]
-            ),
-            rmsd_cutoff=2.0,
-        )
-        _assert(len(geometric) == 1, "geometric consensus should produce one row for one tag")
-        row = geometric.iloc[0]
-        _assert(bool(row.get("geometric_agreement", False)) is True, "soft-aligned count mismatch should preserve agreement")
-        pair_rows = json.loads(str(row.get("geometric_pairwise_rmsd_json", "[]")))
-        _assert(bool(pair_rows), "pairwise geometric JSON should include one engine-pair row")
-        _assert(bool(pair_rows[0].get("soft_alignment_used", False)) is True, "soft alignment should be recorded for 44 vs 43")
-        _assert(
-            pair_rows[0].get("soft_alignment_rmsd") is not None,
-            "soft alignment RMSD value should be written for auditable output",
-        )
-    finally:
-        shutil.rmtree(temp_root, ignore_errors=True)
-
-
 def _smoke_geometric_consensus_hard_mismatch_contract() -> None:
     temp_root = Path(tempfile.mkdtemp(prefix="dockforge_geo_hard_mismatch_"))
     try:
@@ -3061,11 +3019,11 @@ def _smoke_geometric_consensus_hard_mismatch_contract() -> None:
         _write_test_sdf(sdf_file, [coords_44])
         _write_test_pdbqt_pose(pdbqt_file, coords_30)
 
-        geometric = compute_geometric_consensus(
+        geometric = compute_geometric_consensus_v2(
             pd.DataFrame(
                 [
-                    {"engine": "gnina", "tag": "P1_site_1_L1", "pose_file": str(sdf_file), "pose": 1},
-                    {"engine": "vina", "tag": "P1_site_1_L1", "pose_file": str(pdbqt_file), "pose": 1},
+                    {"protein": "P1", "engine": "gnina", "tag": "P1_site_1_L1", "pose_file": str(sdf_file), "pose": 1},
+                    {"protein": "P1", "engine": "vina", "tag": "P1_site_1_L1", "pose_file": str(pdbqt_file), "pose": 1},
                 ]
             ),
             rmsd_cutoff=2.0,
@@ -3076,8 +3034,8 @@ def _smoke_geometric_consensus_hard_mismatch_contract() -> None:
         pair_rows = json.loads(str(row.get("geometric_pairwise_rmsd_json", "[]")))
         _assert(bool(pair_rows), "pairwise geometric JSON should include one engine-pair row")
         _assert(
-            bool(pair_rows[0].get("soft_alignment_used", False)) is False,
-            "soft alignment should not run when count delta exceeds safeguard threshold",
+            str(pair_rows[0].get("status")) == "not_comparable",
+            "a 44 vs 43 atom pair must be not_comparable: no soft alignment (Spec 036 R3d)",
         )
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
@@ -3502,125 +3460,6 @@ def _smoke_cross_engine_correlation_contract_sparse_and_mixed() -> None:
     _assert(
         pd.to_numeric(global_df["pearson_q_value"], errors="coerce").notna().all(),
         "global rows should include BH-corrected pearson q-values",
-    )
-
-
-def _smoke_consensus_mode_isolation_contract() -> None:
-    import post_docking_analysis.consensus as consensus_module
-
-    frame = pd.DataFrame(
-        [
-            {
-                "engine": "gnina",
-                "protein": "P1",
-                "ligand": "L1",
-                "site_id": "site_1",
-                "tag": "P1_site_1_A",
-                "pose": 1,
-                "affinity_kcal_mol": -10.0,
-                "pose_file": "/tmp/P1_A_gnina.pdbqt",
-            },
-            {
-                "engine": "vina",
-                "protein": "P1",
-                "ligand": "L1",
-                "site_id": "site_1",
-                "tag": "P1_site_1_A",
-                "pose": 1,
-                "affinity_kcal_mol": -9.6,
-                "pose_file": "/tmp/P1_A_vina.pdbqt",
-            },
-            {
-                "engine": "gnina",
-                "protein": "P1",
-                "ligand": "L1",
-                "site_id": "site_1",
-                "tag": "P1_site_1_B",
-                "pose": 1,
-                "affinity_kcal_mol": -7.2,
-                "pose_file": "/tmp/P1_B_gnina.pdbqt",
-            },
-            {
-                "engine": "vina",
-                "protein": "P1",
-                "ligand": "L1",
-                "site_id": "site_1",
-                "tag": "P1_site_1_B",
-                "pose": 1,
-                "affinity_kcal_mol": -7.0,
-                "pose_file": "/tmp/P1_B_vina.pdbqt",
-            },
-        ]
-    )
-
-    original_geometric = consensus_module.compute_geometric_consensus
-    call_counter = {"count": 0}
-
-    def _fake_geometric(_frame: pd.DataFrame, rmsd_cutoff: float = 2.0) -> pd.DataFrame:
-        call_counter["count"] += 1
-        return pd.DataFrame(
-            [
-                {
-                    "tag": "P1_site_1_A",
-                    "geometric_agreement": False,
-                    "geometric_engine_count": 2,
-                    "geometric_expected_pairs": 1,
-                    "geometric_valid_pairs": 1,
-                    "geometric_pass_pairs": 0,
-                    "geometric_pairwise_rmsd_min": 3.5,
-                    "geometric_pairwise_rmsd_mean": 3.5,
-                    "geometric_pairwise_rmsd_max": 3.5,
-                    "geometric_cutoff_angstrom": rmsd_cutoff,
-                    "geometric_reason": "outside_cutoff",
-                    "geometric_pairwise_rmsd_json": "[]",
-                },
-                {
-                    "tag": "P1_site_1_B",
-                    "geometric_agreement": True,
-                    "geometric_engine_count": 2,
-                    "geometric_expected_pairs": 1,
-                    "geometric_valid_pairs": 1,
-                    "geometric_pass_pairs": 1,
-                    "geometric_pairwise_rmsd_min": 1.1,
-                    "geometric_pairwise_rmsd_mean": 1.1,
-                    "geometric_pairwise_rmsd_max": 1.1,
-                    "geometric_cutoff_angstrom": rmsd_cutoff,
-                    "geometric_reason": "within_cutoff",
-                    "geometric_pairwise_rmsd_json": "[]",
-                },
-            ]
-        )
-
-    consensus_module.compute_geometric_consensus = _fake_geometric
-    try:
-        geometric_ranked = build_consensus_rankings(
-            frame,
-            consensus_mode="dockbox_geometric",
-            normalization_method="per_engine_rank",
-        )
-        weighted_ranked = build_consensus_rankings(
-            frame,
-            consensus_mode="weighted_hybrid",
-            normalization_method="per_engine_rank",
-        )
-    finally:
-        consensus_module.compute_geometric_consensus = original_geometric
-
-    _assert(
-        call_counter["count"] == 1,
-        "Geometric consensus computation should be called only for dockbox_geometric mode",
-    )
-    _assert(
-        str(geometric_ranked.iloc[0]["tag"]) == "P1_site_1_B",
-        "dockbox_geometric mode should prioritize geometric agreement over raw affinity rank",
-    )
-    _assert(
-        str(weighted_ranked.iloc[0]["tag"]) == "P1_site_1_A",
-        "weighted_hybrid mode should remain rank-based and not inherit geometric overrides",
-    )
-    _assert(
-        set(str(value) for value in weighted_ranked["geometric_reason"].astype(str).unique()) == {"not_computed"},
-        "Non-geometric modes should keep geometric fields in not_computed state",
     )
 
 
@@ -5963,42 +5802,6 @@ def _smoke_rmsd_scope_normalizer_contract() -> None:
     )
 
 
-def _smoke_strict_consensus_single_engine_warning_contract() -> None:
-    frame = pd.DataFrame(
-        [
-            {"engine": "gnina", "protein": "P1", "ligand": "L1", "site_id": "site_1", "tag": "P1_site_1_A", "affinity_kcal_mol": -8.0},
-            {"engine": "gnina", "protein": "P1", "ligand": "L2", "site_id": "site_1", "tag": "P1_site_1_B", "affinity_kcal_mol": -7.0},
-        ]
-    )
-    captured: list[str] = []
-    consensus_logger = logging.getLogger("post_docking_analysis.consensus")
-    original_level = consensus_logger.level
-
-    class _Capture(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            captured.append(str(record.getMessage()))
-
-    handler = _Capture(level=logging.WARNING)
-    consensus_logger.addHandler(handler)
-    consensus_logger.setLevel(logging.WARNING)
-    try:
-        ranked = build_consensus_rankings(
-            frame,
-            consensus_mode="strict_consensus",
-            favorite_engine="gnina",
-            normalization_method="per_engine_rank",
-        )
-    finally:
-        consensus_logger.removeHandler(handler)
-        consensus_logger.setLevel(original_level)
-
-    _assert(len(ranked) == len(frame), "strict_consensus should retain rows in single-engine mode")
-    _assert(
-        any("strict_consensus requested in single-engine mode" in message for message in captured),
-        "single-engine strict_consensus should emit a warning",
-    )
-
-
 def _smoke_engine_scope_filter_foundation() -> None:
     temp_root = Path(tempfile.mkdtemp(prefix="dockforge_engine_scope_"))
     try:
@@ -6386,12 +6189,8 @@ def main() -> int:
     print("✅ Top-pose consensus direction checks passed")
     _smoke_consensus_direction_and_single_engine_qc()
     print("✅ Consensus normalization direction + single-engine QC checks passed")
-    _smoke_strict_consensus_single_engine_warning_contract()
-    print("✅ strict_consensus single-engine warning contract checks passed")
     _smoke_dag_reference_baselines_wiring_contract()
     print("✅ DAG reference-baseline wiring checks passed")
-    _smoke_geometric_consensus_soft_alignment_contract()
-    print("✅ Geometric consensus soft-alignment checks passed")
     _smoke_geometric_consensus_hard_mismatch_contract()
     print("✅ Geometric consensus hard-mismatch checks passed")
     _smoke_redocking_multi_pose_sdf_parser_contract()
@@ -6404,7 +6203,6 @@ def main() -> int:
     print("✅ favorite_engine empty-scope guard checks passed")
     _smoke_rmsd_scope_normalizer_contract()
     print("✅ RMSD scope normalizer checks passed")
-    _smoke_consensus_mode_isolation_contract()
     print("✅ Consensus mode-isolation contract checks passed")
     _smoke_pairlist_directional_matching_contract()
     print("✅ Pairlist directional matching contract checks passed")

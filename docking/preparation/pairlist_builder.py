@@ -7,6 +7,14 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
+from ..box_policy import (
+    box_warnings,
+    compute_ligand_box,
+    containment_status,
+    join_messages,
+    load_reference_coordinates,
+)
+from ..project_layout import load_manifest
 from ..project_layout import (
     LAYOUT_DOCKING_LEGACY,
     detect_layout_profile,
@@ -43,6 +51,11 @@ PAIR_INTENT_COLUMNS = [
     "size_x",
     "size_y",
     "size_z",
+    "box_method",
+    "ligand_rg_angstrom",
+    "edge_angstrom",
+    "box_containment_status",
+    "box_warnings",
 ]
 
 PAIRLIST_COLUMNS = [
@@ -63,6 +76,11 @@ PAIRLIST_COLUMNS = [
     "cocrystal_ligand_name",
     "cocrystal_ligand_display_name",
     "selection_mode",
+    "box_method",
+    "ligand_rg_angstrom",
+    "edge_angstrom",
+    "box_containment_status",
+    "box_warnings",
 ]
 
 
@@ -144,6 +162,29 @@ def _write_csv(path: Path, rows: Iterable[Dict[str, object]], fieldnames: List[s
             writer.writerow(row)
 
 
+REFERENCE_SUFFIXES = {".sdf", ".mol2", ".pdb", ".pdbqt"}
+
+
+def _resolve_raw_ligand_dir(root: Path, raw_ligands: Optional[Path]) -> Optional[Path]:
+    if raw_ligands is not None:
+        return Path(raw_ligands).expanduser()
+    try:
+        manifest = load_manifest(root)
+    except Exception:
+        return None
+    recorded = str(manifest.get("raw_ligands_sdf_dir") or manifest.get("raw_ligands_dir") or "").strip()
+    return Path(recorded) if recorded else None
+
+
+def _try_index_reference_assets(directory: Optional[Path]) -> Optional[Dict[str, Path]]:
+    if directory is None or not Path(directory).is_dir():
+        return None
+    try:
+        return _index_assets(Path(directory), REFERENCE_SUFFIXES)
+    except ValueError:
+        return None
+
+
 def build_pairlists(
     project_root: Path,
     prepared_proteins: Path,
@@ -151,11 +192,12 @@ def build_pairlists(
     excel_path: Path,
     mode: str,
     default_site_id: str = "site_1",
-    default_box_size: float = 20.0,
+    default_box_size: Optional[float] = None,
     curated_receptors: Optional[List[str]] = None,
     curated_ligands: Optional[List[str]] = None,
     curated_mapping: Optional[Dict[str, List[str]]] = None,
     layout_profile: str = LAYOUT_DOCKING_LEGACY,
+    raw_ligands: Optional[Path] = None,
 ) -> Dict[str, object]:
     summary = generate_pairlists(
         project_root=project_root,
@@ -169,6 +211,7 @@ def build_pairlists(
         curated_ligands=curated_ligands,
         curated_mapping=curated_mapping,
         layout_profile=layout_profile,
+        raw_ligands=raw_ligands,
     )
     root = Path(project_root).expanduser().resolve()
     profile = detect_layout_profile(root, layout_profile)
@@ -188,11 +231,12 @@ def generate_pairlists(
     excel_path: Path,
     mode: str,
     default_site_id: str = "site_1",
-    default_box_size: float = 20.0,
+    default_box_size: Optional[float] = None,
     curated_receptors: Optional[List[str]] = None,
     curated_ligands: Optional[List[str]] = None,
     curated_mapping: Optional[Dict[str, List[str]]] = None,
     layout_profile: str = LAYOUT_DOCKING_LEGACY,
+    raw_ligands: Optional[Path] = None,
 ) -> Dict[str, object]:
     root = Path(project_root).expanduser().resolve()
     profile = detect_layout_profile(root, layout_profile)
@@ -226,6 +270,25 @@ def generate_pairlists(
     pair_intent_rows: List[Dict[str, object]] = []
     pairlist_rows: List[Dict[str, object]] = []
     seen: set[Tuple[str, str, str]] = set()
+    reference_cache: Dict[str, object] = {}
+    # The containment reference must be in receptor (crystal) frame. Prepared ligand files are
+    # re-positioned by preparation, so only raw ligand structures are used as the reference.
+    raw_reference_dir = _resolve_raw_ligand_dir(root, raw_ligands)
+    raw_reference_index = _try_index_reference_assets(raw_reference_dir)
+
+    def reference_coords_for_site(site_row: pd.Series) -> Tuple[str, object]:
+        """Heavy-atom coordinates (crystal frame) of the site's reference ligand, if resolvable."""
+        selected = str(site_row.get("selected_ligand") or "").strip()
+        if not selected or raw_reference_index is None:
+            return selected, None
+        try:
+            reference_path = _resolve_asset(selected, raw_reference_index, "ligand")
+        except ValueError:
+            return selected, None
+        cache_key = str(reference_path)
+        if cache_key not in reference_cache:
+            reference_cache[cache_key] = load_reference_coordinates(reference_path)
+        return selected, reference_cache[cache_key]
 
     def add_row(
         receptor_source: Path,
@@ -254,16 +317,33 @@ def generate_pairlists(
             or ligand_alias_lookup.get(ligand_source.name)
             or ligand_source.stem
         )
+        # Spec 036 R5a: each ligand gets its own edge (rg_scaled_v1 or explicit user_fixed).
+        box = compute_ligand_box(ligand_source, fixed_edge=default_box_size)
+        reference_label, reference_coords = reference_coords_for_site(site_row)
+        center_xyz = (float(site_row["center_x"]), float(site_row["center_y"]), float(site_row["center_z"]))
+        containment = containment_status(center_xyz, box.edge_angstrom, reference_coords)
+        row_warnings = box_warnings(
+            pair_label=f"{receptor_source.stem} x {ligand_source.name}",
+            edge_angstrom=box.edge_angstrom,
+            containment=containment,
+            reference_label=reference_label,
+        )
+        warnings.extend(row_warnings)
         core_row = {
             "receptor": receptor_source.name,
             "ligand": ligand_source.name,
             "site_id": default_site_id,
-            "center_x": float(site_row["center_x"]),
-            "center_y": float(site_row["center_y"]),
-            "center_z": float(site_row["center_z"]),
-            "size_x": float(default_box_size),
-            "size_y": float(default_box_size),
-            "size_z": float(default_box_size),
+            "center_x": center_xyz[0],
+            "center_y": center_xyz[1],
+            "center_z": center_xyz[2],
+            "size_x": float(box.edge_angstrom),
+            "size_y": float(box.edge_angstrom),
+            "size_z": float(box.edge_angstrom),
+            "box_method": box.box_method,
+            "ligand_rg_angstrom": box.ligand_rg_angstrom,
+            "edge_angstrom": float(box.edge_angstrom),
+            "box_containment_status": str(containment["status"]),
+            "box_warnings": join_messages(row_warnings),
             "protein_display_name": protein_display_name,
             "ligand_display_name": ligand_display_name,
             "pdb_id": pdb_id,

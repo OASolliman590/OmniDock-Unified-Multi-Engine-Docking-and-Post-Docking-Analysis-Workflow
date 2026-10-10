@@ -14,12 +14,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+import dataclasses
+
 import pandas as pd
 
-from docking.project_layout import ensure_numbered_output_layout, load_manifest, manifest_path
+from docking.project_layout import (
+    ProtonationPolicyConflict,
+    ensure_numbered_output_layout,
+    load_manifest,
+    load_protonation_policy,
+    manifest_path,
+)
 from post_docking_analysis.atom_mapping import (
     AUTODOCK_ELEMENTS as _AUTODOCK_ELEMENTS,
     LINEAGE_METHOD,
+    GraphPose,
     LineageError,
     compare_lineage_graph_poses,
     load_pdbqt_lineage_pose,
@@ -30,6 +39,8 @@ from post_docking_analysis.docking_parser import parse_vina_pdbqt
 from post_docking_analysis.md_chemistry import (
     ChemistryBackend,
     PreparedLigand,
+    docked_microspecies_from_pdbqt,
+    docked_microspecies_from_sdf,
     get_openbabel_backend,
     openbabel_capability,
 )
@@ -37,8 +48,15 @@ from post_docking_analysis.md_chemistry import (
 
 SCHEMA_VERSION = "md_inputs_manifest_v1"
 PROVENANCE_SCHEMA_VERSION = "md_inputs_provenance_v1"
-METHOD_VERSION = "md_inputs_charmm_gui_cgenff_v1_1.0"
+METHOD_VERSION = "md_inputs_charmm_gui_cgenff_v1_1.1"
 CONSUMER_PROFILE = "charmm_gui_cgenff_v1"
+# Spec 036 R1b: the default MD ligand is the docked microspecies. The legacy flag value
+# "openbabel_predicted" and --reprotonate-at-ph are the explicit, recorded override path.
+DOCKED_STATE_POLICY = "docked_state"
+LEGACY_REPROTONATION_POLICY = "openbabel_predicted"
+AUTO_MAPS_SCHEMA_VERSION = "md_inputs_auto_maps_v1"
+AUTO_MAPS_DIRNAME = "md_inputs_maps"
+_CHARGE_BLIND_MAPPING = "charge_blind_protonation_state_v1"
 SUCCESS_STATUSES = {"completed"}
 ROW_STATUSES = {
     "completed",
@@ -55,14 +73,19 @@ class MDInputsRequest:
     engine: str
     tags_file: Path
     receptor_map: Path
-    pH: float
-    protonation_policy: str = "openbabel_predicted"
+    pH: Optional[float] = None  # the explicit re-protonation pH; None for the docked-state default
+    protonation_policy: str = DOCKED_STATE_POLICY
     topology_map: Optional[Path] = None
     charge_map: Optional[Path] = None
     ligand_formats: Tuple[str, ...] = ("mol2",)
     consumer_profile: str = CONSUMER_PROFILE
     protonate: bool = True
     force: bool = False
+    override_source: str = ""  # "", "reprotonate_at_ph" or "legacy_openbabel_predicted"
+
+    @property
+    def reprotonation_override(self) -> bool:
+        return self.pH is not None
 
     @classmethod
     def from_dict(cls, payload: Dict[str, object]) -> "MDInputsRequest":
@@ -73,15 +96,11 @@ class MDInputsRequest:
         consumer = str(payload.get("consumer_profile") or CONSUMER_PROFILE).strip().lower()
         if consumer != CONSUMER_PROFILE:
             raise ValueError(f"unsupported_consumer_profile:{consumer}")
-        protonation_policy = str(payload.get("protonation_policy") or "").strip().lower()
-        if protonation_policy != "openbabel_predicted":
-            raise ValueError("--protonation-policy openbabel_predicted is required for the approved v1 profile")
-        try:
-            ph = float(payload.get("pH"))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("explicit --ph is required") from exc
-        if not math.isfinite(ph) or ph < 0.0 or ph > 14.0:
-            raise ValueError("--ph must be a finite value from 0 through 14")
+        raw_policy = str(payload.get("protonation_policy") or "").strip().lower()
+        if raw_policy not in ("", DOCKED_STATE_POLICY, LEGACY_REPROTONATION_POLICY):
+            raise ValueError(f"unsupported_protonation_policy:{raw_policy}")
+        ph, override_source = _reprotonation_override(payload, raw_policy)
+        protonation_policy = LEGACY_REPROTONATION_POLICY if ph is not None else DOCKED_STATE_POLICY
         formats = tuple(
             sorted(
                 {str(item).strip().lower() for item in (payload.get("ligand_formats") or ["mol2"]) if str(item).strip()}
@@ -114,6 +133,7 @@ class MDInputsRequest:
             consumer_profile=consumer,
             protonate=bool(payload.get("protonate", True)),
             force=bool(payload.get("force", False)),
+            override_source=override_source,
         )
         for label, path in (("project", request.project_dir), ("tags", request.tags_file), ("receptor_map", request.receptor_map)):
             if not path.exists():
@@ -133,11 +153,51 @@ class MDInputsRequest:
             "charge_map": str(self.charge_map) if self.charge_map else "",
             "pH": self.pH,
             "protonation_policy": self.protonation_policy,
+            "override_source": self.override_source,
             "ligand_formats": list(self.ligand_formats),
             "consumer_profile": self.consumer_profile,
             "protonate": self.protonate,
             "force": self.force,
         }
+
+
+def _validate_ph(value: object, label: str) -> float:
+    try:
+        ph = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid_{label}") from exc
+    if not math.isfinite(ph) or ph < 0.0 or ph > 14.0:
+        raise ValueError(f"{label} must be a finite value from 0 through 14")
+    return ph
+
+
+def _reprotonation_override(payload: Dict[str, object], raw_policy: str) -> Tuple[Optional[float], str]:
+    """Spec 036 R1b: explicit re-protonation request. None means the docked-state default."""
+    legacy = raw_policy == LEGACY_REPROTONATION_POLICY
+    explicit_raw = payload.get("reprotonate_at_ph")
+    ph_raw = payload.get("pH")
+    has_explicit = explicit_raw not in (None, "")
+    has_ph = ph_raw not in (None, "")
+    if not has_explicit and has_ph and str(payload.get("override_source") or "") == "reprotonate_at_ph":
+        # A request rebuilt from its own manifest (DAG path) keeps its explicit-override label.
+        explicit_raw, has_explicit, has_ph = ph_raw, True, False
+    if not legacy and not has_explicit:
+        if has_ph:
+            raise ValueError(
+                "a bare pH is ambiguous: the default MD export uses the docked microspecies. "
+                "Pass --reprotonate-at-ph <pH> for an explicit override, or --protonation-policy openbabel_predicted with --ph"
+            )
+        return None, ""
+    if legacy and not has_ph and not has_explicit:
+        raise ValueError("--protonation-policy openbabel_predicted requires an explicit --ph")
+    values: List[Tuple[str, float]] = []
+    if has_explicit:
+        values.append(("reprotonate_at_ph", _validate_ph(explicit_raw, "reprotonate_at_ph")))
+    if legacy and has_ph:
+        values.append(("legacy_openbabel_predicted", _validate_ph(ph_raw, "pH")))
+    if len({round(value, 9) for _, value in values}) > 1:
+        raise ValueError(f"conflicting_reprotonation_pH:{values[0][1]}!={values[1][1]}")
+    return values[0][1], ("reprotonate_at_ph" if has_explicit else "legacy_openbabel_predicted")
 
 
 class MDExportError(RuntimeError):
@@ -676,6 +736,8 @@ def build_md_inputs_config_payload(request: MDInputsRequest) -> Dict[str, object
             continue
         pose_file = _resolve_selection_path(row.get("pose_file"), request.project_dir)
         dependency_paths.add(pose_file)
+        for record_file, _ in _ligand_provenance_records(request.project_dir, row.get("ligand")):
+            dependency_paths.add(record_file)
         receptor_row = _match_map(receptor_rows, row, "receptor_file")
         if receptor_row:
             dependency_paths.add(_resolve_mapped_path(receptor_row["receptor_file"], request.receptor_map, request.project_dir))
@@ -736,6 +798,445 @@ def _docking_provenance(request: MDInputsRequest, selected: Dict[str, object]) -
     }
 
 
+# ---------------------------------------------------------------- Spec 036 R1b: docked state
+
+_LIGAND_SUFFIXES = (".pdbqt", ".sdf", ".mol2", ".mol", ".pdb")
+_RECEPTOR_SUFFIXES = (".pdbqt",)
+_PREPARATION_POLICIES = ("ph_model", "explicit_state", "as_input")
+
+
+class MDMapError(RuntimeError):
+    """An md-input map cannot be generated from project evidence; ``reason`` is machine-readable (R6)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _name_key(value: object, suffixes: Tuple[str, ...]) -> str:
+    text = Path(str(value or "").strip()).name
+    for suffix in suffixes:
+        if text.lower().endswith(suffix):
+            return text[: -len(suffix)]
+    return text
+
+
+def _ligand_provenance_records(project_dir: Path, ligand: object) -> List[Tuple[Path, Dict[str, object]]]:
+    """Ligand preparation step reports (Spec 034 R2b) whose input or output name matches ``ligand``."""
+    key = _name_key(ligand, _LIGAND_SUFFIXES)
+    directory = ensure_numbered_output_layout(project_dir)["prep_ligands_prepared"] / "preparation_steps"
+    records: List[Tuple[Path, Dict[str, object]]] = []
+    if not key or not directory.is_dir():
+        return records
+    for report in sorted(directory.glob("*.json")):
+        try:
+            payload = json.loads(report.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        names = {_name_key(payload.get("input_file"), _LIGAND_SUFFIXES), _name_key(payload.get("output_file"), _LIGAND_SUFFIXES)}
+        if key in names:
+            records.append((report, payload))
+    return records
+
+
+def _project_policy_identity(project_dir: Path) -> Optional[Dict[str, object]]:
+    block = load_protonation_policy(project_dir)
+    if not block:
+        return None
+    return {
+        "ligand_policy": block.get("ligand_policy"),
+        "ligand_ph": block.get("ligand_ph"),
+        "receptor_ph": block.get("receptor_ph"),
+        "receptor_force_field": block.get("receptor_force_field"),
+        "source": block.get("source"),
+        "set_at": block.get("set_at"),
+        "sha256": _json_hash(block),
+    }
+
+
+def _docked_state_for_row(request: MDInputsRequest, selected: Dict[str, object], pose_file: Path, pose: int) -> Dict[str, object]:
+    """Spec 036 R1b: the docked microspecies of the selected pose, cross-checked with preparation provenance.
+
+    Vina/Smina: the Meeko ``REMARK SMILES`` lineage (formal charges and hydrogens). GNINA: the pose SDF record.
+    Both must agree with the ligand preparation step report (``protonation.prepared_state`` and, for
+    PDBQT, ``protonation.pdbqt_state``). Missing or disagreeing evidence fails closed.
+    """
+    ligand = selected.get("ligand")
+    records = _ligand_provenance_records(request.project_dir, ligand)
+    key = _name_key(ligand, _LIGAND_SUFFIXES)
+    if not records:
+        raise MDExportError("skipped_missing_configuration", "G6", f"ligand_provenance_missing:{key}")
+    if len(records) > 1:
+        raise MDExportError("skipped_missing_configuration", "G6", f"ligand_provenance_ambiguous:{key}:{len(records)}")
+    provenance_file, provenance = records[0]
+    try:
+        if request.engine == "gnina":
+            state = docked_microspecies_from_sdf(pose_file, pose)
+        else:
+            state = docked_microspecies_from_pdbqt(pose_file, pose)
+    except RuntimeError as exc:
+        raise MDExportError("skipped_missing_dependency", "G6", str(exc)) from exc
+    except ValueError as exc:
+        raise MDExportError("not_comparable", "G6", f"docked_state_unavailable:{exc}") from exc
+    protocol = provenance.get("protonation") if isinstance(provenance.get("protonation"), dict) else {}
+    policy = str(protocol.get("policy") or "")
+    if policy not in _PREPARATION_POLICIES:
+        raise MDExportError("skipped_missing_configuration", "G6", f"preparation_policy_missing:{provenance_file.name}")
+    prepared = protocol.get("prepared_state")
+    if not isinstance(prepared, dict) or prepared.get("net_formal_charge") is None:
+        raise MDExportError("skipped_missing_configuration", "G6", f"preparation_prepared_state_missing:{provenance_file.name}")
+    docked_net = int(state["net_formal_charge"])
+    prepared_net = int(prepared["net_formal_charge"])
+    if docked_net != prepared_net:
+        raise MDExportError("failed", "G6", f"docked_state_differs_from_preparation_provenance:net_charge:{docked_net}!={prepared_net}")
+    if request.engine != "gnina":
+        pdbqt_state = protocol.get("pdbqt_state")
+        if not isinstance(pdbqt_state, dict) or not pdbqt_state.get("microspecies_smiles"):
+            raise MDExportError("skipped_missing_configuration", "G6", f"preparation_pdbqt_state_missing:{provenance_file.name}")
+        if str(pdbqt_state["microspecies_smiles"]) != str(state["canonical_smiles"]):
+            raise MDExportError("failed", "G6", "docked_state_differs_from_preparation_provenance:microspecies")
+    else:
+        prepared_smiles = str(prepared.get("microspecies_smiles") or "")
+        if prepared_smiles and state["canonical_smiles"] and prepared_smiles != str(state["canonical_smiles"]):
+            raise MDExportError("failed", "G6", "docked_state_differs_from_preparation_provenance:microspecies")
+    state.update(
+        {
+            "ligand_policy": policy,
+            "preparation_ph": protocol.get("ph") if protocol.get("ph_model_run") else None,
+            "ligand_preparation_record": {"path": str(provenance_file), "sha256": sha256_file(provenance_file)},
+            "charge_authority": "predicted" if policy == "ph_model" else "docked_state",
+            "scientific_review": "human_review_required" if policy in {"ph_model", "as_input"} else "completed",
+        }
+    )
+    return state
+
+
+def _docked_state_best_effort(request: MDInputsRequest, selected: Dict[str, object], pose_file: Path, pose: int):
+    """Override rows record the docked state when it can be read, without making it a precondition."""
+    try:
+        return _docked_state_for_row(request, selected, pose_file, pose), ""
+    except MDExportError as exc:
+        return None, f"{exc.gate}:{exc.reason}"
+
+
+def _check_row_against_project_policy(project_policy: Optional[Dict[str, object]], docked_state: Dict[str, object]) -> None:
+    if not project_policy:
+        return
+    stored = project_policy.get("ligand_policy")
+    docked = docked_state.get("ligand_policy")
+    if stored != docked:
+        raise MDExportError(
+            "failed",
+            "G6",
+            f"protonation_policy_conflict:ligand_policy:project={stored}!=docked_state={docked}",
+        )
+
+
+def _neutral_parent_pose(pose: GraphPose) -> GraphPose:
+    """Charge-blind copy of a heavy-atom graph: each charged atom is taken to its neutral parent.
+
+    The Spec 031 node rule compares formal charges, which differ between protonation states of
+    the same molecule. Removing the charge and one proton per unit of charge gives the parent
+    heavy-atom graph that the crystal topology describes. The Spec 031 rules are unchanged.
+    """
+    graph = pose.graph.copy()
+    for node in graph.nodes:
+        data = graph.nodes[node]
+        charge = int(data.get("formal_charge", 0))
+        if "total_h" in data:
+            data["total_h"] = int(data["total_h"]) - charge
+        data["formal_charge"] = 0
+    return dataclasses.replace(pose, graph=graph)
+
+
+def _derive_charge_blind_atom_map(
+    pose_file: Path,
+    pose: int,
+    topology_file: Path,
+    topology_pose: int,
+) -> Tuple[List[Tuple[float, float, float]], List[str], List[int], Dict[str, object]]:
+    """Spec 036 R1b G3 for a docked microspecies: the Spec 034 lineage map on charge-blind parent graphs."""
+    try:
+        lineage_pose = load_pdbqt_lineage_pose(pose_file, pose)
+    except LineageError as exc:
+        if exc.reason == "no_lineage_remarks":
+            raise MDExportError("not_comparable", "G3", "missing_pose_to_topology_atom_map:no_lineage_remarks") from exc
+        raise MDExportError("not_comparable", "G3", exc.reason) from exc
+    try:
+        topology_graph = load_sdf_graph_pose(topology_file, topology_pose)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise MDExportError("not_comparable", "G3", f"topology_not_comparable:{exc}") from exc
+    result = compare_lineage_graph_poses(_neutral_parent_pose(lineage_pose), _neutral_parent_pose(topology_graph))
+    if not result.comparable or result.selected_mapping is None:
+        raise MDExportError("not_comparable", "G3", f"lineage_mapping_not_comparable:{result.reason}")
+    atom_count = len(lineage_pose.elements)
+    atom_map = _validate_atom_permutation(list(result.selected_mapping), atom_count)
+    coordinates = [tuple(float(value) for value in row) for row in lineage_pose.coords]
+    evidence = {
+        "lineage_source": result.lineage_source,
+        "reference_lineage_source": result.reference_lineage_source,
+        "mapping_reason": result.reason,
+        "mapping_coverage": float(result.mapping_coverage),
+        "valid_mapping_count": int(result.valid_mapping_count),
+        "mapping_charge_policy": _CHARGE_BLIND_MAPPING,
+    }
+    return coordinates, list(lineage_pose.elements), atom_map, evidence
+
+
+def _prepare_docked_ligand(backend, request: MDInputsRequest, pose_file: Path, pose: int, docked_state: Dict[str, object],
+                           pose_coords, pose_elements):
+    try:
+        if request.engine == "gnina":
+            return backend.prepare_docked_state(
+                pose_file,
+                source_pose=pose,
+                expected_net_charge=int(docked_state["net_formal_charge"]),
+                add_hydrogens=request.protonate,
+            )
+        return backend.prepare_docked_state(
+            pose_file,
+            source_pose=pose,
+            expected_net_charge=int(docked_state["net_formal_charge"]),
+            add_hydrogens=request.protonate,
+            pose_heavy_coordinates=pose_coords,
+            pose_heavy_elements=pose_elements,
+            pose_to_smiles=docked_state["pose_to_smiles"],
+            microspecies_smiles=str(docked_state["smiles"]),
+        )
+    except MDExportError:
+        raise
+    except ValueError as exc:
+        raise MDExportError("failed", "G6", str(exc)) from exc
+
+
+def _docked_gate_evidence(docked_state: Optional[Dict[str, object]], reason: str = "") -> Optional[Dict[str, object]]:
+    if docked_state is None:
+        return {"status": "unavailable", "reason": reason} if reason else None
+    return {
+        "source": docked_state["source"],
+        "net_formal_charge": int(docked_state["net_formal_charge"]),
+        "microspecies_smiles": docked_state["canonical_smiles"],
+        "ligand_policy": docked_state.get("ligand_policy"),
+        "preparation_record": docked_state.get("ligand_preparation_record"),
+        "mapping_charge_policy": _CHARGE_BLIND_MAPPING if docked_state["source"] == "meeko_remark_smiles" else "not_applicable",
+    }
+
+
+def _protonation_fingerprint(request: MDInputsRequest, docked_state: Optional[Dict[str, object]], project_policy) -> Dict[str, object]:
+    return {
+        "mode": "reprotonation_override" if request.reprotonation_override else "docked_state",
+        "override_pH": request.pH,
+        "override_source": request.override_source,
+        "docked_net_charge": int(docked_state["net_formal_charge"]) if docked_state else None,
+        "docked_smiles": str(docked_state["canonical_smiles"]) if docked_state else "",
+        "docked_ligand_policy": str(docked_state.get("ligand_policy")) if docked_state else "",
+        "ligand_preparation_sha256": str((docked_state or {}).get("ligand_preparation_record", {}).get("sha256", "")),
+        "project_policy_sha256": str((project_policy or {}).get("sha256", "")),
+    }
+
+
+def check_request_protonation_against_project(project_dir: Path, request: MDInputsRequest) -> Optional[Dict[str, object]]:
+    """Explicit re-protonation values must agree with a stored project policy (R1a)."""
+    block = load_protonation_policy(project_dir)
+    if not block or not request.reprotonation_override:
+        return block
+    stored_policy = str(block.get("ligand_policy") or "")
+    requested = f"reprotonate at pH {request.pH:.2f} ({request.override_source})"
+    if stored_policy != "ph_model":
+        raise ProtonationPolicyConflict("ligand_policy", stored_policy, requested)
+    stored_ph = block.get("ligand_ph")
+    if stored_ph is None or abs(float(stored_ph) - float(request.pH)) > 1e-9:
+        raise ProtonationPolicyConflict("ligand_ph", stored_ph, f"{request.pH:.2f} ({request.override_source})")
+    return block
+
+
+# ---------------------------------------------------------------- Spec 036 R6: auto md-input maps
+
+
+def _best_pose_rows(project_dir: Path, engine: str) -> "pd.DataFrame":
+    selection_file = _selection_file(project_dir)
+    if not selection_file.is_file():
+        raise MDMapError(f"best_pose_selection_missing:{selection_file}")
+    frame = pd.read_csv(selection_file)
+    required = {"engine", "tag", "protein", "ligand", "pose", "pose_file"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise MDMapError(f"best_pose_selection_missing_columns:{','.join(missing)}")
+    frame["engine"] = frame["engine"].astype(str).str.strip().str.lower()
+    frame["tag"] = frame["tag"].astype(str).str.strip()
+    rows = frame[frame["engine"] == engine]
+    if rows.empty:
+        raise MDMapError(f"no_best_pose_rows_for_engine:{engine}")
+    duplicated = rows["tag"][rows["tag"].duplicated()].tolist()
+    if duplicated:
+        raise MDMapError(f"duplicate_best_pose_tag:{duplicated[0]}")
+    return rows
+
+
+def _receptor_lineage_for(project_dir: Path, protein: object) -> Tuple[Path, Dict[str, object]]:
+    """Strict receptor lineage (Spec 033): prepared PDBQT -> ``.preparation.json`` -> the chain PDB it was prepared from."""
+    key = _name_key(protein, _RECEPTOR_SUFFIXES)
+    prepared_dir = ensure_numbered_output_layout(project_dir)["prep_receptors_prepared"]
+    candidates = sorted(item for item in prepared_dir.glob("*.pdbqt") if item.stem == key) if key else []
+    if not candidates:
+        raise MDMapError(f"receptor_lineage_missing:{key}")
+    if len(candidates) > 1:
+        raise MDMapError(f"receptor_lineage_ambiguous:{key}:{len(candidates)}")
+    prepared = candidates[0]
+    record = prepared.parent / (prepared.name + ".preparation.json")
+    if not record.is_file():
+        raise MDMapError(f"receptor_preparation_record_missing:{record.name}")
+    try:
+        payload = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise MDMapError(f"receptor_preparation_record_unreadable:{record.name}") from exc
+    source = Path(str(payload.get("input_file") or "")).expanduser()
+    if not str(source) or not source.is_file():
+        raise MDMapError(f"receptor_source_missing:{source}")
+    if source.suffix.lower() not in {".pdb", ".cif", ".mmcif"}:
+        raise MDMapError(f"receptor_source_format_unsupported:{source.suffix.lower()}")
+    source = source.resolve()
+    return source, {
+        "protein": key,
+        "prepared_pdbqt": str(prepared),
+        "preparation_record": str(record),
+        "preparation_record_sha256": sha256_file(record),
+        "receptor_source": str(source),
+        "receptor_source_sha256": sha256_file(source),
+    }
+
+
+def _ligand_topology_for(project_dir: Path, ligand: object) -> Tuple[Path, Dict[str, object]]:
+    """Connectivity-bearing topology (Spec 032 G3): the original input SDF recorded in the ligand provenance."""
+    key = _name_key(ligand, _LIGAND_SUFFIXES)
+    records = _ligand_provenance_records(project_dir, ligand)
+    if not records:
+        raise MDMapError(f"ligand_provenance_missing:{key}")
+    if len(records) > 1:
+        raise MDMapError(f"ligand_provenance_ambiguous:{key}:{len(records)}")
+    report, payload = records[0]
+    source = Path(str(payload.get("input_file") or "")).expanduser()
+    if not str(source) or not source.is_file():
+        raise MDMapError(f"ligand_topology_source_missing:{source}")
+    if source.suffix.lower() not in {".sdf", ".mol", ".mol2"}:
+        raise MDMapError(f"ligand_topology_format_unsupported:{source.suffix.lower()}")
+    source = source.resolve()
+    return source, {
+        "ligand": key,
+        "preparation_record": str(report),
+        "preparation_record_sha256": sha256_file(report),
+        "topology_source": str(source),
+        "topology_source_sha256": sha256_file(source),
+    }
+
+
+def resolve_md_input_maps(
+    project_dir: Path,
+    engine: str,
+    *,
+    tags_file: Optional[Path] = None,
+    receptor_map: Optional[Path] = None,
+    topology_map: Optional[Path] = None,
+    auto_maps: bool = False,
+) -> Dict[str, object]:
+    """Spec 036 R6: generate the md-input maps that the caller did not supply.
+
+    Generated maps are written to ``.meta/md_inputs_maps/`` with the source hashes in
+    ``auto_maps_manifest.json``. A missing or ambiguous source fails with an explicit reason.
+    ``auto_maps`` generates every map and refuses explicit map files as ambiguous.
+    """
+    root = Path(project_dir).expanduser().resolve()
+    if auto_maps and any(value is not None for value in (tags_file, receptor_map, topology_map)):
+        raise MDMapError("auto_maps_conflicts_with_explicit_map_file")
+    need_tags = auto_maps or tags_file is None
+    need_receptor = auto_maps or receptor_map is None
+    need_topology = (auto_maps or topology_map is None) and engine != "gnina"
+    sources: Dict[str, str] = {
+        "tags": "explicit" if tags_file is not None else "auto_generated",
+        "receptor_map": "explicit" if receptor_map is not None else "auto_generated",
+        "topology_map": (
+            "explicit" if topology_map is not None else ("auto_generated" if need_topology else "not_required_for_gnina")
+        ),
+    }
+    if not (need_tags or need_receptor or need_topology):
+        return {
+            "tags_file": str(tags_file),
+            "receptor_map": str(receptor_map),
+            "topology_map": str(topology_map) if topology_map is not None else "",
+            "sources": sources,
+            "manifest_file": "",
+        }
+    maps_dir = ensure_numbered_output_layout(root)["meta"] / AUTO_MAPS_DIRNAME
+    maps_dir.mkdir(parents=True, exist_ok=True)
+    rows = _best_pose_rows(root, engine)
+    if need_tags:
+        tag_values = [str(tag) for tag in rows["tag"].tolist()]
+    else:
+        tag_values = load_exact_tags(tags_file)
+        unknown = [tag for tag in tag_values if tag not in set(rows["tag"].tolist())]
+        if unknown:
+            raise MDMapError(f"tag_not_in_best_pose_table:{unknown[0]}")
+    selected = rows[rows["tag"].isin(tag_values)].set_index("tag").loc[tag_values].reset_index()
+    generated: Dict[str, Dict[str, object]] = {}
+    evidence: Dict[str, object] = {"receptors": [], "ligands": []}
+    if need_tags:
+        path = maps_dir / "tags.csv"
+        pd.DataFrame({"tag": tag_values}).to_csv(path, index=False)
+        generated["tags"] = {"path": str(path), "rows": len(tag_values)}
+    if need_receptor:
+        receptor_rows = []
+        for _, row in selected.iterrows():
+            source, record = _receptor_lineage_for(root, row["protein"])
+            receptor_rows.append({"tag": row["tag"], "protein": record["protein"], "receptor_file": str(source)})
+            evidence["receptors"].append(record)
+        path = maps_dir / "receptor_map.csv"
+        pd.DataFrame(receptor_rows, columns=["tag", "protein", "receptor_file"]).to_csv(path, index=False)
+        generated["receptor_map"] = {"path": str(path), "rows": len(receptor_rows)}
+    if need_topology:
+        topology_rows = []
+        for _, row in selected.iterrows():
+            source, record = _ligand_topology_for(root, row["ligand"])
+            topology_rows.append(
+                {
+                    "tag": row["tag"],
+                    "ligand": record["ligand"],
+                    "topology_file": str(source),
+                    "topology_pose": 1,
+                    "atom_map": "",
+                }
+            )
+            evidence["ligands"].append(record)
+        path = maps_dir / "topology_map.csv"
+        pd.DataFrame(
+            topology_rows, columns=["tag", "ligand", "topology_file", "topology_pose", "atom_map"]
+        ).to_csv(path, index=False)
+        generated["topology_map"] = {"path": str(path), "rows": len(topology_rows)}
+    for entry in generated.values():
+        entry["sha256"] = sha256_file(Path(str(entry["path"])))
+    manifest_file = maps_dir / "auto_maps_manifest.json"
+    manifest = {
+        "schema_version": AUTO_MAPS_SCHEMA_VERSION,
+        "generated_at": _utc_now(),
+        "engine": engine,
+        "maps": generated,
+        "sources": evidence,
+        "best_pose_selection": {"path": str(_selection_file(root)), "sha256": sha256_file(_selection_file(root))},
+    }
+    manifest_file.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    return {
+        "tags_file": str(generated["tags"]["path"]) if need_tags else str(tags_file),
+        "receptor_map": str(generated["receptor_map"]["path"]) if need_receptor else str(receptor_map),
+        "topology_map": (
+            str(generated["topology_map"]["path"]) if need_topology else (str(topology_map) if topology_map else "")
+        ),
+        "sources": sources,
+        "manifest_file": str(manifest_file),
+        "maps": generated,
+    }
+
+
 def export_md_inputs(
     request: MDInputsRequest,
     *,
@@ -748,6 +1249,8 @@ def export_md_inputs(
     receptor_rows = _load_map(request.receptor_map)
     topology_rows = _load_map(request.topology_map)
     charge_rows = _load_map(request.charge_map)
+    check_request_protonation_against_project(request.project_dir, request)
+    project_policy = _project_policy_identity(request.project_dir)
     backend = chemistry_backend if chemistry_backend is not None else get_openbabel_backend()
     capability = (
         {"status": "completed", "backend": backend.name, "backend_version": backend.version, "reason": ""}
@@ -829,9 +1332,15 @@ def export_md_inputs(
                     pose_coords, pose_elements = _pdbqt_pose_coordinates(pose_file, pose)
                     atom_map = _parse_atom_map(explicit_atom_map, len(pose_coords))
                     atom_map_source = "explicit_topology_map"
-                else:
-                    # Spec 034 R1c: derive the permutation from the Meeko SMILES/IDX lineage.
+                elif request.reprotonation_override:
+                    # Spec 034 R1c: derive the permutation from the Meeko SMILES/IDX lineage (predicted override path).
                     pose_coords, pose_elements, atom_map, lineage_evidence = _derive_lineage_atom_map(
+                        pose_file, pose, topology_file, topology_pose
+                    )
+                    atom_map_source = LINEAGE_METHOD
+                else:
+                    # Spec 036 R1b: docked microspecies. The Spec 034 lineage map is taken on charge-blind parent graphs.
+                    pose_coords, pose_elements, atom_map, lineage_evidence = _derive_charge_blind_atom_map(
                         pose_file, pose, topology_file, topology_pose
                     )
                     atom_map_source = LINEAGE_METHOD
@@ -865,11 +1374,24 @@ def export_md_inputs(
                 **receptor_materialization,
             )
 
+            if request.reprotonation_override:
+                docked_state, docked_reason = _docked_state_best_effort(request, selected, pose_file, pose)
+            else:
+                docked_state = _docked_state_for_row(request, selected, pose_file, pose)
+                docked_reason = ""
+                _check_row_against_project_policy(project_policy, docked_state)
             if backend is None:
                 raise MDExportError("skipped_missing_dependency", "G6", str(capability.get("reason") or "openbabel_missing"))
             expected_charge = _charge_for_row(charge_rows, selected)
-            charge_authority = "human_approved" if expected_charge is not None else "predicted"
-            review_status = "completed" if expected_charge is not None else "human_review_required"
+            if expected_charge is not None:
+                charge_authority = "human_approved"
+                review_status = "completed"
+            elif request.reprotonation_override:
+                charge_authority = "predicted"
+                review_status = "human_review_required"
+            else:
+                charge_authority = str(docked_state["charge_authority"])
+                review_status = str(docked_state["scientific_review"])
             docking_provenance = _docking_provenance(request, selected)
             project_manifest_file = manifest_path(request.project_dir)
             project_manifest_input = (
@@ -893,6 +1415,7 @@ def export_md_inputs(
                 },
                 "backend": {"name": backend.name, "version": backend.version},
                 "expected_charge": expected_charge,
+                "protonation": _protonation_fingerprint(request, docked_state, project_policy),
                 "docking_provenance": docking_provenance,
                 "atom_map": atom_map,
                 "atom_map_source": atom_map_source,
@@ -918,23 +1441,51 @@ def export_md_inputs(
                     )
                     results.append(row_result)
                     continue
-            ligand = backend.prepare(
-                topology_file,
-                source_pose=topology_pose,
-                pH=request.pH,
-                protonate=request.protonate,
-                pose_heavy_coordinates=pose_coords,
-                pose_heavy_elements=pose_elements,
-                pose_to_topology=atom_map,
-            )
+            if request.reprotonation_override:
+                ligand = backend.prepare(
+                    topology_file,
+                    source_pose=topology_pose,
+                    pH=request.pH,
+                    protonate=request.protonate,
+                    pose_heavy_coordinates=pose_coords,
+                    pose_heavy_elements=pose_elements,
+                    pose_to_topology=atom_map,
+                )
+            else:
+                ligand = _prepare_docked_ligand(backend, request, pose_file, pose, docked_state, pose_coords, pose_elements)
+                docked_net = int(docked_state["net_formal_charge"])
+                if int(ligand.net_charge) != docked_net:
+                    raise MDExportError("failed", "G6", f"md_state_differs_from_docked_state:{int(ligand.net_charge)}!={docked_net}")
             if expected_charge is not None and int(ligand.net_charge) != int(expected_charge):
                 raise MDExportError("failed", "G6", f"approved_charge_mismatch:{ligand.net_charge}!={expected_charge}")
             if not request.protonate and not any(atom.element.upper() == "H" for atom in ligand.atoms):
                 raise MDExportError("failed", "G6", "no_protonate_requires_explicit_hydrogens")
+            ligand_ph = request.pH if request.reprotonation_override else docked_state.get("preparation_ph")
+            ph_source = (
+                request.override_source
+                if request.reprotonation_override
+                else ("preparation_provenance" if ligand_ph is not None else "not_applicable_no_ph_model")
+            )
+            override_evidence: Optional[Dict[str, object]] = None
+            if request.reprotonation_override:
+                docked_net_known = int(docked_state["net_formal_charge"]) if docked_state else None
+                override_evidence = {
+                    "pH": request.pH,
+                    "source": request.override_source,
+                    "docked_net_charge": docked_net_known,
+                    "docked_state_unavailable": docked_reason or None,
+                    "md_net_charge": int(ligand.net_charge),
+                    "charge_changed_from_docked": (
+                        int(ligand.net_charge) != docked_net_known if docked_net_known is not None else None
+                    ),
+                }
             gates["G6"] = _gate(
                 "completed",
-                pH=request.pH,
+                pH=ligand_ph,
+                pH_source=ph_source,
                 protonated=request.protonate,
+                docked_state=_docked_gate_evidence(docked_state, docked_reason),
+                reprotonation_override=override_evidence,
                 net_charge=int(ligand.net_charge),
                 charge_authority=charge_authority,
                 scientific_review=review_status,
@@ -1012,10 +1563,14 @@ def export_md_inputs(
                     "affinity_kcal_mol": expected_score,
                     "native_score": native_score,
                     "native_score_field": native_field,
-                    "pH": request.pH,
+                    "pH": ligand_ph,
+                    "pH_source": ph_source,
                     "net_charge": int(ligand.net_charge),
                     "charge_authority": charge_authority,
                     "scientific_review": review_status,
+                    "protonation_policy": project_policy,
+                    "docked_state": _docked_gate_evidence(docked_state, docked_reason),
+                    "reprotonation_override": override_evidence,
                     "consumer_profile": request.consumer_profile,
                     "force_field": "unknown_not_parameterized",
                     "receptor_protonation_performed": False,
@@ -1060,6 +1615,7 @@ def export_md_inputs(
         "request": request.to_dict(),
         "request_fingerprint": config_payload["request_fingerprint"],
         "chemistry_capability": capability,
+        "protonation_policy": project_policy,
         "selection_file": {"path": str(selection_file), "sha256": sha256_file(selection_file) if selection_file.is_file() else ""},
         "counts": counts,
         "rows": results,

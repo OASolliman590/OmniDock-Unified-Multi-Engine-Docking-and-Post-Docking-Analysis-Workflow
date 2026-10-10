@@ -17,8 +17,13 @@ from .execution_environment import (
     validate_environment_selection,
 )
 from .hpc_profiles import load_hpc_profile, merge_runtime_with_profile
+from .box_policy import CONTAINMENT_NOT_EVALUATED, box_warnings
 from .models import PairlistRow
 from .parameter_schema import (
+    DEFAULT_ENERGY_RANGE,
+    DEFAULT_PARAMETER_PRESET,
+    DEFAULT_REPLICATES,
+    EXHAUSTIVENESS_LEVEL,
     apply_schema_to_runtime,
     resolve_parameter_schema,
     transform_pairlist_rows,
@@ -62,6 +67,28 @@ LIGAND_QC_MAX_FORMAL_CHARGE_DEFAULT = int(LIGAND_ADMET_DEFAULTS.get("max_formal_
 LIGAND_QC_MIN_HEAVY_ATOM_DEFAULT = int(LIGAND_ADMET_DEFAULTS.get("min_heavy_atom_count", 6))
 
 
+def _optional_float(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value) or str(value).strip() == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
 def _pairlist_rows_from_df(df: pd.DataFrame) -> List[PairlistRow]:
     return [
         PairlistRow(
@@ -74,6 +101,11 @@ def _pairlist_rows_from_df(df: pd.DataFrame) -> List[PairlistRow]:
             size_x=float(row["size_x"]),
             size_y=float(row["size_y"]),
             size_z=float(row["size_z"]),
+            box_method=_optional_text(row.get("box_method")),
+            ligand_rg_angstrom=_optional_float(row.get("ligand_rg_angstrom")),
+            edge_angstrom=_optional_float(row.get("edge_angstrom")),
+            box_containment_status=_optional_text(row.get("box_containment_status")),
+            box_warnings=_optional_text(row.get("box_warnings")),
         )
         for _, row in df.iterrows()
     ]
@@ -113,6 +145,17 @@ def _build_runtime_by_engine(
     docking_mode: str,
     round_id: str,
 ) -> Dict[str, Dict[str, object]]:
+    runtime_map = _build_runtime_by_engine_map(args, docking_mode, round_id)
+    for payload in runtime_map.values():
+        payload["seed"] = getattr(args, "seed", None)
+    return runtime_map
+
+
+def _build_runtime_by_engine_map(
+    args: argparse.Namespace,
+    docking_mode: str,
+    round_id: str,
+) -> Dict[str, Dict[str, object]]:
     return {
         "gnina": {
             "image": args.gnina_image,
@@ -123,6 +166,7 @@ def _build_runtime_by_engine(
             "score_only": getattr(args, "mode", "standard") == "score-only",
             "exhaustiveness": args.exhaustiveness,
             "num_modes": args.num_modes,
+            "replicates": getattr(args, "replicates", DEFAULT_REPLICATES),
             "use_gpu": True if args.gnina_device is not None else (False if args.gnina_cpu not in (None, 0) else None),
             "round_id": round_id,
             "docking_mode": docking_mode,
@@ -133,6 +177,8 @@ def _build_runtime_by_engine(
             "cpu": args.vina_cpu,
             "exhaustiveness": args.exhaustiveness,
             "num_modes": args.num_modes,
+            "energy_range": getattr(args, "energy_range", DEFAULT_ENERGY_RANGE),
+            "replicates": getattr(args, "replicates", DEFAULT_REPLICATES),
             "round_id": round_id,
             "docking_mode": docking_mode,
         },
@@ -143,6 +189,8 @@ def _build_runtime_by_engine(
             "scoring": args.smina_scoring,
             "exhaustiveness": args.exhaustiveness,
             "num_modes": args.num_modes,
+            "energy_range": getattr(args, "energy_range", DEFAULT_ENERGY_RANGE),
+            "replicates": getattr(args, "replicates", DEFAULT_REPLICATES),
             "round_id": round_id,
             "docking_mode": docking_mode,
         },
@@ -371,7 +419,14 @@ def prepare_docking_main(argv=None) -> int:
     parser.add_argument("--raw-proteins", help="Optional raw protein directory to record in manifest")
     parser.add_argument("--raw-ligands", help="Optional raw ligand directory to record in manifest")
     parser.add_argument("--default-site-id", default="site_1", help="Default site id when pair intent omits it")
-    parser.add_argument("--default-box-size", type=float, default=20.0, help="Default cubic box size")
+    parser.add_argument(
+        "--default-box-size",
+        "--box-size",
+        dest="default_box_size",
+        type=float,
+        default=None,
+        help="Explicit cubic box edge (A) -> box_method user_fixed. Omit for rg_scaled_v1 (2.9 x ligand Rg).",
+    )
     parser.add_argument("--asset-mode", choices=["symlink", "copy"], default="symlink", help="How to materialize receptors/ligands into the project")
     parser.add_argument("--engines", default="gnina,vina,smina,autodock4", help="Comma-separated engine list to initialize")
     parser.add_argument("--project-name", help="Optional manifest project name")
@@ -427,6 +482,37 @@ def prepare_docking_main(argv=None) -> int:
     return 0
 
 
+def _dock_box_messages(rows: List[PairlistRow], transformed_rows: List[PairlistRow]) -> List[str]:
+    """Box warnings for the dock run: prep-time containment/edge notes plus dock-time edge checks."""
+    messages: List[str] = []
+    seen: set = set()
+    unrecorded = 0
+    for original, effective in zip(rows, transformed_rows):
+        if not original.box_method:
+            unrecorded += 1
+        for note in str(original.box_warnings or "").split(" | "):
+            if note and note not in seen:
+                seen.add(note)
+                messages.append(note)
+        if abs(float(original.size_x) - float(effective.size_x)) > 1e-9:
+            messages.append(
+                f"[box] {effective.tag}: --box-scale/--box-padding changed the edge to "
+                f"{float(effective.size_x):.2f} A; containment from prep was not re-evaluated."
+            )
+            for note in box_warnings(
+                pair_label=effective.tag,
+                edge_angstrom=effective.size_x,
+                containment={"status": CONTAINMENT_NOT_EVALUATED},
+            ):
+                messages.append(note)
+    if unrecorded:
+        messages.append(
+            f"[box] {unrecorded} pair(s) have no recorded box_method (legacy pairlist). "
+            "Re-run `prep pairlist` to record rg_scaled_v1 or user_fixed provenance."
+        )
+    return messages
+
+
 def dock_main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Run GNINA, Vina, Smina, and/or AutoDock4 on a prepared docking project")
     parser.add_argument("--project-dir", required=True, help="Docking project root")
@@ -460,17 +546,39 @@ def dock_main(argv=None) -> int:
     parser.add_argument("--autodocktools-python", help="Python executable used to run AutoDockTools prepare_gpf4.py/prepare_dpf4.py")
     parser.add_argument("--autodocktools-prepare-gpf4", help="Path to AutoDockTools prepare_gpf4.py script")
     parser.add_argument("--autodocktools-prepare-dpf4", help="Path to AutoDockTools prepare_dpf4.py script")
-    parser.add_argument("--exhaustiveness", type=int, default=16, help="Shared exhaustiveness default")
+    parser.add_argument(
+        "--exhaustiveness",
+        type=int,
+        default=EXHAUSTIVENESS_LEVEL,
+        help="Exhaustiveness (Spec 036 R5c default 32; basic mode uses the preset value)",
+    )
     parser.add_argument("--num-modes", type=int, default=20, help="Shared num_modes default")
-    parser.add_argument("--seed", type=int, help="Shared deterministic seed where supported by selected engines")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        required=False,
+        help="Base seed (REQUIRED, Spec 036 R5b). Replicates use seed, seed+1, ..., seed+N-1",
+    )
+    parser.add_argument(
+        "--replicates",
+        type=int,
+        default=DEFAULT_REPLICATES,
+        help="Independent seeded replicates per pair (Vina/Smina/GNINA). Default 3; 1 is allowed.",
+    )
+    parser.add_argument(
+        "--energy-range",
+        type=float,
+        default=DEFAULT_ENERGY_RANGE,
+        help="Vina/Smina --energy_range (kcal/mol); Vina documented default 3",
+    )
     parser.add_argument("--box-scale", type=float, default=1.0, help="Scale factor applied to pairlist box sizes")
     parser.add_argument("--box-padding", type=float, default=0.0, help="Padding added to each side of docking box sizes (Angstrom)")
     parser.add_argument("--parameter-mode", choices=["basic", "advanced"], default="basic", help="Parameter profile mode")
     parser.add_argument(
         "--parameter-preset",
         choices=["screening_fast", "balanced", "exhaustive"],
-        default="balanced",
-        help="Basic-mode preset for shared docking parameters",
+        default=DEFAULT_PARAMETER_PRESET,
+        help="Basic-mode preset for shared docking parameters (default exhaustive: exhaustiveness 32)",
     )
     parser.add_argument(
         "--execution-environment",
@@ -507,6 +615,9 @@ def dock_main(argv=None) -> int:
     round_id = str(manifest.get("latest_pair_round") or "round_001")
     engines = normalize_engines([args.engines]) if args.engines else normalize_engines(manifest.get("engines", []))
     rows = _load_pairlist_rows(project_dir)
+    if args.seed is None:
+        print("❌ `--seed` is required for every dock run (Spec 036 R5b). Replicates use seed, seed+1, ...")
+        return 1
     runtime_by_engine = _build_runtime_by_engine(args, docking_mode="screen", round_id=round_id)
 
     env_config = ExecutionEnvironmentConfig(
@@ -536,6 +647,8 @@ def dock_main(argv=None) -> int:
         box_scale=args.box_scale,
         box_padding=args.box_padding,
         runtime_by_engine=runtime_by_engine,
+        energy_range=float(args.energy_range),
+        replicates=int(args.replicates),
     )
     schema_errors, schema_warnings = validate_parameter_schema(parameter_schema, engines)
     for warning in schema_warnings:
@@ -547,6 +660,9 @@ def dock_main(argv=None) -> int:
         return 1
     runtime_by_engine = apply_schema_to_runtime(parameter_schema, runtime_by_engine)
     transformed_rows = transform_pairlist_rows(rows, parameter_schema)
+    box_messages = _dock_box_messages(rows, transformed_rows)
+    for message in box_messages:
+        print(f"⚠️  {message}")
 
     preflight = run_docking_preflight(
         project_dir=project_dir,
@@ -597,14 +713,30 @@ def dock_main(argv=None) -> int:
     for engine in engines:
         runner = build_runner(engine, project_dir, runtime_by_engine[engine])
         results[engine] = runner.run(transformed_rows, dry_run=args.dry_run, skip_completed=args.skip_completed)
+        effective = results[engine]["effective"]
+        print(
+            f"   {engine} effective: exhaustiveness={effective['exhaustiveness']} "
+            f"num_modes={effective['num_modes']} energy_range={effective['energy_range']} "
+            f"replicates={effective['replicates']} seeds={effective['seeds']}"
+        )
         completed = sum(1 for job in results[engine]["jobs"] if job["status"] == "completed")
         dry = sum(1 for job in results[engine]["jobs"] if job["status"] == "dry_run")
         skipped = sum(1 for job in results[engine]["jobs"] if job["status"] == "skipped")
         failed = sum(1 for job in results[engine]["jobs"] if job["status"] == "failed")
         print(f"🔧 {engine}: completed={completed} dry_run={dry} skipped={skipped} failed={failed}")
+        for job in results[engine]["jobs"]:
+            for warning in job.get("warnings", []) or []:
+                if "poses_returned" in warning or "num_modes" in warning:
+                    print(f"⚠️  {job['tag']}: {warning}")
 
     if args.favorite_engine:
         manifest["favorite_engine"] = args.favorite_engine
+    manifest["box_warnings"] = box_messages
+    manifest["box_settings"] = {
+        "methods_in_pairlist": sorted({row.box_method or "unrecorded" for row in rows}),
+        "rg_definition": "heavy_atom_unweighted_v1",
+    }
+    manifest["engine_effective_parameters"] = {engine: results[engine]["effective"] for engine in engines}
     manifest.setdefault("engine_settings", {}).update(runtime_by_engine)
     manifest["execution_settings"] = env_config.to_dict()
     manifest["parameter_schema"] = parameter_schema.to_dict()
@@ -678,8 +810,11 @@ def deploy_main(argv=None) -> int:
     parser.add_argument("--autodocktools-python", help="Python executable used to run AutoDockTools prepare_gpf4.py/prepare_dpf4.py")
     parser.add_argument("--autodocktools-prepare-gpf4", help="Path to AutoDockTools prepare_gpf4.py script")
     parser.add_argument("--autodocktools-prepare-dpf4", help="Path to AutoDockTools prepare_dpf4.py script")
-    parser.add_argument("--exhaustiveness", type=int, default=16, help="Shared exhaustiveness default")
+    parser.add_argument("--exhaustiveness", type=int, default=EXHAUSTIVENESS_LEVEL, help="Exhaustiveness (Spec 036 R5c default 32)")
     parser.add_argument("--num-modes", type=int, default=20, help="Shared num_modes default")
+    parser.add_argument("--seed", type=int, help="Base seed (REQUIRED, Spec 036 R5b); replicates use seed+k")
+    parser.add_argument("--replicates", type=int, default=DEFAULT_REPLICATES, help="Seeded replicates per pair (default 3)")
+    parser.add_argument("--energy-range", type=float, default=DEFAULT_ENERGY_RANGE, help="Vina/Smina --energy_range (kcal/mol)")
     parser.add_argument("--slurm-time", help="SBATCH --time value")
     parser.add_argument("--slurm-mem", help="SBATCH --mem value")
     parser.add_argument("--slurm-cpus-per-task", type=int, help="SBATCH --cpus-per-task value")
@@ -805,6 +940,8 @@ def deploy_main(argv=None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
+    if args.seed is None:
+        parser.error("`--seed` is required for every deployed docking run (Spec 036 R5b).")
     runtime_by_engine = merge_runtime_with_profile(
         _build_runtime_by_engine(args, docking_mode=args.mode, round_id=round_id),
         hpc_profile,

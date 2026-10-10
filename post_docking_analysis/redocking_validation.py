@@ -567,3 +567,142 @@ def run_redocking_validation(
         "validation_df": validation_df,
         "reference_baselines_df": reference_baselines_df,
     }
+
+
+# ---------------------------------------------------------------------------
+# Spec 036 R2: per-target redocking status (marks downstream outputs; never blocks).
+# ---------------------------------------------------------------------------
+
+REDOCKING_STATUS_VALIDATED = "validated"
+REDOCKING_STATUS_FAILED = "failed"
+REDOCKING_STATUS_NOT_EVALUATED = "not_evaluated"
+REDOCKING_STATUS_NOT_COMPARABLE = "not_comparable"
+REDOCKING_STATUS_COLUMNS = (
+    "redocking_validation_status",
+    "redocking_validation_reason",
+    "redocking_reference",
+)
+_NOT_COMPARABLE_PREFIXES = ("not_comparable", "docked_pose_not_comparable", "reference_pose_not_comparable")
+_TARGET_KEY = "protein"
+
+
+def _reference_label(row: pd.Series) -> str:
+    tag = str(row.get("tag", "") or "")
+    engine = str(row.get("engine", "") or "")
+    return f"{tag};engine={engine}" if engine else tag
+
+
+def _target_status_for_group(group: pd.DataFrame, pass_threshold: float, warn_threshold: float) -> Dict[str, str]:
+    if group.empty:
+        return {
+            "redocking_validation_status": REDOCKING_STATUS_NOT_EVALUATED,
+            "redocking_validation_reason": "no_reference_rows_for_target",
+            "redocking_reference": "",
+        }
+    classification = group["redocking_classification"].astype(str)
+    rmsd = pd.to_numeric(group["redocking_rmsd_angstrom"], errors="coerce")
+    evaluable = group[classification.isin({"pass", "warn", "fail"}) & rmsd.notna()].copy()
+    if not evaluable.empty:
+        evaluable["_rmsd"] = pd.to_numeric(evaluable["redocking_rmsd_angstrom"], errors="coerce")
+        passed = evaluable[evaluable["redocking_classification"] == "pass"]
+        if not passed.empty:
+            best = passed.sort_values(["_rmsd", "tag", "engine"]).iloc[0]
+            return {
+                "redocking_validation_status": REDOCKING_STATUS_VALIDATED,
+                "redocking_validation_reason": (
+                    f"in_place_rmsd_{float(best['_rmsd']):.3f}A_le_{float(pass_threshold):.1f}A"
+                ),
+                "redocking_reference": _reference_label(best),
+            }
+        best = evaluable.sort_values(["_rmsd", "tag", "engine"]).iloc[0]
+        band = str(best["redocking_classification"])
+        if band == "warn":
+            reason = (
+                f"in_place_rmsd_{float(best['_rmsd']):.3f}A_in_warn_band_"
+                f"{float(pass_threshold):.1f}-{float(warn_threshold):.1f}A_not_validated"
+            )
+        else:
+            reason = f"in_place_rmsd_{float(best['_rmsd']):.3f}A_above_{float(warn_threshold):.1f}A"
+        return {
+            "redocking_validation_status": REDOCKING_STATUS_FAILED,
+            "redocking_validation_reason": reason,
+            "redocking_reference": _reference_label(best),
+        }
+    reasons = group["validation_reason"].fillna("").astype(str)
+    comparability = reasons[reasons.str.startswith(_NOT_COMPARABLE_PREFIXES)]
+    if not comparability.empty:
+        reason = comparability.value_counts().index[0]
+        return {
+            "redocking_validation_status": REDOCKING_STATUS_NOT_COMPARABLE,
+            "redocking_validation_reason": str(reason),
+            "redocking_reference": "",
+        }
+    reason = reasons[reasons != ""]
+    return {
+        "redocking_validation_status": REDOCKING_STATUS_NOT_EVALUATED,
+        "redocking_validation_reason": str(reason.value_counts().index[0]) if not reason.empty else "not_evaluated",
+        "redocking_reference": "",
+    }
+
+
+def build_target_redocking_status(
+    validation_df: Optional[pd.DataFrame],
+    targets: Optional[Iterable[str]] = None,
+    *,
+    pass_threshold_angstrom: float = 2.0,
+    warn_threshold_angstrom: float = 3.5,
+) -> pd.DataFrame:
+    """Derive one redocking status per target (receptor), from ``run_redocking_validation`` rows.
+
+    Rules, in order:
+    - ``validated``: at least one reference row passes in-place RMSD <= 2.0 A. The reference is the
+      passing row with the lowest in-place RMSD.
+    - ``failed``: reference rows are evaluable but none passes. The reference is the lowest-RMSD row.
+      A warn-band result (2.0-3.5 A) is not validated, and is reported as ``failed`` with a warn reason.
+    - ``not_comparable``: no evaluable row, and the reason is a Spec 031 mapping or comparability reason.
+    - ``not_evaluated``: no reference rows for the target, or missing pose files.
+
+    Targets with no rows are returned as ``not_evaluated`` when ``targets`` is given.
+    """
+    columns = [_TARGET_KEY, *REDOCKING_STATUS_COLUMNS]
+    frame = validation_df.copy() if validation_df is not None else pd.DataFrame()
+    if frame.empty or _TARGET_KEY not in frame.columns:
+        frame = pd.DataFrame(columns=[_TARGET_KEY, "tag", "engine", "redocking_classification",
+                                      "redocking_rmsd_angstrom", "validation_reason"])
+    frame[_TARGET_KEY] = frame[_TARGET_KEY].astype(str)
+    names = sorted(set(frame[_TARGET_KEY].tolist()) | {str(item) for item in (targets or [])})
+    records: List[Dict[str, object]] = []
+    for name in names:
+        group = frame[frame[_TARGET_KEY] == name]
+        status = _target_status_for_group(group, pass_threshold_angstrom, warn_threshold_angstrom)
+        records.append({_TARGET_KEY: name, **status})
+    return pd.DataFrame(records, columns=columns)
+
+
+def attach_redocking_status(frame: pd.DataFrame, status_df: pd.DataFrame) -> pd.DataFrame:
+    """Left-join the per-target redocking status onto a table keyed by ``protein``.
+
+    Rows whose target has no status row get ``not_evaluated`` with ``no_reference_rows_for_target``.
+    Existing columns with the same names are replaced.
+    """
+    working = frame.copy()
+    for column in REDOCKING_STATUS_COLUMNS:
+        if column in working.columns:
+            working = working.drop(columns=[column])
+    if working.empty:
+        for column in REDOCKING_STATUS_COLUMNS:
+            working[column] = pd.Series(dtype=object)
+        return working
+    lookup = status_df if status_df is not None and not status_df.empty else pd.DataFrame(
+        columns=[_TARGET_KEY, *REDOCKING_STATUS_COLUMNS]
+    )
+    lookup = lookup[[_TARGET_KEY, *REDOCKING_STATUS_COLUMNS]].drop_duplicates(_TARGET_KEY)
+    keys = working[_TARGET_KEY].astype(str) if _TARGET_KEY in working.columns else pd.Series("", index=working.index)
+    mapping = lookup.set_index(_TARGET_KEY)
+    for column in REDOCKING_STATUS_COLUMNS:
+        values = keys.map(mapping[column]) if not mapping.empty else pd.Series(index=working.index, dtype=object)
+        working[column] = values.where(values.notna(), "")
+    missing = working["redocking_validation_status"].astype(str) == ""
+    working.loc[missing, "redocking_validation_status"] = REDOCKING_STATUS_NOT_EVALUATED
+    working.loc[missing, "redocking_validation_reason"] = "no_reference_rows_for_target"
+    return working

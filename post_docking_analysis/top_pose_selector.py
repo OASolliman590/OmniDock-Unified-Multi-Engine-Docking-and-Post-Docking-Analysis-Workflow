@@ -11,6 +11,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from post_docking_analysis.pose_selection import select_best_pose_rows
+
 
 SUPPORTED_SELECTION_POLICIES = {
     "best_affinity",
@@ -22,11 +24,11 @@ SUPPORTED_GLOBAL_AGGREGATIONS = {
     "best_target",
 }
 
-_CONSENSUS_SCORE_ASCENDING_MODES = frozenset(
+# Spec 036 R3: only v2 and the single-engine native rule remain. Both are higher-is-better.
+_CONSENSUS_SCORE_HIGHER_IS_BETTER_MODES = frozenset(
     {
-        "",
-        "strict_consensus",
-        "weighted_hybrid",
+        "consensus_rank_geometry_qc_v2",
+        "single_engine_native_v1",
     }
 )
 
@@ -70,9 +72,7 @@ def _policy_sort_fields(selection_policy: str) -> Tuple[str, str, str]:
 
 def _consensus_score_ascending(mode: str) -> bool:
     token = str(mode or "").strip().lower()
-    if token in _CONSENSUS_SCORE_ASCENDING_MODES:
-        return True
-    if token in {"dockbox_geometric", "favorite_guardrails", "consensus_rank_geometry_qc_v2"}:
+    if token in _CONSENSUS_SCORE_HIGHER_IS_BETTER_MODES:
         return False
     return True
 
@@ -154,6 +154,10 @@ def build_top_pose_atlas(
         best_frame["normalized_affinity_score"],
         errors="coerce",
     )
+    # Spec 036 R4: one pose per (engine, protein, tag) by the shared v2 selector, so that a GNINA
+    # tag is represented by its highest-cnn_score pose and not by its lowest-affinity pose.
+    best_frame = select_best_pose_rows(best_frame)
+    best_frame["pose"] = pd.to_numeric(best_frame["pose"], errors="coerce").fillna(0).astype(int)
 
     # One deterministic identity row per tag (best affinity, then lexical engine for stable tie-breaks).
     identity_sorted = best_frame.copy()

@@ -17,7 +17,13 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 # Import the core pipeline
-from core_pipeline import MolecularDockingPipeline, extract_residue_level_coordinates, EXCEL_AVAILABLE
+from core_pipeline import (
+    MolecularDockingPipeline,
+    EXCEL_AVAILABLE,
+    centre_method_from_provenance,
+    excel_cell_value,
+    extract_residue_level_coordinates,
+)
 
 if EXCEL_AVAILABLE:
     from openpyxl import Workbook
@@ -381,9 +387,12 @@ def add_to_excel_workbook(workbook, pdb_id, results):
             if existing_pdb == normalized_pdb:
                 ws.delete_rows(row_idx, 1)
         
-        # Add results
+        # Add results. Dict values are written as JSON text (Spec 036 R6).
         for key, value in results.items():
-            ws.append([normalized_pdb, key, value])
+            ws.append([normalized_pdb, key, excel_cell_value(value)])
+        centre_method = centre_method_from_provenance(results.get("binding_site_center_provenance"))
+        if centre_method:
+            ws.append([normalized_pdb, "binding_site_center_method", centre_method])
         
     except Exception as e:
         print(f"⚠️  Failed to add results to Excel: {e}")

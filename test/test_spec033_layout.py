@@ -48,7 +48,7 @@ def _prepare_assets(root: Path, layout_profile: str) -> None:
     """Fake prepared receptor/ligand files and the site workbook, in the profile's own folders."""
     layout = ensure_project_layout(root, layout_profile)
     (layout["prepared_proteins"] / "1IEP_receptor.pdbqt").write_text("ATOM\n", encoding="utf-8")
-    (layout["prepared_ligands"] / "1IEP_ligand_STI_A_201.pdbqt").write_text("ATOM\n", encoding="utf-8")
+    (layout["prepared_ligands"] / "1IEP_ligand_STI_A_201.pdbqt").write_text("ATOM      1  C   LIG A   1       0.000   0.000   0.000  1.00  0.00     0.000 C\nATOM      2  C   LIG A   1       1.500   0.000   0.000  1.00  0.00     0.000 C\nATOM      3  O   LIG A   1       0.000   1.500   0.000  1.00  0.00     0.000 OA\n", encoding="utf-8")
     (layout["raw_proteins"] / "multi_pdb_analysis.xlsx").write_bytes(b"")  # faked catalog, content unused
 
 
@@ -56,13 +56,15 @@ def _dry_run_vina(root: Path, layout_profile: str) -> int:
     # Shared receptor/ligand assets are normally materialized by `prep project`.
     layout = ensure_project_layout(root, layout_profile)
     (layout["receptors"] / "1IEP_receptor.pdbqt").write_text("ATOM\n", encoding="utf-8")
-    (layout["ligands"] / "1IEP_ligand_STI_A_201.pdbqt").write_text("ATOM\n", encoding="utf-8")
+    (layout["ligands"] / "1IEP_ligand_STI_A_201.pdbqt").write_text("ATOM      1  C   LIG A   1       0.000   0.000   0.000  1.00  0.00     0.000 C\nATOM      2  C   LIG A   1       1.500   0.000   0.000  1.00  0.00     0.000 C\nATOM      3  O   LIG A   1       0.000   1.500   0.000  1.00  0.00     0.000 OA\n", encoding="utf-8")
     return docking_cli.dock_main(
         [
             "--project-dir",
             str(root),
             "--engines",
             "vina",
+            "--seed",
+            "12345",
             "--dry-run",
             "--no-ligand-qc-gate",
             "--no-receptor-qc-gate",

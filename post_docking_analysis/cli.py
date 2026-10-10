@@ -169,8 +169,8 @@ Examples:
                         help="Optional TXT/CSV file restricting promotion to explicit pair tags or receptor/site_id/ligand rows")
     parser.add_argument(
         "--consensus-mode",
-        choices=["dockbox_geometric", "weighted_hybrid", "strict_consensus", "favorite_guardrails", "consensus_rank_geometry_qc_v2"],
-        default="dockbox_geometric",
+        choices=["consensus_rank_geometry_qc_v2"],
+        default="consensus_rank_geometry_qc_v2",
         help="Consensus policy for comparative hit ranking and rerun promotion",
     )
     parser.add_argument(

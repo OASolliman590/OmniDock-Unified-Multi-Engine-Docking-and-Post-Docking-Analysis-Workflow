@@ -780,7 +780,7 @@ def run_prepare_pairlist(
     prepared_ligands: Optional[str] = None,
     excel_path: Optional[str] = None,
     default_site_id: str = "site_1",
-    default_box_size: float = 20.0,
+    default_box_size: Optional[float] = None,
     curated_receptors: Optional[List[str]] = None,
     curated_ligands: Optional[List[str]] = None,
     curated_mapping: Optional[Dict[str, List[str]]] = None,
@@ -789,6 +789,7 @@ def run_prepare_pairlist(
     freeze: bool = False,
     prompt_protein_aliases: bool = False,
     prompt_ligand_aliases: bool = False,
+    raw_ligands: Optional[str] = None,
 ) -> WorkflowStepResult:
     from docking.preparation.excel_sites import load_site_catalog_from_summary
     from docking.preparation.pair_curation import materialize_pair_curation_round, upsert_pair_curation_round
@@ -894,6 +895,7 @@ def run_prepare_pairlist(
             curated_ligands=curated_ligands,
             curated_mapping=curated_mapping,
             layout_profile=layout_profile,
+            raw_ligands=Path(raw_ligands).expanduser() if raw_ligands else None,
         )
 
     summary.setdefault("protein_alias_file", alias_outputs.get("protein_alias_file", ""))
@@ -1549,7 +1551,7 @@ def run_analysis_comparative(
     min_affinity_advantage: float = 0.0,
     max_rerun_pairs: int = 0,
     pair_allowlist: Optional[str] = None,
-    consensus_mode: str = "dockbox_geometric",
+    consensus_mode: str = "consensus_rank_geometry_qc_v2",
     rescoring_scope: str = "top_n_per_protein",
     rescoring_top_n: int = 3,
     prompt_protein_names: bool = False,
@@ -1789,10 +1791,12 @@ def run_analysis_md_inputs(
     project_dir: str,
     *,
     engine: str,
-    tags_file: str,
-    receptor_map: str,
-    ph: float,
-    protonation_policy: str,
+    tags_file: Optional[str] = None,
+    receptor_map: Optional[str] = None,
+    ph: Optional[float] = None,
+    protonation_policy: Optional[str] = None,
+    reprotonate_at_ph: Optional[float] = None,
+    auto_maps: bool = False,
     topology_map: Optional[str] = None,
     charge_map: Optional[str] = None,
     ligand_formats: Optional[List[str]] = None,
@@ -1800,28 +1804,61 @@ def run_analysis_md_inputs(
     protonate: bool = True,
     force: bool = False,
 ) -> WorkflowStepResult:
-    """Request the strict, optional md_inputs artifact and expose row failures."""
-    from docking.project_layout import post_docking_root
-    from post_docking_analysis.md_inputs import MDInputsRequest
+    """Request the strict, optional md_inputs artifact and expose row failures.
+
+    Spec 036 R6: map files that were not given are generated from the project. Spec 036 R1b: the MD
+    ligand is the docked microspecies unless an explicit re-protonation pH is given.
+    """
+    from docking.project_layout import ProtonationPolicyConflict, post_docking_root
+    from post_docking_analysis.md_inputs import (
+        MDInputsRequest,
+        MDMapError,
+        check_request_protonation_against_project,
+        resolve_md_input_maps,
+    )
     from post_docking_analysis.multi_engine_pipeline import MultiEngineAnalysisPipeline
 
     root = Path(project_dir).expanduser().resolve()
-    request = MDInputsRequest.from_dict(
-        {
-            "project_dir": str(root),
-            "engine": engine,
-            "tags_file": tags_file,
-            "receptor_map": receptor_map,
-            "topology_map": topology_map or "",
-            "charge_map": charge_map or "",
-            "pH": ph,
-            "protonation_policy": protonation_policy,
-            "ligand_formats": ligand_formats or ["mol2"],
-            "consumer_profile": consumer_profile,
-            "protonate": protonate,
-            "force": force,
-        }
-    )
+    try:
+        maps = resolve_md_input_maps(
+            root,
+            engine,
+            tags_file=Path(tags_file).expanduser().resolve() if tags_file else None,
+            receptor_map=Path(receptor_map).expanduser().resolve() if receptor_map else None,
+            topology_map=Path(topology_map).expanduser().resolve() if topology_map else None,
+            auto_maps=bool(auto_maps),
+        )
+    except MDMapError as exc:
+        return _result(
+            "analyze.md_inputs",
+            "blocked",
+            root,
+            inputs={"engine": engine},
+            notes=[f"md_input_map_unavailable:{exc.reason}"],
+        )
+    try:
+        request = MDInputsRequest.from_dict(
+            {
+                "project_dir": str(root),
+                "engine": engine,
+                "tags_file": maps["tags_file"],
+                "receptor_map": maps["receptor_map"],
+                "topology_map": maps["topology_map"] or "",
+                "charge_map": charge_map or "",
+                "pH": ph,
+                "protonation_policy": protonation_policy or "",
+                "reprotonate_at_ph": reprotonate_at_ph,
+                "ligand_formats": ligand_formats or ["mol2"],
+                "consumer_profile": consumer_profile,
+                "protonate": protonate,
+                "force": force,
+            }
+        )
+        check_request_protonation_against_project(root, request)
+    except ProtonationPolicyConflict as exc:
+        return _result("analyze.md_inputs", "blocked", root, inputs={"engine": engine}, notes=[str(exc)])
+    except ValueError as exc:
+        return _result("analyze.md_inputs", "blocked", root, inputs={"engine": engine}, notes=[str(exc)])
     session_dir = post_docking_root(root) / "sessions" / datetime.now().strftime("md_inputs_%Y%m%d_%H%M%S")
     pipeline = MultiEngineAnalysisPipeline(
         project_dir=str(root),

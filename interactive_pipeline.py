@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import Optional
 
 # Import the core pipeline
-from core_pipeline import MolecularDockingPipeline, EXCEL_AVAILABLE
+from core_pipeline import (
+    MolecularDockingPipeline,
+    EXCEL_AVAILABLE,
+    centre_method_from_provenance,
+    excel_cell_value,
+)
 
 if EXCEL_AVAILABLE:
     from openpyxl import Workbook
@@ -501,7 +506,10 @@ def add_to_excel_workbook(workbook, pdb_id, results):
         
         # Add results
         for key, value in results.items():
-            ws.append([normalized_pdb, key, value])
+            ws.append([normalized_pdb, key, excel_cell_value(value)])
+        centre_method = centre_method_from_provenance(results.get("binding_site_center_provenance"))
+        if centre_method:
+            ws.append([normalized_pdb, "binding_site_center_method", centre_method])
         
     except Exception as e:
         print(f"⚠️  Failed to add results to Excel: {e}")

@@ -150,7 +150,7 @@ def test_pairlist_preserves_cocrystal_metadata(monkeypatch, tmp_path: Path) -> N
     proteins.mkdir()
     ligands.mkdir()
     (proteins / "1IEP_receptor.pdbqt").write_text("ATOM\n", encoding="utf-8")
-    (ligands / "1IEP_ligand_STI_A_201.pdbqt").write_text("ATOM\n", encoding="utf-8")
+    (ligands / "1IEP_ligand_STI_A_201.pdbqt").write_text("ATOM      1  C   LIG A   1       0.000   0.000   0.000  1.00  0.00     0.000 C\nATOM      2  C   LIG A   1       1.500   0.000   0.000  1.00  0.00     0.000 C\nATOM      3  O   LIG A   1       0.000   1.500   0.000  1.00  0.00     0.000 OA\n", encoding="utf-8")
 
     site_catalog = pd.DataFrame(
         [

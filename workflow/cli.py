@@ -258,11 +258,32 @@ Examples:
     workflow_jump.add_argument("--winner-only", action="store_true", help="Only promote pairs where the target engine wins against the other engines")
     workflow_jump.add_argument("--min-affinity-advantage", type=float, default=0.0, help="Require the target engine to beat the best competing engine by at least this many kcal/mol")
     workflow_jump.add_argument("--max-rerun-pairs", type=int, default=0, help="Optional global cap on promoted exhaustive rerun pairs")
+    workflow_protonation = workflow_sub.add_parser(
+        "protonation-policy",
+        help="Store the project's one protonation policy (receptor and ligand pH, force field, ligand policy)",
+    )
+    workflow_protonation.add_argument("--project-dir", required=True, help="Project root (must have a manifest)")
+    workflow_protonation.add_argument("--receptor-ph", type=float, required=True, help="PDB2PQR pH (explicit; no default)")
+    workflow_protonation.add_argument(
+        "--receptor-force-field", required=True, type=str.upper, choices=list(PDB2PQR_FORCE_FIELDS),
+        help="PDB2PQR force field (explicit; no default)",
+    )
+    workflow_protonation.add_argument(
+        "--ligand-policy", required=True, choices=["ph_model", "explicit_state", "as_input"],
+        help="Ligand protonation policy for the project",
+    )
+    workflow_protonation.add_argument("--ligand-ph", type=float, help="Open Babel pH model pH (required for ph_model)")
+    workflow_protonation.add_argument(
+        "--ligand-state-map", help="CSV with columns ligand and smiles and/or net_charge (required for explicit_state); stored with its SHA-256",
+    )
+    workflow_protonation.add_argument(
+        "--replace", action="store_true", help="Replace a stored policy whose values differ (otherwise a difference is refused)",
+    )
     workflow_jump.add_argument("--pair-allowlist", help="Optional TXT/CSV file restricting promotion to explicit pair tags or receptor/site_id/ligand rows")
     workflow_jump.add_argument(
         "--consensus-mode",
-        choices=["dockbox_geometric", "weighted_hybrid", "strict_consensus", "favorite_guardrails", "consensus_rank_geometry_qc_v2"],
-        default="dockbox_geometric",
+        choices=["consensus_rank_geometry_qc_v2"],
+        default="consensus_rank_geometry_qc_v2",
         help="Consensus policy for comparative hit ranking and rerun promotion",
     )
     workflow_jump.add_argument(
@@ -330,6 +351,10 @@ Examples:
         ("prepare-both", "Prepare receptors and ligands for docking"),
     ]:
         command = pdb_sub.add_parser(command_name, help=help_text)
+        command.add_argument(
+            "--project-dir",
+            help="Project root whose protonation policy (Spec 036 R1a) supplies values not given explicitly",
+        )
         command.add_argument("--receptors-input", help="Raw receptors input directory")
         command.add_argument("--ligands-input", help="Raw ligands input directory")
         command.add_argument("--receptors-output", help="Prepared receptors output directory")
@@ -354,9 +379,9 @@ Examples:
         command.add_argument(
             "--protonation-policy",
             choices=["ph_model", "explicit_state", "as_input"],
-            default="ph_model",
+            default=None,
             help=(
-                "Ligand protonation policy. ph_model (default, human review flagged): Open Babel pH model. "
+                "Ligand protonation policy (default ph_model when no project policy is stored). ph_model: Open Babel pH model, human review flagged. "
                 "explicit_state: exact microspecies or approved net charge from --protonation-state-map. "
                 "as_input: keep the input hydrogens and charges."
             ),
@@ -402,7 +427,18 @@ Examples:
     prep_pairlist.add_argument("--prepared-ligands", help="Prepared ligands directory override")
     prep_pairlist.add_argument("--excel", help="multi_pdb_analysis.xlsx override")
     prep_pairlist.add_argument("--default-site-id", default="site_1")
-    prep_pairlist.add_argument("--default-box-size", type=float, default=20.0)
+    prep_pairlist.add_argument(
+        "--raw-ligands",
+        help="Raw ligand structures in the crystal frame (reference for box containment checks; defaults to the project manifest)",
+    )
+    prep_pairlist.add_argument(
+        "--default-box-size",
+        "--box-size",
+        dest="default_box_size",
+        type=float,
+        default=None,
+        help="Explicit cubic box edge (A) -> user_fixed. Omit for rg_scaled_v1 (2.9 x ligand Rg).",
+    )
     prep_pairlist.add_argument("--curated-receptors", help="Comma-separated receptor selection for curated_cartesian")
     prep_pairlist.add_argument("--curated-ligands", help="Comma-separated ligand selection for curated_cartesian")
     prep_pairlist.add_argument(
@@ -425,7 +461,14 @@ Examples:
     prep_project.add_argument("--raw-proteins", help="Optional raw proteins directory")
     prep_project.add_argument("--raw-ligands", help="Optional raw ligands directory")
     prep_project.add_argument("--default-site-id", default="site_1")
-    prep_project.add_argument("--default-box-size", type=float, default=20.0)
+    prep_project.add_argument(
+        "--default-box-size",
+        "--box-size",
+        dest="default_box_size",
+        type=float,
+        default=None,
+        help="Explicit cubic box edge (A) -> user_fixed. Omit for rg_scaled_v1 (2.9 x ligand Rg).",
+    )
     prep_project.add_argument("--asset-mode", choices=["symlink", "copy"], default="symlink")
     prep_project.add_argument("--engines", default="gnina,vina,smina,autodock4")
     prep_project.add_argument("--project-name")
@@ -468,16 +511,36 @@ Examples:
     )
     analyze_md_inputs.add_argument("--project-dir", required=True, help="Canonical project root")
     analyze_md_inputs.add_argument("--engine", required=True, choices=["gnina", "vina", "smina"])
-    analyze_md_inputs.add_argument("--tags-file", required=True, help="TXT or CSV containing the exact requested tags")
-    analyze_md_inputs.add_argument("--receptor-map", required=True, help="CSV mapping tags/proteins to prepared receptor PDB files")
+    analyze_md_inputs.add_argument(
+        "--tags-file",
+        help="TXT or CSV containing the exact requested tags (generated from the best-pose table when omitted)",
+    )
+    analyze_md_inputs.add_argument(
+        "--receptor-map",
+        help="CSV mapping tags/proteins to prepared receptor PDB files (generated from the receptor lineage when omitted)",
+    )
     analyze_md_inputs.add_argument("--topology-map", help="CSV mapping Vina/Smina tags to topology files and atom permutations")
     analyze_md_inputs.add_argument("--charge-map", help="Optional CSV of Scientific Lead-approved integer net charges")
-    analyze_md_inputs.add_argument("--ph", required=True, type=float, help="Explicit target pH for ligand protonation")
+    analyze_md_inputs.add_argument(
+        "--reprotonate-at-ph",
+        type=float,
+        help="Explicit override (Spec 036 R1b): re-protonate the docked ligand at this pH with Open Babel; recorded in provenance",
+    )
+    analyze_md_inputs.add_argument(
+        "--ph",
+        type=float,
+        help="Legacy: only with --protonation-policy openbabel_predicted, where it is the --reprotonate-at-ph value",
+    )
     analyze_md_inputs.add_argument(
         "--protonation-policy",
-        required=True,
         choices=["openbabel_predicted"],
-        help="Approved ligand protonation policy; predicted states require human review",
+        default=None,
+        help="Legacy spelling of the override path (requires --ph). The default exports the docked microspecies",
+    )
+    analyze_md_inputs.add_argument(
+        "--auto-maps",
+        action="store_true",
+        help="Generate tags, receptor and topology maps from the project into .meta/md_inputs_maps (refuses explicit map files)",
     )
     analyze_md_inputs.add_argument(
         "--consumer-profile",
@@ -509,8 +572,8 @@ Examples:
     analyze_comparative.add_argument("--pair-allowlist", help="Optional TXT/CSV file restricting promotion to explicit pair tags or receptor/site_id/ligand rows")
     analyze_comparative.add_argument(
         "--consensus-mode",
-        choices=["dockbox_geometric", "weighted_hybrid", "strict_consensus", "favorite_guardrails", "consensus_rank_geometry_qc_v2"],
-        default="dockbox_geometric",
+        choices=["consensus_rank_geometry_qc_v2"],
+        default="consensus_rank_geometry_qc_v2",
         help="Consensus policy for comparative hit ranking and rerun promotion",
     )
     analyze_comparative.add_argument(
@@ -759,13 +822,13 @@ def _add_dock_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--autodock4-ga-run", type=int)
     parser.add_argument("--autodock4-ls-search-freq", type=float)
     parser.add_argument("--autodock4-torsdof", type=int)
-    parser.add_argument("--exhaustiveness", type=int, default=16)
+    parser.add_argument("--exhaustiveness", type=int, default=32)
     parser.add_argument("--num-modes", type=int, default=20)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--box-scale", type=float, default=1.0)
     parser.add_argument("--box-padding", type=float, default=0.0)
     parser.add_argument("--parameter-mode", choices=["basic", "advanced"], default="basic")
-    parser.add_argument("--parameter-preset", choices=["screening_fast", "balanced", "exhaustive"], default="balanced")
+    parser.add_argument("--parameter-preset", choices=["screening_fast", "balanced", "exhaustive"], default="exhaustive")
     parser.add_argument(
         "--execution-environment",
         choices=["local_cpu", "local_gpu", "conda_env", "container", "remote_hpc"],
@@ -845,7 +908,7 @@ def _add_deploy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--autodock4-ga-run", type=int)
     parser.add_argument("--autodock4-ls-search-freq", type=float)
     parser.add_argument("--autodock4-torsdof", type=int)
-    parser.add_argument("--exhaustiveness", type=int, default=16)
+    parser.add_argument("--exhaustiveness", type=int, default=32)
     parser.add_argument("--num-modes", type=int, default=20)
     parser.add_argument("--slurm-time")
     parser.add_argument("--slurm-mem")
@@ -1146,6 +1209,124 @@ def _build_submit_argv(args: argparse.Namespace) -> List[str]:
     return argv
 
 
+def _validate_md_inputs_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Spec 036 R1b: a bare --ph is ambiguous; re-protonation is always explicit."""
+    legacy = args.protonation_policy == "openbabel_predicted"
+    override = args.reprotonate_at_ph is not None
+    if args.ph is not None and not (legacy or override):
+        parser.error(
+            "--ph alone is ambiguous: the default md-inputs export uses the docked microspecies. "
+            "Use --reprotonate-at-ph <pH> for an explicit override, or --protonation-policy openbabel_predicted with --ph."
+        )
+    if legacy and args.ph is None and not override:
+        parser.error("--protonation-policy openbabel_predicted requires --ph (its legacy spelling of --reprotonate-at-ph)")
+    if args.auto_maps and any((args.tags_file, args.receptor_map, args.topology_map)):
+        parser.error("--auto-maps generates every map; do not also pass --tags-file, --receptor-map or --topology-map")
+
+
+def _run_protonation_policy_command(args: argparse.Namespace) -> int:
+    """Spec 036 R1a: store the project's one protonation policy. A different stored value is refused unless --replace."""
+    import json
+
+    from docking.project_layout import ProtonationPolicyConflict, set_protonation_policy
+
+    project = Path(args.project_dir).expanduser().resolve()
+    try:
+        block = set_protonation_policy(
+            project,
+            receptor_ph=args.receptor_ph,
+            receptor_force_field=args.receptor_force_field,
+            ligand_policy=args.ligand_policy,
+            ligand_ph=args.ligand_ph,
+            ligand_state_map=Path(args.ligand_state_map).expanduser() if args.ligand_state_map else None,
+            source="user_entered",
+            replace=bool(args.replace),
+        )
+    except ProtonationPolicyConflict as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except (ValueError, OSError) as exc:
+        print(f"protonation_policy_not_stored: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps({"protonation_policy": block, "manifest_project": str(project)}, indent=2))
+    return 0
+
+
+def _resolve_prepare_protonation(args: argparse.Namespace, parser: argparse.ArgumentParser) -> dict:
+    """Spec 036 R1a: explicit pdb prepare values, checked against and completed from the project policy.
+
+    Without a project policy the Spec 034 rules apply unchanged: explicit values are required.
+    """
+    from docking.project_layout import ProtonationPolicyConflict, resolve_protonation_inputs
+
+    command = args.pdb_command
+    receptor_prep = command in {"prepare-protein", "prepare-both"}
+    ligand_prep = command in {"prepare-ligand", "prepare-both"}
+    if getattr(args, "project_dir", None):
+        try:
+            resolved = resolve_protonation_inputs(
+                Path(args.project_dir).expanduser().resolve(),
+                receptor_ph=args.ph if receptor_prep else None,
+                receptor_force_field=args.force_field if receptor_prep else None,
+                ligand_policy=args.protonation_policy if ligand_prep else None,
+                ligand_ph=args.ph if ligand_prep else None,
+                ligand_state_map=args.protonation_state_map if ligand_prep else None,
+            )
+        except ProtonationPolicyConflict as exc:
+            parser.error(str(exc))
+        except (ValueError, OSError) as exc:
+            parser.error(f"protonation_policy_unusable: {exc}")
+    else:
+        resolved = {
+            "receptor_ph": args.ph if receptor_prep else None,
+            "receptor_ph_source": "user_entered" if (receptor_prep and args.ph is not None) else None,
+            "receptor_force_field": args.force_field if receptor_prep else None,
+            "force_field_source": "user_entered" if (receptor_prep and args.force_field is not None) else None,
+            "ligand_policy": args.protonation_policy,
+            "ligand_ph": args.ph if ligand_prep else None,
+            "ligand_ph_source": "user_entered" if (ligand_prep and args.ph is not None) else None,
+            "ligand_state_map": args.protonation_state_map,
+        }
+    receptor_ph, ligand_ph = resolved["receptor_ph"], resolved["ligand_ph"]
+    if receptor_prep and ligand_prep and receptor_ph is not None and ligand_ph is not None:
+        if abs(float(receptor_ph) - float(ligand_ph)) > 1e-9:
+            parser.error(
+                f"pdb {command} uses one pH for PDB2PQR and the ligand pH model, but the project policy holds "
+                f"receptor_ph={receptor_ph} and ligand_ph={ligand_ph}. Run prepare-protein and prepare-ligand separately."
+            )
+    if receptor_prep and receptor_ph is not None:
+        ph, ph_source = receptor_ph, resolved["receptor_ph_source"]
+    else:
+        ph, ph_source = ligand_ph, resolved["ligand_ph_source"]
+    policy = resolved["ligand_policy"] or "ph_model"
+    state_map = resolved["ligand_state_map"]
+    if receptor_prep:
+        if ph is None:
+            parser.error(
+                f"pdb {command} requires --ph (the PDB2PQR pH). No default pH is applied; pass it explicitly, for example --ph 7.4."
+            )
+        if resolved["receptor_force_field"] is None:
+            parser.error(
+                f"pdb {command} requires --force-field (one of: {', '.join(PDB2PQR_FORCE_FIELDS)}). "
+                "No default is applied; AMBER is the usual choice."
+            )
+    if ligand_prep and policy == "ph_model" and ph is None:
+        parser.error(
+            "pdb prepare-ligand with the default ph_model policy requires --ph. No default pH is applied; "
+            "pass it explicitly, or choose --protonation-policy explicit_state or as_input."
+        )
+    if ligand_prep and policy == "explicit_state" and not state_map:
+        parser.error("--protonation-policy explicit_state requires --protonation-state-map <csv>")
+    return {
+        "ph": float(ph) if ph is not None else None,
+        "ph_source": ph_source if ph is not None else None,
+        "force_field": resolved["receptor_force_field"],
+        "force_field_source": resolved["force_field_source"] if resolved["receptor_force_field"] else None,
+        "protonation_policy": policy,
+        "protonation_state_map": str(state_map) if state_map else None,
+    }
+
+
 def _run_analysis_dispatch(args: argparse.Namespace, target: str) -> int:
     from .execution import run_analysis_comparative, run_analysis_favorite, run_analysis_md_inputs, run_analysis_target
 
@@ -1158,12 +1339,14 @@ def _run_analysis_dispatch(args: argparse.Namespace, target: str) -> int:
         result = run_analysis_md_inputs(
             args.project_dir,
             engine=args.engine,
-            tags_file=args.tags_file,
-            receptor_map=args.receptor_map,
+            tags_file=getattr(args, "tags_file", None),
+            receptor_map=getattr(args, "receptor_map", None),
             topology_map=getattr(args, "topology_map", None),
             charge_map=getattr(args, "charge_map", None),
-            ph=args.ph,
-            protonation_policy=args.protonation_policy,
+            ph=getattr(args, "ph", None),
+            protonation_policy=getattr(args, "protonation_policy", None),
+            reprotonate_at_ph=getattr(args, "reprotonate_at_ph", None),
+            auto_maps=bool(getattr(args, "auto_maps", False)),
             ligand_formats=getattr(args, "ligand_formats", None),
             consumer_profile=args.consumer_profile,
             protonate=not bool(getattr(args, "no_protonate", False)),
@@ -1184,7 +1367,7 @@ def _run_analysis_dispatch(args: argparse.Namespace, target: str) -> int:
             min_affinity_advantage=float(getattr(args, "min_affinity_advantage", 0.0) or 0.0),
             max_rerun_pairs=int(getattr(args, "max_rerun_pairs", 0) or 0),
             pair_allowlist=getattr(args, "pair_allowlist", None),
-            consensus_mode=str(getattr(args, "consensus_mode", "dockbox_geometric") or "dockbox_geometric"),
+            consensus_mode=str(getattr(args, "consensus_mode", "consensus_rank_geometry_qc_v2") or "consensus_rank_geometry_qc_v2"),
             rescoring_scope=str(getattr(args, "rescoring_scope", "top_n_per_protein") or "top_n_per_protein"),
             rescoring_top_n=int(getattr(args, "rescoring_top_n", 3) or 3),
             prompt_protein_names=bool(getattr(args, "prompt_protein_names", False)),
@@ -1378,6 +1561,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             for line in summarize_state(Path(args.project_dir).expanduser().resolve()):
                 print(line)
             return 0
+        if args.workflow_command == "protonation-policy":
+            return _run_protonation_policy_command(args)
         if args.workflow_command == "jump":
             return _run_analysis_dispatch(args, args.target)
         parser.error("A workflow subcommand is required")
@@ -1429,41 +1614,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "prepare-ligand": "pdb.prepare_ligand",
                 "prepare-both": "pdb.prepare_both",
             }[args.pdb_command]
-            if args.pdb_command in {"prepare-protein", "prepare-both"}:
-                if args.ph is None:
-                    parser.error(
-                        f"pdb {args.pdb_command} requires --ph (the PDB2PQR pH). No default pH is applied; "
-                        "pass it explicitly, for example --ph 7.4."
-                    )
-                if args.force_field is None:
-                    parser.error(
-                        f"pdb {args.pdb_command} requires --force-field (one of: {', '.join(PDB2PQR_FORCE_FIELDS)}). "
-                        "No default is applied; AMBER is the usual choice."
-                    )
-            if args.pdb_command == "prepare-ligand" and args.protonation_policy == "ph_model" and args.ph is None:
-                parser.error(
-                    "pdb prepare-ligand with the default ph_model policy requires --ph. No default pH is applied; "
-                    "pass it explicitly, or choose --protonation-policy explicit_state or as_input."
-                )
-            if args.protonation_policy == "explicit_state" and not args.protonation_state_map:
-                parser.error("--protonation-policy explicit_state requires --protonation-state-map <csv>")
+            resolved = _resolve_prepare_protonation(args, parser)
             result = run_autodock_prepare(
                 target,
                 args.receptors_input,
                 args.ligands_input,
                 args.receptors_output,
                 args.ligands_output,
-                force_field=args.force_field,
-                force_field_source="user_entered" if args.force_field is not None else None,
-                ph=args.ph,
-                ph_source="user_entered" if args.ph is not None else None,
+                force_field=resolved["force_field"],
+                force_field_source=resolved["force_field_source"],
+                ph=resolved["ph"],
+                ph_source=resolved["ph_source"],
                 ligand_preparation_backend=args.ligand_backend,
                 selected_engines=[token.strip().lower() for token in str(getattr(args, "selected_engines", "") or "").split(",") if token.strip()],
                 autodocktools_prepare_ligand4=args.autodocktools_prepare_ligand4,
                 autodocktools_prepare_receptor4=args.autodocktools_prepare_receptor4,
                 autodocktools_python=args.autodocktools_python,
-                protonation_policy=args.protonation_policy,
-                protonation_state_map=args.protonation_state_map,
+                protonation_policy=resolved["protonation_policy"],
+                protonation_state_map=resolved["protonation_state_map"],
             )
             return 0 if result.status == "completed" else 1
         parser.error("A pdb subcommand is required")
@@ -1493,6 +1661,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 freeze=bool(args.freeze),
                 prompt_protein_aliases=bool(args.prompt_protein_aliases),
                 prompt_ligand_aliases=bool(args.prompt_ligand_aliases),
+                raw_ligands=args.raw_ligands,
             )
             print(f"Pairlist mode: {result.outputs.get('pair_mode', args.mode or '')}")
             if round_id := result.outputs.get("round_id"):
@@ -1509,6 +1678,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"Ligand alias file: {ligand_alias_file}")
             if pair_count := result.outputs.get("pair_count"):
                 print(f"Pair count: {pair_count}")
+            for note in getattr(result, "notes", None) or []:
+                if str(note).startswith("[box]"):
+                    print(f"⚠️  {note}")
             return 0 if result.status == "completed" else 1
         if args.prep_command == "project":
             from .execution import run_prepare_project
@@ -1554,6 +1726,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.group == "analyze":
         if args.analyze_command == "md-inputs":
+            _validate_md_inputs_args(args, parser)
             return _run_analysis_dispatch(args, "analyze.md_inputs")
         if args.analyze_command == "comparative":
             return _run_analysis_dispatch(args, "analyze.comparative")
