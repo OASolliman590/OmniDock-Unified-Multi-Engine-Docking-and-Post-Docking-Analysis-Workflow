@@ -119,6 +119,8 @@ class DockingEngineRunner(ABC):
             "energy_range": self.effective_energy_range,
             "replicates": self.effective_replicates,
             "seeds": seeds,
+            # Spec 037 R3a: where exhaustiveness came from (user_explicit, basic_preset:<name>, advanced_default).
+            "exhaustiveness_source": str(self.runtime.get("exhaustiveness_source") or ""),
             # Spec 036 R5c/R5d: where num_modes came from (user_explicit, basic_preset:<name>, advanced_default).
             "num_modes_source": str(self.runtime.get("num_modes_source") or ""),
             "replicate_contract": "specs/036-scientific-consistency/replicate_contract.md",

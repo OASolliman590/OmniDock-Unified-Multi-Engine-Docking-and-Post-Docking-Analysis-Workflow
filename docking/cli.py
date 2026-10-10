@@ -550,8 +550,8 @@ def dock_main(argv=None) -> int:
     parser.add_argument(
         "--exhaustiveness",
         type=int,
-        default=EXHAUSTIVENESS_LEVEL,
-        help="Exhaustiveness (Spec 036 R5c default 32; basic mode uses the preset value)",
+        default=None,
+        help="Exhaustiveness. Advanced mode default 32. Basic mode takes exhaustiveness from --parameter-preset and refuses this flag.",
     )
     parser.add_argument(
         "--num-modes",
@@ -624,6 +624,10 @@ def dock_main(argv=None) -> int:
     if args.seed is None:
         print("❌ `--seed` is required for every dock run (Spec 036 R5b). Replicates use seed, seed+1, ...")
         return 1
+    # Spec 037 R3a: an explicit --exhaustiveness is kept distinct from the default, so basic mode can refuse it.
+    exhaustiveness_explicit = args.exhaustiveness is not None
+    if not exhaustiveness_explicit:
+        args.exhaustiveness = EXHAUSTIVENESS_LEVEL
     # Spec 036: keep an explicit --num-modes distinct from the default, so basic mode can refuse it.
     num_modes_explicit = args.num_modes is not None
     if not num_modes_explicit:
@@ -660,6 +664,7 @@ def dock_main(argv=None) -> int:
         energy_range=float(args.energy_range),
         replicates=int(args.replicates),
         num_modes_explicit=num_modes_explicit,
+        exhaustiveness_explicit=exhaustiveness_explicit,
     )
     schema_errors, schema_warnings = validate_parameter_schema(parameter_schema, engines)
     for warning in schema_warnings:
@@ -727,6 +732,7 @@ def dock_main(argv=None) -> int:
         effective = results[engine]["effective"]
         print(
             f"   {engine} effective: exhaustiveness={effective['exhaustiveness']} "
+            f"(source: {effective.get('exhaustiveness_source') or 'unrecorded'}) "
             f"num_modes={effective['num_modes']} (source: {effective.get('num_modes_source') or 'unrecorded'}) "
             f"energy_range={effective['energy_range']} "
             f"replicates={effective['replicates']} seeds={effective['seeds']}"

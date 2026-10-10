@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -12,16 +14,22 @@ from ..box_policy import (
     compute_ligand_box,
     containment_status,
     join_messages,
+    ligand_preparation_record,
     load_reference_coordinates,
 )
 from ..project_layout import load_manifest
 from ..project_layout import (
     PAIRLIST_COLUMNS,
     LAYOUT_DOCKING_LEGACY,
+    check_preparation_policy_current,
     detect_layout_profile,
     ensure_project_layout,
+    manifest_path,
     pair_intent_path,
+    pair_protonation_columns,
     pairlist_path,
+    resolve_entity_protonation,
+    save_manifest,
 )
 from .excel_sites import load_site_catalog_from_summary
 from .project_aliases import (
@@ -57,6 +65,12 @@ PAIR_INTENT_COLUMNS = [
     "edge_angstrom",
     "box_containment_status",
     "box_warnings",
+    "rg_source",
+    "receptor_policy_level",
+    "ligand_policy_level",
+    "receptor_ph",
+    "ligand_ph",
+    "pair_protonation_status",
 ]
 
 # PAIRLIST_COLUMNS is defined once in docking.project_layout (Spec 036 R5a box columns included).
@@ -131,6 +145,23 @@ def list_prepared_asset_names(directory: Path, asset_type: str) -> List[str]:
     return [path.name for path in _list_unique_assets(directory, suffixes)]
 
 
+def _preparation_record_for(kind: str, prepared_file: Path) -> Optional[Dict[str, object]]:
+    """Spec 037 R1d: the preparation record of a prepared receptor (``.preparation.json``) or ligand (step report)."""
+    if kind == "receptor":
+        record = Path(prepared_file).parent / f"{Path(prepared_file).name}.preparation.json"
+        if not record.is_file():
+            return None
+        try:
+            payload = json.loads(record.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            from docking.project_layout import ProtonationPolicyError
+
+            raise ProtonationPolicyError("preparation_record_unreadable", f"{record}: {exc}") from exc
+        return payload if isinstance(payload, dict) else None
+    record_payload, _reason = ligand_preparation_record(prepared_file)
+    return record_payload
+
+
 def _write_csv(path: Path, rows: Iterable[Dict[str, object]], fieldnames: List[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as handle:
@@ -199,6 +230,15 @@ def build_pairlists(
     _write_csv(pairlist_file, summary["pairlist_rows"], PAIRLIST_COLUMNS)
     summary["pairlist_file"] = str(pairlist_file)
     summary["pair_intent_file"] = str(intent_file)
+    # Spec 037 R1c: the pair protonation marks are recorded in the project (dock) manifest as well.
+    if manifest_path(root, profile).is_file():
+        manifest = load_manifest(root, profile)
+        manifest["pair_protonation"] = {
+            "pairlist_file": str(pairlist_file),
+            "pair_count": int(summary.get("pair_count", 0)),
+            "status_counts": dict(summary.get("pair_protonation_status_counts", {})),
+        }
+        save_manifest(root, manifest, layout_profile=profile)
     return {key: value for key, value in summary.items() if key not in {"pairlist_rows", "pair_intent_rows"}}
 
 
@@ -249,6 +289,16 @@ def generate_pairlists(
     pairlist_rows: List[Dict[str, object]] = []
     seen: set[Tuple[str, str, str]] = set()
     reference_cache: Dict[str, object] = {}
+    # Spec 037 R1: each receptor and each ligand is resolved and checked once; every pair reuses it.
+    policy_cache: Dict[Tuple[str, str], Dict[str, object]] = {}
+
+    def resolved_policy(kind: str, prepared_file: Path) -> Dict[str, object]:
+        key = (kind, prepared_file.name)
+        if key not in policy_cache:
+            resolution = resolve_entity_protonation(root, kind, prepared_file.name)
+            check_preparation_policy_current(_preparation_record_for(kind, prepared_file), resolution)
+            policy_cache[key] = resolution
+        return policy_cache[key]
     # The containment reference must be in receptor (crystal) frame. Prepared ligand files are
     # re-positioned by preparation, so only raw ligand structures are used as the reference.
     raw_reference_dir = _resolve_raw_ligand_dir(root, raw_ligands)
@@ -300,13 +350,21 @@ def generate_pairlists(
         reference_label, reference_coords = reference_coords_for_site(site_row)
         center_xyz = (float(site_row["center_x"]), float(site_row["center_y"]), float(site_row["center_z"]))
         containment = containment_status(center_xyz, box.edge_angstrom, reference_coords)
-        row_warnings = box_warnings(
-            pair_label=f"{receptor_source.stem} x {ligand_source.name}",
-            edge_angstrom=box.edge_angstrom,
-            containment=containment,
-            reference_label=reference_label,
-        )
+        row_warnings = [
+            *box.warnings,
+            *box_warnings(
+                pair_label=f"{receptor_source.stem} x {ligand_source.name}",
+                edge_angstrom=box.edge_angstrom,
+                containment=containment,
+                reference_label=reference_label,
+            ),
+        ]
         warnings.extend(row_warnings)
+        # Spec 037 R1c: pair marks from the resolved receptor and ligand policies (marks, not blocks).
+        pair_protonation = pair_protonation_columns(
+            resolved_policy("receptor", receptor_source),
+            resolved_policy("ligand", ligand_source),
+        )
         core_row = {
             "receptor": receptor_source.name,
             "ligand": ligand_source.name,
@@ -322,6 +380,8 @@ def generate_pairlists(
             "edge_angstrom": float(box.edge_angstrom),
             "box_containment_status": str(containment["status"]),
             "box_warnings": join_messages(row_warnings),
+            "rg_source": box.rg_source,
+            **pair_protonation,
             "protein_display_name": protein_display_name,
             "ligand_display_name": ligand_display_name,
             "pdb_id": pdb_id,
@@ -533,4 +593,5 @@ def generate_pairlists(
         "has_cocrystal_benchmark_rows": any(bool(row["is_cocrystal_benchmark"]) for row in pair_intent_rows),
         "protein_alias_file": alias_files["protein_alias_file"],
         "ligand_alias_file": alias_files["ligand_alias_file"],
+        "pair_protonation_status_counts": dict(Counter(str(row["pair_protonation_status"]) for row in pairlist_rows)),
     }

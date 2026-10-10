@@ -48,9 +48,51 @@ Unknown or removed mode names used to fall back silently to `dockbox_geometric` 
   - Dropped: `engine` and the raw `affinity_kcal_mol` winner columns.
 - **Composite ranking:** not added to this file. The v2 composite (`consensus_rank_geometry_qc_v2`) is the only
   cross-engine ranking and is in `consensus_ranked_hits.csv`.
-- **Not changed (remaining, see tasks.md T008):** `MultiEngineAnalysisPipeline._best_by_tag` still takes the minimum
-  raw affinity across engines. It feeds the legacy downstream tables (`affinity_analysis.best_poses`, `top_overall`,
-  `best_per_protein`) in the simplified bridge.
+- **Changed (Spec 037 R3b, closes the T008 item):** `MultiEngineAnalysisPipeline._best_by_tag` no longer takes the minimum
+  raw affinity across engines. See the next section.
+
+## Spec 037 R3b: summaries use the consensus rank
+
+Lead decision 6 (2026-10-10). The ranking is decided by `build_consensus_rankings` on the same scores that feed the
+summary, so no DAG ordering is needed:
+
+| Project | `ranking_method` | Source |
+|---|---|---|
+| Two or more engines | `consensus_rank_geometry_qc_v2` | `consensus_rank_global`, `consensus_rank_within_protein`, `consensus_score` |
+| One engine | `single_engine_native_v1` | the same columns, from the single-engine native rule |
+| A tag whose v2 case is incomplete (`consensus_status = consensus_incomplete`) | `ranking_unavailable_consensus_incomplete` | no rank and no score. It is never ordered by a raw affinity. |
+
+- **Winner engine per tag.** A ranked tag keeps the pose of its `winner_engine` (the engine with the highest per-engine
+  rank percentile in its complete case). The pose inside each engine is still chosen by `select_best_pose_rows`.
+  `winner_engine` is written to the best-pose rows.
+- **Changed outputs** (column names kept, `ranking_method` and the consensus columns added):
+  - `_best_by_tag`: one row per ranked tag, ordered by rank. A tag without a complete v2 case keeps every engine row
+    (one per engine, no winner invented), marked `ranking_unavailable_consensus_incomplete`. Feeds
+    `affinity_analysis.best_poses` in the simplified bridge.
+  - `_build_downstream_results`: `top_overall` (top 10 ranked rows), `best_per_protein` and `best_per_ligand` (the
+    top-ranked row of each group), `protein_summary` and `ligand_summary` (ordered by `top_consensus_rank_global`;
+    `best_affinity` is now the affinity of the top-ranked row, not a minimum across engines).
+  - Simplified bridge `SimplifiedPostDockingPipeline._best_pose_per_protein_ligand` (picks the row by
+    `consensus_rank_global` when present; the old `idxmin` on `vina_affinity` remains only for inputs without a rank).
+  - Single-engine writer `_write_single_engine_reports`: `best_poses.csv` (ordered by rank), `protein_summary.csv`,
+    and `summary.txt` (method, the pose selection key and the native metric, the top-ranked complex).
+  - Comparative consensus call: one engine uses `single_engine_native_v1`, two or more use v2.
+- **Not changed by R3b (remaining raw-affinity uses, for the Scientific Lead to decide):**
+  - `top_pose_selector.build_top_pose_atlas`, default `top_pose_selection_policy = best_affinity`. It sorts by
+    `affinity_kcal_mol` first across engines (`top_pose_per_ligand_global.csv`). The `best_consensus` and `hybrid`
+    policies keep the rank as the primary key. Changing the default is a policy decision.
+  - `_build_pair_competition` (rerun promotion: `is_target_engine_winner`, `affinity_advantage_kcal_mol`,
+    `min_affinity_advantage`). It compares raw affinities across engines per tag.
+  - `_write_cross_engine_visualizations`: the wide table `best_affinity` (min over engines) and `affinity_spread`,
+    plus `_plot_cross_engine_disagreement` and `_plot_cross_engine_per_protein_batches`. These are diagnostics.
+  - `consensus.py` `best_affinity_kcal_mol` (min raw across engines per tag). It is a tie-break in
+    `select_rescoring_candidates` (after `consensus_score`) and a sort key in the polypharmacology summaries.
+  - `_build_downstream_results` `summary_stats` (min, max and mean of `vina_affinity` across engines per complex) and the
+    `mean_affinity` columns of `protein_summary` and `ligand_summary`. These are descriptive aggregates.
+  - `_run_non_gnina_rmsd_bridge`, per-protein RMSD tables sorted by `vina_affinity`.
+- **Single-engine GNINA label (Spec 037 R3c):** `summary.txt` names `cnn_score` as the pose selection key. The
+  single-engine ligand ranking metric is `cnn_affinity`, which the v2 ranking already used. The two are reported on
+  separate lines, and the choice between them is open for the Lead.
 
 ## Spec 031 conflict (for the Scientific Lead)
 

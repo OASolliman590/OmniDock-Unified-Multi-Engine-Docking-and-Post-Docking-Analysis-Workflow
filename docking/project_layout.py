@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import csv
 import json
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -37,6 +38,14 @@ PAIRLIST_COLUMNS = [
     "edge_angstrom",
     "box_containment_status",
     "box_warnings",
+    # Spec 037 R2b: where the ligand Rg came from (ligand_preparation or computed_at_box_step).
+    "rg_source",
+    # Spec 037 R1c pair marks (written by the pairlist builder; marks, not blocks).
+    "receptor_policy_level",
+    "ligand_policy_level",
+    "receptor_ph",
+    "ligand_ph",
+    "pair_protonation_status",
 ]
 
 LAYOUT_CANONICAL = "canonical"
@@ -714,9 +723,370 @@ def set_protonation_policy(
     if file_path is None:
         raise FileNotFoundError(f"No project manifest found under {root}; run workflow init first.")
     payload = json.loads(file_path.read_text(encoding="utf-8"))
+    previous = payload.get(PROTONATION_POLICY_KEY) or {}
+    # Spec 037 R1a: replacing the project default keeps the per-entity overrides.
+    for section in (PROTONATION_RECEPTOR_OVERRIDES, PROTONATION_LIGAND_OVERRIDES):
+        if isinstance(previous.get(section), dict) and previous.get(section):
+            block[section] = dict(previous[section])
     payload[PROTONATION_POLICY_KEY] = block
     file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return block
+
+
+# ---------------------------------------------------------------- Spec 037 R1: layered protonation policy
+#
+# Three levels. The project default is the flat Spec 036 block (``receptor_ph``, ``receptor_force_field``,
+# ``ligand_policy``, ``ligand_ph``, ``ligand_state_map``). ``receptors.<key>`` and ``ligands.<key>`` are
+# per-entity overrides that sit above it. ``<key>`` is the file stem of the receptor or ligand.
+
+PROTONATION_LEVEL_PROJECT = "project"
+PROTONATION_LEVEL_RECEPTOR = "receptor"
+PROTONATION_LEVEL_LIGAND = "ligand"
+PROTONATION_LEVEL_NONE = "none"
+PROTONATION_RECEPTOR_OVERRIDES = "receptors"
+PROTONATION_LIGAND_OVERRIDES = "ligands"
+POLICY_HASH_VERSION = "protonation_effective_v1"
+STALE_PREPARATION_REASON = "stale_preparation_policy_changed"
+UNRECORDED_PREPARATION_REASON = "preparation_policy_unrecorded"
+PAIR_STATUS_COHERENT = "coherent"
+PAIR_STATUS_PH_MISMATCH = "pair_ph_mismatch"
+PAIR_STATUS_EXPLICIT_STATE = "explicit_state_no_ph"
+PAIR_STATUS_AS_INPUT = "as_input_no_ph"
+PAIR_STATUS_RECEPTOR_PH_MISSING = "receptor_ph_missing"
+PAIR_STATUS_NO_POLICY = "no_stored_policy"
+
+
+class ProtonationPolicyError(ValueError):
+    """A layered protonation value cannot be resolved, or a prepared entity is stale (Spec 037 R1)."""
+
+    def __init__(self, reason: str, details: str = "") -> None:
+        self.reason = str(reason)
+        self.details = str(details)
+        super().__init__(f"{self.reason}: {self.details}" if self.details else self.reason)
+
+
+def entity_policy_key(name: object) -> str:
+    """Override key of a receptor or ligand: its file stem (1IEP.pdbqt, 1IEP.pdb and 1IEP all key as 1IEP)."""
+    return Path(str(name or "").strip()).stem
+
+
+def _normalize_net_charge(value: object) -> Optional[object]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text == "" or text.lower() == "none":
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return text
+
+
+def protonation_policy_hash(effective: Dict[str, object]) -> str:
+    """Content hash of the effective values that determine the prepared state (Spec 037 R1d)."""
+    import hashlib
+
+    payload = json.dumps({"version": POLICY_HASH_VERSION, "effective": effective}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _state_map_rows(path: Path) -> Dict[str, Dict[str, object]]:
+    """Raw state-map rows keyed by entity key. No chemistry here: the ligand module validates the rows."""
+    rows: Dict[str, Dict[str, object]] = {}
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        for raw in csv.DictReader(handle):
+            fields = {str(key or "").strip().lower(): str(value or "").strip() for key, value in raw.items()}
+            ligand = fields.get("ligand", "")
+            if ligand:
+                rows.setdefault(
+                    entity_policy_key(ligand),
+                    {"smiles": fields.get("smiles", ""), "net_charge": _normalize_net_charge(fields.get("net_charge", ""))},
+                )
+    return rows
+
+
+def resolve_entity_protonation(project_root: Path, kind: str, name: object) -> Dict[str, object]:
+    """Effective protonation policy of one receptor or ligand and the level it came from (Spec 037 R1a).
+
+    Precedence: ``receptors.<key>`` or ``ligands.<key>`` over the project default. A field an override does
+    not set is inherited from the project default and marked ``project`` in ``field_levels``. Without any
+    stored policy the level is ``none`` and no hash is recorded. A missing explicit state raises
+    ``ProtonationPolicyError`` (fails closed).
+    """
+    if kind not in {"receptor", "ligand"}:
+        raise ValueError(f"unknown protonation entity kind: {kind!r}")
+    root = Path(project_root).expanduser().resolve()
+    key = entity_policy_key(name)
+    result: Dict[str, object] = {
+        "entity_kind": kind,
+        "entity": key,
+        "policy_level": PROTONATION_LEVEL_NONE,
+        "field_levels": {},
+        "effective": None,
+        "policy_hash": None,
+        "policy_hash_version": POLICY_HASH_VERSION,
+    }
+    block = load_protonation_policy(root)
+    if not block:
+        return result
+    if kind == "receptor":
+        override = dict((block.get(PROTONATION_RECEPTOR_OVERRIDES) or {}).get(key) or {})
+        ph = block.get("receptor_ph")
+        force_field = block.get("receptor_force_field")
+        levels = {"receptor_ph": PROTONATION_LEVEL_PROJECT, "receptor_force_field": PROTONATION_LEVEL_PROJECT}
+        if override.get("receptor_ph") is not None:
+            ph = override["receptor_ph"]
+            levels["receptor_ph"] = PROTONATION_LEVEL_RECEPTOR
+        if override.get("receptor_force_field"):
+            force_field = override["receptor_force_field"]
+            levels["receptor_force_field"] = PROTONATION_LEVEL_RECEPTOR
+        effective: Dict[str, object] = {
+            "receptor_ph": float(ph) if ph is not None else None,
+            "receptor_force_field": str(force_field).strip().upper() if force_field else None,
+        }
+        result["policy_level"] = (
+            PROTONATION_LEVEL_RECEPTOR if PROTONATION_LEVEL_RECEPTOR in levels.values() else PROTONATION_LEVEL_PROJECT
+        )
+    else:
+        override = dict((block.get(PROTONATION_LIGAND_OVERRIDES) or {}).get(key) or {})
+        policy = str(block.get("ligand_policy") or "")
+        ph = block.get("ligand_ph")
+        levels = {"ligand_policy": PROTONATION_LEVEL_PROJECT, "ligand_ph": PROTONATION_LEVEL_PROJECT, "explicit_state": PROTONATION_LEVEL_PROJECT}
+        if override.get("ligand_policy"):
+            policy = str(override["ligand_policy"])
+            levels["ligand_policy"] = PROTONATION_LEVEL_LIGAND
+        if override.get("ligand_ph") is not None:
+            ph = override["ligand_ph"]
+            levels["ligand_ph"] = PROTONATION_LEVEL_LIGAND
+        explicit: Optional[Dict[str, object]] = None
+        if policy == "explicit_state":
+            has_inline = bool(str(override.get("smiles") or "").strip()) or _normalize_net_charge(override.get("net_charge")) is not None
+            if has_inline:
+                explicit = {
+                    "smiles": str(override.get("smiles") or "").strip(),
+                    "net_charge": _normalize_net_charge(override.get("net_charge")),
+                }
+                levels["explicit_state"] = PROTONATION_LEVEL_LIGAND
+            else:
+                if block.get("ligand_policy") != "explicit_state" or not block.get("ligand_state_map"):
+                    raise ProtonationPolicyError(
+                        "explicit_state_missing_entry",
+                        f"{key}: no explicit state (ligands.{key} SMILES or net_charge, or a project explicit_state map)",
+                    )
+                state_map = protonation_state_map_path(root, block)
+                row = _state_map_rows(state_map).get(key) if state_map is not None else None
+                if row is None:
+                    raise ProtonationPolicyError("explicit_state_missing_entry", f"{key} has no row in the project state map")
+                if not row["smiles"] and row["net_charge"] is None:
+                    raise ProtonationPolicyError("explicit_state_missing_entry", f"{key}: the state map row has neither smiles nor net_charge")
+                explicit = {"smiles": str(row["smiles"]), "net_charge": row["net_charge"]}
+        effective = {"ligand_policy": policy, "ligand_ph": None, "explicit_state": None}
+        if policy == "ph_model":
+            if ph is None:
+                raise ProtonationPolicyError("ligand_ph_required_for_ph_model", key)
+            effective["ligand_ph"] = float(ph)
+        if policy == "explicit_state":
+            effective["explicit_state"] = explicit
+        result["ligand_policy"] = policy
+        result["ligand_ph"] = effective["ligand_ph"]
+        result["explicit_state"] = explicit
+        result["policy_level"] = (
+            PROTONATION_LEVEL_LIGAND if PROTONATION_LEVEL_LIGAND in levels.values() else PROTONATION_LEVEL_PROJECT
+        )
+    result["field_levels"] = levels
+    if kind == "receptor":
+        result["receptor_ph"] = effective["receptor_ph"]
+        result["receptor_force_field"] = effective["receptor_force_field"]
+    result["effective"] = effective
+    result["policy_hash"] = protonation_policy_hash(effective)
+    return result
+
+
+def check_preparation_policy_current(provenance: Optional[Dict[str, object]], resolution: Dict[str, object]) -> None:
+    """Refuse a prepared entity whose provenance does not record the current policy hash (Spec 037 R1d).
+
+    ``provenance`` None means no record was found and nothing is checked here. A record without a
+    ``policy_hash`` key was written before Spec 037; it is refused when a project policy is stored.
+    """
+    if provenance is None:
+        return
+    entity = f"{resolution.get('entity_kind')}:{resolution.get('entity')}"
+    current = resolution.get("policy_hash")
+    if "policy_hash" not in provenance:
+        if current is None:
+            return
+        raise ProtonationPolicyError(
+            UNRECORDED_PREPARATION_REASON,
+            f"{entity}: the preparation record has no policy hash; re-prepare under the stored policy",
+        )
+    recorded = provenance.get("policy_hash")
+    if recorded != current:
+        raise ProtonationPolicyError(
+            STALE_PREPARATION_REASON,
+            f"{entity}: prepared under {recorded or 'no policy'}, now resolves to {current or 'no policy'}"
+            f" ({resolution.get('policy_level')}); re-prepare this entity",
+        )
+
+
+def pair_protonation_columns(receptor: Dict[str, object], ligand: Dict[str, object]) -> Dict[str, object]:
+    """Spec 037 R1c pair marks from the resolved receptor and ligand policies. Marks, not blocks."""
+    ligand_policy = ligand.get("ligand_policy")
+    receptor_ph = receptor.get("receptor_ph")
+    ligand_ph = ligand.get("ligand_ph")
+    if ligand.get("policy_level") == PROTONATION_LEVEL_NONE:
+        status = PAIR_STATUS_NO_POLICY
+    elif ligand_policy == "explicit_state":
+        status = PAIR_STATUS_EXPLICIT_STATE
+    elif ligand_policy == "as_input":
+        status = PAIR_STATUS_AS_INPUT
+    elif receptor_ph is None:
+        status = PAIR_STATUS_RECEPTOR_PH_MISSING
+    elif abs(float(receptor_ph) - float(ligand_ph)) <= 1e-9:
+        status = PAIR_STATUS_COHERENT
+    else:
+        status = PAIR_STATUS_PH_MISMATCH
+    return {
+        "receptor_policy_level": receptor.get("policy_level"),
+        "ligand_policy_level": ligand.get("policy_level"),
+        "receptor_ph": float(receptor_ph) if receptor_ph is not None else None,
+        "ligand_ph": float(ligand_ph) if ligand_policy == "ph_model" and ligand_ph is not None else None,
+        "pair_protonation_status": status,
+    }
+
+
+def set_protonation_override(
+    project_root: Path,
+    *,
+    kind: str,
+    name: object,
+    replace: bool = False,
+    receptor_ph: Optional[float] = None,
+    receptor_force_field: Optional[str] = None,
+    ligand_policy: Optional[str] = None,
+    ligand_ph: Optional[float] = None,
+    smiles: Optional[str] = None,
+    net_charge: Optional[int] = None,
+    ligand_state_map: Optional[Path] = None,
+    source: str = "user_entered",
+) -> Dict[str, object]:
+    """Store a receptor or ligand override under ``receptors.<key>`` or ``ligands.<key>`` (Spec 037 R1a).
+
+    The project default must be stored first. A value that differs from the stored override is refused
+    unless ``replace`` is true, as for the project default (Spec 036 R1a). A ligand state map CSV gives
+    the row for this ligand, which is stored inline together with the map's SHA-256.
+    """
+    from datetime import datetime, timezone
+
+    from .models import validate_preparation_ph
+    from .preparation.receptor_preparation import PDB2PQR_FORCE_FIELDS
+
+    root = Path(project_root).expanduser().resolve()
+    block = load_protonation_policy(root)
+    if not block:
+        raise ProtonationPolicyError(
+            "protonation_default_missing",
+            "store the project default first (workflow protonation-policy without --receptor or --ligand)",
+        )
+    key = entity_policy_key(name)
+    if not key:
+        raise ValueError("protonation_override_name_required")
+    provided: Dict[str, object] = {}
+    if kind == "receptor":
+        if receptor_ph is None and receptor_force_field is None:
+            raise ValueError("receptor_override_needs_ph_or_force_field")
+        if receptor_ph is not None:
+            ok, normalized, error = validate_preparation_ph(receptor_ph)
+            if not ok:
+                raise ValueError(f"invalid_receptor_ph:{error}")
+            provided["receptor_ph"] = float(normalized)
+        if receptor_force_field is not None:
+            force_field = str(receptor_force_field).strip().upper()
+            if force_field not in PDB2PQR_FORCE_FIELDS:
+                raise ValueError(f"invalid_receptor_force_field:{receptor_force_field!r}")
+            provided["receptor_force_field"] = force_field
+        section = PROTONATION_RECEPTOR_OVERRIDES
+    elif kind == "ligand":
+        if ligand_policy is not None:
+            policy = str(ligand_policy).strip().lower()
+            if policy not in PROTONATION_LIGAND_POLICIES:
+                raise ValueError(f"invalid_ligand_policy:{ligand_policy!r}")
+            provided["ligand_policy"] = policy
+        if ligand_ph is not None:
+            ok, normalized, error = validate_preparation_ph(ligand_ph)
+            if not ok:
+                raise ValueError(f"invalid_ligand_ph:{error}")
+            provided["ligand_ph"] = float(normalized)
+        if smiles is not None and str(smiles).strip():
+            from docking.preparation.ligand_preparation import canonical_smiles_from_text
+
+            text = str(smiles).strip()
+            try:
+                canonical_smiles_from_text(text)
+            except Exception as exc:
+                raise ValueError(f"invalid_ligand_smiles:{exc}") from exc
+            provided["smiles"] = text
+        if net_charge is not None:
+            provided["net_charge"] = _normalize_net_charge(net_charge)
+        if provided.get("smiles") and provided.get("net_charge") is not None:
+            from docking.preparation.ligand_preparation import ProtonationStateError, _inline_state_entry
+
+            try:
+                _inline_state_entry(Path(key), {"smiles": provided["smiles"], "net_charge": provided["net_charge"]})
+            except ProtonationStateError as exc:
+                raise ValueError(f"invalid_ligand_explicit_state:{exc.reason}:{exc.details}") from exc
+        if ligand_state_map is not None:
+            from docking.preparation.ligand_preparation import load_protonation_state_map
+
+            state_map = Path(ligand_state_map).expanduser().resolve()
+            entries = load_protonation_state_map(state_map)
+            match = [entry for ligand_text, entry in entries.items() if entity_policy_key(ligand_text) == key]
+            if not match:
+                raise ProtonationPolicyError("explicit_state_missing_entry", f"{key} has no row in {state_map.name}")
+            provided["smiles"] = str(match[0].get("smiles") or "")
+            provided["net_charge"] = _normalize_net_charge(match[0].get("net_charge"))
+            provided["state_map"] = {"path": _policy_path_text(root, state_map), "sha256": _file_sha256(state_map)}
+        if not provided:
+            raise ValueError("ligand_override_needs_a_value")
+        if provided.get("ligand_policy") == "explicit_state" and not (provided.get("smiles") or provided.get("net_charge") is not None):
+            raise ProtonationPolicyError(
+                "ligand_explicit_state_missing", f"{key}: explicit_state needs --ligand-smiles, --ligand-net-charge or --ligand-state-map"
+            )
+        effective_policy = str(provided.get("ligand_policy") or block.get("ligand_policy") or "")
+        state_fields = {"smiles", "net_charge", "state_map"} & set(provided)
+        if state_fields and effective_policy != "explicit_state":
+            # A state given here would be silently ignored under ph_model or as_input: refuse instead.
+            raise ProtonationPolicyError(
+                "explicit_state_fields_need_explicit_policy",
+                f"{key}: {', '.join(sorted(state_fields))} given but the effective ligand policy is {effective_policy!r}; "
+                "add --ligand-policy explicit_state",
+            )
+        if effective_policy == "ph_model" and provided.get("ligand_ph") is None and block.get("ligand_ph") is None:
+            raise ProtonationPolicyError("ligand_ph_required_for_ph_model", key)
+        section = PROTONATION_LIGAND_OVERRIDES
+    else:
+        raise ValueError(f"unknown protonation entity kind: {kind!r}")
+
+    overrides = dict(block.get(section) or {})
+    stored = dict(overrides.get(key) or {})
+    if stored and not replace:
+        for field, value in provided.items():
+            if field == "state_map" or stored.get(field) is None:
+                continue
+            old, new = stored[field], value
+            same = abs(float(old) - float(new)) <= 1e-9 if isinstance(new, float) and isinstance(old, (int, float)) else old == new
+            if not same:
+                raise ProtonationPolicyConflict(f"{section}.{key}.{field}", old, new)
+    record = {**stored, **provided, "source": str(source or "user_entered"), "set_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
+    overrides[key] = record
+    file_path = _manifest_file_for_update(root)
+    if file_path is None:
+        raise FileNotFoundError(f"No project manifest found under {root}; run workflow init first.")
+    payload = json.loads(file_path.read_text(encoding="utf-8"))
+    saved = dict(payload.get(PROTONATION_POLICY_KEY) or {})
+    saved[section] = overrides
+    payload[PROTONATION_POLICY_KEY] = saved
+    file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return record
 
 
 def ensure_pairlist_stub(project_root: Path, layout_profile: Optional[str] = None) -> Path:

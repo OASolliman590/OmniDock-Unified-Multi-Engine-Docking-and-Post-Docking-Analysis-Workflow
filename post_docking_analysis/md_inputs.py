@@ -19,11 +19,14 @@ import pandas as pd
 
 from docking.project_layout import (
     ProtonationPolicyConflict,
+    ProtonationPolicyError,
+    check_preparation_policy_current,
     ensure_numbered_output_layout,
     load_manifest,
     load_protonation_policy,
     manifest_path,
     project_layout_paths,
+    resolve_entity_protonation,
     resolve_layout_profile,
 )
 from post_docking_analysis.atom_mapping import (
@@ -911,6 +914,9 @@ def _docked_state_for_row(request: MDInputsRequest, selected: Dict[str, object],
     if len(records) > 1:
         raise MDExportError("skipped_missing_configuration", "G6", f"ligand_provenance_ambiguous:{key}:{len(records)}")
     provenance_file, provenance = records[0]
+    # Spec 037 R1: the preparation must record the ligand's current resolved policy (stale records are refused).
+    entity = _ligand_entity_policy(request, ligand)
+    _check_preparation_current(provenance, entity, "G6")
     try:
         if request.engine == "gnina":
             state = docked_microspecies_from_sdf(pose_file, pose)
@@ -944,6 +950,13 @@ def _docked_state_for_row(request: MDInputsRequest, selected: Dict[str, object],
     state.update(
         {
             "ligand_policy": policy,
+            "entity_policy": {
+                "policy_level": entity.get("policy_level"),
+                "policy_hash": entity.get("policy_hash"),
+                "ligand_policy": entity.get("ligand_policy"),
+                "ligand_ph": entity.get("ligand_ph"),
+                "field_levels": entity.get("field_levels"),
+            },
             "preparation_ph": protocol.get("ph") if protocol.get("ph_model_run") else None,
             "ligand_preparation_record": {"path": str(provenance_file), "sha256": sha256_file(provenance_file)},
             "charge_authority": "predicted" if policy == "ph_model" else "docked_state",
@@ -962,16 +975,33 @@ def _docked_state_best_effort(request: MDInputsRequest, selected: Dict[str, obje
 
 
 def _check_row_against_project_policy(project_policy: Optional[Dict[str, object]], docked_state: Dict[str, object]) -> None:
+    """The docked microspecies must come from the ligand's resolved policy (Spec 037 R1a: an override may differ)."""
     if not project_policy:
         return
-    stored = project_policy.get("ligand_policy")
+    entity = docked_state.get("entity_policy") if isinstance(docked_state.get("entity_policy"), dict) else {}
+    stored = entity.get("ligand_policy", project_policy.get("ligand_policy"))
     docked = docked_state.get("ligand_policy")
     if stored != docked:
         raise MDExportError(
             "failed",
             "G6",
-            f"protonation_policy_conflict:ligand_policy:project={stored}!=docked_state={docked}",
+            f"protonation_policy_conflict:ligand_policy:resolved={stored}!=docked_state={docked}",
         )
+
+
+def _check_preparation_current(provenance: Optional[Dict[str, object]], resolution: Dict[str, object], gate: str) -> None:
+    """Spec 037 R1d: a preparation record whose policy hash differs from the resolved policy is refused."""
+    try:
+        check_preparation_policy_current(provenance, resolution)
+    except ProtonationPolicyError as exc:
+        raise MDExportError("failed", gate, f"{exc.reason}:{resolution.get('entity_kind')}:{resolution.get('entity')}") from exc
+
+
+def _ligand_entity_policy(request: MDInputsRequest, ligand: object) -> Dict[str, object]:
+    try:
+        return resolve_entity_protonation(request.project_dir, "ligand", _name_key(ligand, _LIGAND_SUFFIXES))
+    except ProtonationPolicyError as exc:
+        raise MDExportError("skipped_missing_configuration", "G6", f"{exc.reason}:{exc.details}") from exc
 
 
 def _derive_charge_blind_atom_map(
@@ -1058,6 +1088,8 @@ def _protonation_fingerprint(request: MDInputsRequest, docked_state: Optional[Di
         "docked_ligand_policy": str(docked_state.get("ligand_policy")) if docked_state else "",
         "ligand_preparation_sha256": str((docked_state or {}).get("ligand_preparation_record", {}).get("sha256", "")),
         "project_policy_sha256": str((project_policy or {}).get("sha256", "")),
+        # Spec 037 R1: the ligand's resolved policy hash (project default or ligands.<name> override).
+        "ligand_entity_policy_hash": str(((docked_state or {}).get("entity_policy") or {}).get("policy_hash") or ""),
     }
 
 
@@ -1116,6 +1148,11 @@ def _receptor_lineage_for(project_dir: Path, protein: object) -> Tuple[Path, Dic
         payload = json.loads(record.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise MDMapError(f"receptor_preparation_record_unreadable:{record.name}") from exc
+    # Spec 037 R1d: the receptor's preparation must record its current resolved policy hash.
+    try:
+        check_preparation_policy_current(payload, resolve_entity_protonation(project_dir, "receptor", key))
+    except ProtonationPolicyError as exc:
+        raise MDMapError(f"{exc.reason}:receptor:{key}") from exc
     source = Path(str(payload.get("input_file") or "")).expanduser()
     if not str(source) or not source.is_file():
         raise MDMapError(f"receptor_source_missing:{source}")

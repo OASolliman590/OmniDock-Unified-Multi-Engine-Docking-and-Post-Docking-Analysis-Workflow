@@ -324,6 +324,19 @@ def prepare_receptor(source: Path, destination: Path, config: Dict[str, Any]) ->
         log_path.write_text("\n".join(log_lines), encoding="utf-8")
 
 
+def _receptor_policy_resolution(source: Path, preparation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Spec 037 R1: the receptor's layered policy, from the project named in the config or the environment."""
+    raw = str(preparation.get("project_dir") or os.environ.get("PDBWIZARD_PROJECT_DIR", "") or "").strip()
+    if not raw:
+        return None
+    from docking.project_layout import ProtonationPolicyError, resolve_entity_protonation
+
+    try:
+        return resolve_entity_protonation(Path(raw), "receptor", source.stem)
+    except ProtonationPolicyError as exc:
+        raise ReceptorPreparationError(exc.reason, exc.details) from exc
+
+
 def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_lines: List[str]) -> Dict[str, Any]:
     if _bool_option(preparation, "allow_bad_res", False):
         raise ReceptorPreparationError(
@@ -336,17 +349,35 @@ def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_l
     ph_source: Optional[str] = None
     force_field = ""
     force_field_source: Optional[str] = None
+    policy_resolution: Optional[Dict[str, Any]] = None
     if use_pdb2pqr:
-        ph_guidance = "Enter it with --ph or in the configuration (preparation.ph and preparation.ph_source)."
-        ph = _ph_option(_required_parameter(preparation, "ph", "ph_required", ph_guidance))
-        ph_source = _parameter_source(preparation, "ph")
-        force_field_guidance = "Choose one of: " + ", ".join(PDB2PQR_FORCE_FIELDS) + "."
-        force_field = str(
-            _required_parameter(preparation, "force_field", "force_field_required", force_field_guidance)
-        ).strip().upper()
-        force_field_source = _parameter_source(preparation, "force_field")
-        if force_field not in PDB2PQR_FORCE_FIELDS:
-            raise ReceptorPreparationError("invalid_configuration", f"preparation.force_field {force_field!r} is not a PDB2PQR force field")
+        # Spec 037 R1: a receptor override sets pH and force field; the project default must match the config.
+        policy_resolution = _receptor_policy_resolution(source, preparation)
+        if policy_resolution is not None and policy_resolution["policy_level"] == "receptor":
+            ph = float(policy_resolution["receptor_ph"])
+            ph_source = "user_entered"
+            force_field = str(policy_resolution["receptor_force_field"])
+            force_field_source = "user_entered"
+        else:
+            ph_guidance = "Enter it with --ph or in the configuration (preparation.ph and preparation.ph_source)."
+            ph = _ph_option(_required_parameter(preparation, "ph", "ph_required", ph_guidance))
+            ph_source = _parameter_source(preparation, "ph")
+            force_field_guidance = "Choose one of: " + ", ".join(PDB2PQR_FORCE_FIELDS) + "."
+            force_field = str(
+                _required_parameter(preparation, "force_field", "force_field_required", force_field_guidance)
+            ).strip().upper()
+            force_field_source = _parameter_source(preparation, "force_field")
+            if force_field not in PDB2PQR_FORCE_FIELDS:
+                raise ReceptorPreparationError("invalid_configuration", f"preparation.force_field {force_field!r} is not a PDB2PQR force field")
+            if policy_resolution is not None and policy_resolution["policy_level"] == "project":
+                stored_ph = float(policy_resolution["receptor_ph"])
+                stored_ff = str(policy_resolution["receptor_force_field"])
+                if abs(ph - stored_ph) > 1e-9 or force_field != stored_ff:
+                    raise ReceptorPreparationError(
+                        "protonation_policy_conflict",
+                        f"receptor {source.stem}: project default pH {stored_ph} / {stored_ff} != configured "
+                        f"pH {ph} / {force_field}",
+                    )
     profile = str(
         preparation.get("ligand_preparation_profile", preparation.get("ligand_preparation_backend", "engine_aware_full")) or "engine_aware_full"
     ).strip().lower()
@@ -473,6 +504,20 @@ def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_l
         "ph_source": ph_source,
         "requested_force_field": force_field or None,
         "force_field_source": force_field_source,
+        # Spec 037 R1: the resolved policy, its level and its hash. Consumers refuse a changed hash.
+        "policy_level": policy_resolution["policy_level"] if policy_resolution else "none",
+        "policy_hash": policy_resolution.get("policy_hash") if policy_resolution else None,
+        "policy_hash_version": policy_resolution.get("policy_hash_version") if policy_resolution else None,
+        "resolved_protonation_policy": (
+            {
+                "entity": policy_resolution.get("entity"),
+                "policy_level": policy_resolution.get("policy_level"),
+                "field_levels": policy_resolution.get("field_levels"),
+                "effective": policy_resolution.get("effective"),
+            }
+            if policy_resolution
+            else None
+        ),
         "protonation_status": protonation_status,
         "receptor_frame_id": prior.get("receptor_frame_id", prior.get("reference_frame_id", "")),
         "pdb2pqr_options": list(PDB2PQR_OPTIONS) if use_pdb2pqr else [],

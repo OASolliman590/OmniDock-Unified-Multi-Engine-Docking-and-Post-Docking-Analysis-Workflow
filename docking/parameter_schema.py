@@ -35,6 +35,9 @@ class CommonDockingParameters:
     energy_range: float = DEFAULT_ENERGY_RANGE
     replicates: int = DEFAULT_REPLICATES
     exhaustiveness_overridden: bool = False
+    # Where exhaustiveness came from: user_explicit, basic_preset:<name>, or advanced_default (Spec 037 R3a).
+    exhaustiveness_source: str = ""
+    exhaustiveness_explicit: bool = False
     # Where num_modes came from: user_explicit, basic_preset:<name>, or advanced_default.
     num_modes_source: str = ""
     num_modes_explicit: bool = False
@@ -69,6 +72,7 @@ def resolve_parameter_schema(
     energy_range: float = DEFAULT_ENERGY_RANGE,
     replicates: int = DEFAULT_REPLICATES,
     num_modes_explicit: bool = False,
+    exhaustiveness_explicit: bool = False,
 ) -> DockingParameterSchema:
     normalized_mode = str(mode or "basic").strip().lower()
     normalized_mode = normalized_mode if normalized_mode in {"basic", "advanced"} else "basic"
@@ -85,12 +89,15 @@ def resolve_parameter_schema(
         replicates=int(replicates),
     )
     common.num_modes_explicit = bool(num_modes_explicit)
+    common.exhaustiveness_explicit = bool(exhaustiveness_explicit)
     if normalized_mode == "basic":
         preset_values = BASIC_PRESETS[normalized_preset]
         common.exhaustiveness = int(preset_values["exhaustiveness"])
         common.num_modes = int(preset_values["num_modes"])
+        common.exhaustiveness_source = f"basic_preset:{normalized_preset}"
         common.num_modes_source = f"basic_preset:{normalized_preset}"
     else:
+        common.exhaustiveness_source = "user_explicit" if common.exhaustiveness_explicit else "advanced_default"
         common.num_modes_source = "user_explicit" if common.num_modes_explicit else "advanced_default"
     # Spec 036 R5c: advanced overrides stay possible but are recorded.
     common.exhaustiveness_overridden = normalized_mode == "advanced" and common.exhaustiveness != EXHAUSTIVENESS_LEVEL
@@ -132,6 +139,12 @@ def validate_parameter_schema(schema: DockingParameterSchema, selected_engines: 
         errors.append("`exhaustiveness` must be >= 1.")
     if common.num_modes < 1:
         errors.append("`num_modes` must be >= 1.")
+    if schema.mode == "basic" and common.exhaustiveness_explicit:
+        # Spec 037 R3a: exhaustiveness is refused in basic mode exactly as num_modes is (Spec 036 lead decision 5).
+        errors.append(
+            f"`--exhaustiveness` is not used in basic mode: exhaustiveness comes from the basic preset "
+            f"'{schema.preset}' ({common.exhaustiveness}). Pass `--parameter-mode advanced` to set exhaustiveness yourself."
+        )
     if schema.mode == "basic" and common.num_modes_explicit:
         errors.append(
             f"`--num-modes` is not used in basic mode: num_modes comes from the basic preset "
@@ -176,6 +189,7 @@ def apply_schema_to_runtime(
         runtime["replicates"] = int(common.replicates)
         runtime["parameter_mode"] = schema.mode
         runtime["parameter_preset"] = schema.preset
+        runtime["exhaustiveness_source"] = common.exhaustiveness_source
         runtime["num_modes_source"] = common.num_modes_source
         updated[engine] = runtime
     return updated

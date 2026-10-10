@@ -9,14 +9,23 @@ value (``user_fixed``).
 Scientific choice recorded in the output: ``RG_DEFINITION`` is the unweighted
 (geometric) Rg over heavy atoms. It is written into every pair record so it can
 be audited or changed in one place.
+
+Spec 037 R2b: the Rg is read first from the ligand preparation provenance
+(``preparation_steps/<ligand>.json``, computed once on the prepared conformer and
+checked against the file's SHA-256). When that record is missing or does not match
+the file, the Rg is computed here with ``rg_source = computed_at_box_step`` and a
+note is added to the box warnings. The definition itself is an unverified assumption
+(Spec 037 R2c; the methods section of Feinstein & Brylinski 2015 was not retrieved).
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -25,6 +34,10 @@ BOX_METHOD_RG = "rg_scaled_v1"
 BOX_METHOD_USER_FIXED = "user_fixed"
 RG_EDGE_FACTOR = 2.9
 RG_DEFINITION = "heavy_atom_unweighted_v1"
+RG_SOURCE_PREPARATION = "ligand_preparation"
+RG_SOURCE_COMPUTED = "computed_at_box_step"
+RG_DEFINITION_STATUS = "unverified_assumption_spec037_r2c"
+PREPARATION_STEPS_DIRNAME = "preparation_steps"
 EDGE_WARNING_ANGSTROM = 30.0
 CONTAINMENT_NOT_EVALUATED = "not_evaluated_no_reference"
 CONTAINMENT_CONTAINED = "contained"
@@ -46,6 +59,7 @@ class PairBox:
     ligand_heavy_atom_count: int = 0
     ligand_file: str = ""
     warnings: List[str] = field(default_factory=list)
+    rg_source: str = ""
 
 
 def _is_heavy_type(token: str) -> bool:
@@ -159,39 +173,124 @@ def rg_scaled_edge(rg_angstrom: float) -> float:
     return float(RG_EDGE_FACTOR * rg_angstrom)
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _read_json_record(path: Path) -> Optional[Dict[str, object]]:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def ligand_preparation_record(ligand_path: Path) -> Tuple[Optional[Dict[str, object]], str]:
+    """Ligand preparation provenance of a prepared file: ``(record, reason)``.
+
+    The record lives in ``<prepared ligands>/preparation_steps``. The file ``<stem>.json`` is tried first,
+    then any record whose ``output_file`` has the same name. Zero or several matches give no record.
+    """
+    ligand_path = Path(ligand_path)
+    directory = ligand_path.parent / PREPARATION_STEPS_DIRNAME
+    if not directory.is_dir():
+        return None, "no_preparation_steps_directory"
+    direct = directory / f"{ligand_path.stem}.json"
+    if direct.is_file():
+        payload = _read_json_record(direct)
+        if payload and Path(str(payload.get("output_file") or "")).name == ligand_path.name:
+            return payload, ""
+    matches = []
+    for report in sorted(directory.glob("*.json")):
+        payload = _read_json_record(report)
+        if payload and Path(str(payload.get("output_file") or "")).name == ligand_path.name:
+            matches.append(payload)
+    if not matches:
+        return None, "no_preparation_record_for_output"
+    if len(matches) > 1:
+        return None, "ambiguous_preparation_records"
+    return matches[0], ""
+
+
+def rg_from_preparation(ligand_path: Path) -> Tuple[Optional[float], Optional[int], str]:
+    """Rg recorded by ligand preparation for this exact file: ``(rg, heavy_atom_count, reason_if_none)``."""
+    record, reason = ligand_preparation_record(ligand_path)
+    if record is None:
+        return None, None, f"no ligand preparation provenance ({reason})"
+    rg = record.get("radius_of_gyration_angstrom")
+    if rg is None or record.get("rg_method") != RG_DEFINITION:
+        return None, None, "ligand preparation provenance has no radius_of_gyration_angstrom with rg_method heavy_atom_unweighted_v1"
+    recorded_sha = str(record.get("output_sha256") or "")
+    if not recorded_sha:
+        return None, None, "ligand preparation provenance has no output_sha256 to tie the Rg to the file"
+    if recorded_sha != file_sha256(ligand_path):
+        return None, None, "the file changed after ligand preparation (output_sha256 differs)"
+    count = record.get("rg_heavy_atom_count")
+    return float(rg), (int(count) if count is not None else None), ""
+
+
 def compute_ligand_box(ligand_path: Path, fixed_edge: Optional[float] = None) -> PairBox:
     """Box for one ligand.
+
+    The Rg comes from the ligand preparation provenance when it is recorded for this file
+    (``rg_source = ligand_preparation``). Otherwise it is computed here
+    (``rg_source = computed_at_box_step``) and a note is added to ``warnings``.
 
     ``fixed_edge`` given -> ``user_fixed`` (explicit user value; Rg still recorded
     when the conformer can be read). ``fixed_edge`` None -> ``rg_scaled_v1``,
     which requires a readable conformer. There is no silent fallback size.
     """
     ligand_path = Path(ligand_path)
+    rg, count, reason = rg_from_preparation(ligand_path)
+    notes: List[str] = []
+    if rg is not None:
+        source = RG_SOURCE_PREPARATION
+    else:
+        source = RG_SOURCE_COMPUTED
+        notes.append(
+            f"[box] {ligand_path.name}: Rg computed at the box step ({reason}); "
+            f"{RG_DEFINITION} from the file, not from ligand preparation."
+        )
     if fixed_edge is not None:
         edge = float(fixed_edge)
         if not math.isfinite(edge) or edge <= 0:
             raise BoxError(f"Explicit box size must be a positive number of Angstrom, got {fixed_edge!r}")
-        try:
-            coords = heavy_atom_coordinates(ligand_path)
-            rg = radius_of_gyration(coords)
-            count = int(coords.shape[0])
-        except BoxError:
-            rg, count = None, 0
+        if rg is None:
+            try:
+                coords = heavy_atom_coordinates(ligand_path)
+                rg = radius_of_gyration(coords)
+                count = int(coords.shape[0])
+            except BoxError:
+                rg, count = None, 0
+        elif count is None:
+            count = int(heavy_atom_coordinates(ligand_path).shape[0])
         return PairBox(
             box_method=BOX_METHOD_USER_FIXED,
             ligand_rg_angstrom=rg,
             edge_angstrom=edge,
-            ligand_heavy_atom_count=count,
+            ligand_heavy_atom_count=int(count or 0),
             ligand_file=ligand_path.name,
+            warnings=notes,
+            rg_source=source,
         )
-    coords = heavy_atom_coordinates(ligand_path)
-    rg = radius_of_gyration(coords)
+    if rg is None:
+        coords = heavy_atom_coordinates(ligand_path)
+        rg = radius_of_gyration(coords)
+        count = int(coords.shape[0])
+    elif count is None:
+        count = int(heavy_atom_coordinates(ligand_path).shape[0])
     return PairBox(
         box_method=BOX_METHOD_RG,
         ligand_rg_angstrom=rg,
         edge_angstrom=rg_scaled_edge(rg),
-        ligand_heavy_atom_count=int(coords.shape[0]),
+        ligand_heavy_atom_count=int(count),
         ligand_file=ligand_path.name,
+        warnings=notes,
+        rg_source=source,
     )
 
 

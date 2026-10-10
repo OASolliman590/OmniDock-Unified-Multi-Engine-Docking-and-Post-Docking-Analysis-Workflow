@@ -3198,6 +3198,12 @@ class SimplifiedPostDockingPipeline:
         if df is None or df.empty:
             return pd.DataFrame()
         if {'protein', 'ligand'}.issubset(df.columns):
+            if 'consensus_rank_global' in df.columns:
+                # Spec 037 R3b: the consensus rank picks the row, not a raw affinity compared across engines.
+                # A group without any rank keeps its first row, which carries ranking_unavailable_consensus_incomplete.
+                ordered = df.assign(_rank=pd.to_numeric(df['consensus_rank_global'], errors='coerce'))
+                ordered = ordered.sort_values('_rank', na_position='last', kind='mergesort')
+                return ordered.groupby(['protein', 'ligand'], sort=False).head(1).drop(columns='_rank').copy()
             return df.loc[df.groupby(['protein', 'ligand'])['vina_affinity'].idxmin()].copy()
         return df.copy()
 

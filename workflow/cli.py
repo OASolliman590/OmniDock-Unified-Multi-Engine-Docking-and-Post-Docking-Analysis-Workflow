@@ -260,24 +260,43 @@ Examples:
     workflow_jump.add_argument("--max-rerun-pairs", type=int, default=0, help="Optional global cap on promoted exhaustive rerun pairs")
     workflow_protonation = workflow_sub.add_parser(
         "protonation-policy",
-        help="Store the project's one protonation policy (receptor and ligand pH, force field, ligand policy)",
+        help=(
+            "Store the project's protonation policy. Without --receptor/--ligand it sets the project default "
+            "(receptor pH and force field, ligand policy, ligand pH, state map). With --receptor NAME or "
+            "--ligand NAME it sets that entity's override (Spec 037 R1)."
+        ),
     )
     workflow_protonation.add_argument("--project-dir", required=True, help="Project root (must have a manifest)")
-    workflow_protonation.add_argument("--receptor-ph", type=float, required=True, help="PDB2PQR pH (explicit; no default)")
     workflow_protonation.add_argument(
-        "--receptor-force-field", required=True, type=str.upper, choices=list(PDB2PQR_FORCE_FIELDS),
-        help="PDB2PQR force field (explicit; no default)",
+        "--receptor-ph", type=float,
+        help="PDB2PQR pH. Project default: required (explicit; no default). With --receptor: optional override",
     )
     workflow_protonation.add_argument(
-        "--ligand-policy", required=True, choices=["ph_model", "explicit_state", "as_input"],
-        help="Ligand protonation policy for the project",
+        "--receptor-force-field", type=str.upper, choices=list(PDB2PQR_FORCE_FIELDS),
+        help="PDB2PQR force field. Project default: required (explicit; no default). With --receptor: optional override",
     )
-    workflow_protonation.add_argument("--ligand-ph", type=float, help="Open Babel pH model pH (required for ph_model)")
+    workflow_protonation.add_argument(
+        "--ligand-policy", choices=["ph_model", "explicit_state", "as_input"],
+        help="Ligand protonation policy. Project default: required. With --ligand: optional override",
+    )
+    workflow_protonation.add_argument(
+        "--ligand-ph", type=float, help="Open Babel pH model pH (required for ph_model in the project default or a ligand override)",
+    )
     workflow_protonation.add_argument(
         "--ligand-state-map", help="CSV with columns ligand and smiles and/or net_charge (required for explicit_state); stored with its SHA-256",
     )
     workflow_protonation.add_argument(
-        "--replace", action="store_true", help="Replace a stored policy whose values differ (otherwise a difference is refused)",
+        "--receptor", metavar="NAME", help="Set the override for this receptor (file stem, e.g. 1IEP); takes --receptor-ph and/or --receptor-force-field",
+    )
+    workflow_protonation.add_argument(
+        "--ligand", metavar="NAME", help="Set the override for this ligand (file stem, e.g. STI); takes --ligand-policy, --ligand-ph, --ligand-smiles, --ligand-net-charge or --ligand-state-map (the row for NAME)",
+    )
+    workflow_protonation.add_argument("--ligand-smiles", help="Explicit state SMILES for a --ligand override (explicit_state)")
+    workflow_protonation.add_argument(
+        "--ligand-net-charge", type=int, help="Approved net charge for a --ligand override (explicit_state, when no SMILES)",
+    )
+    workflow_protonation.add_argument(
+        "--replace", action="store_true", help="Replace a stored value that differs (otherwise a difference is refused)",
     )
     workflow_jump.add_argument("--pair-allowlist", help="Optional TXT/CSV file restricting promotion to explicit pair tags or receptor/site_id/ligand rows")
     workflow_jump.add_argument(
@@ -822,8 +841,14 @@ def _add_dock_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--autodock4-ga-run", type=int)
     parser.add_argument("--autodock4-ls-search-freq", type=float)
     parser.add_argument("--autodock4-torsdof", type=int)
-    parser.add_argument("--exhaustiveness", type=int, default=32)
-    # None = not given: the docking CLI applies its default (basic mode takes num_modes from the preset).
+    # None = not given (Spec 037 R3a): the docking CLI applies its default. Basic mode takes exhaustiveness
+    # from the preset and refuses an explicit value, as it does for num_modes.
+    parser.add_argument(
+        "--exhaustiveness",
+        type=int,
+        default=None,
+        help="Advanced mode only; basic mode refuses it (default 32 in advanced mode)",
+    )
     parser.add_argument("--num-modes", type=int, default=None, help="Advanced mode only; basic mode refuses it")
     parser.add_argument("--seed", type=int)
     # Spec 036 R5b/R5d: documented in USAGE.md. None = the docking CLI default (3 replicates, energy_range 3).
@@ -1231,13 +1256,54 @@ def _validate_md_inputs_args(args: argparse.Namespace, parser: argparse.Argument
 
 
 def _run_protonation_policy_command(args: argparse.Namespace) -> int:
-    """Spec 036 R1a: store the project's one protonation policy. A different stored value is refused unless --replace."""
+    """Spec 036 R1a: store the project default. Spec 037 R1a: --receptor / --ligand store an override.
+
+    A different stored value is refused unless --replace.
+    """
     import json
 
-    from docking.project_layout import ProtonationPolicyConflict, set_protonation_policy
+    from docking.project_layout import (
+        ProtonationPolicyConflict,
+        ProtonationPolicyError,
+        set_protonation_override,
+        set_protonation_policy,
+    )
 
     project = Path(args.project_dir).expanduser().resolve()
+    if args.receptor and args.ligand:
+        print("protonation_policy_not_stored: give --receptor or --ligand per call, not both", file=sys.stderr)
+        return 2
     try:
+        if args.receptor or args.ligand:
+            kind, name = ("receptor", args.receptor) if args.receptor else ("ligand", args.ligand)
+            record = set_protonation_override(
+                project,
+                kind=kind,
+                name=name,
+                replace=bool(args.replace),
+                receptor_ph=args.receptor_ph,
+                receptor_force_field=args.receptor_force_field,
+                ligand_policy=args.ligand_policy,
+                ligand_ph=args.ligand_ph,
+                smiles=args.ligand_smiles,
+                net_charge=args.ligand_net_charge,
+                ligand_state_map=Path(args.ligand_state_map).expanduser() if args.ligand_state_map else None,
+                source="user_entered",
+            )
+            print(json.dumps({f"{kind}s": {name: record}, "manifest_project": str(project)}, indent=2))
+            return 0
+        missing = [
+            flag
+            for flag, value in (
+                ("--receptor-ph", args.receptor_ph),
+                ("--receptor-force-field", args.receptor_force_field),
+                ("--ligand-policy", args.ligand_policy),
+            )
+            if value is None
+        ]
+        if missing:
+            print(f"protonation_policy_not_stored: the project default needs {', '.join(missing)} (or use --receptor/--ligand)", file=sys.stderr)
+            return 2
         block = set_protonation_policy(
             project,
             receptor_ph=args.receptor_ph,
@@ -1251,7 +1317,7 @@ def _run_protonation_policy_command(args: argparse.Namespace) -> int:
     except ProtonationPolicyConflict as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    except (ValueError, OSError) as exc:
+    except (ProtonationPolicyError, ValueError, OSError) as exc:
         print(f"protonation_policy_not_stored: {exc}", file=sys.stderr)
         return 2
     print(json.dumps({"protonation_policy": block, "manifest_project": str(project)}, indent=2))
@@ -1644,6 +1710,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 autodocktools_python=args.autodocktools_python,
                 protonation_policy=resolved["protonation_policy"],
                 protonation_state_map=resolved["protonation_state_map"],
+                # Spec 037 R1: receptor and ligand overrides are read from this project.
+                project_dir=str(Path(args.project_dir).expanduser().resolve()) if getattr(args, "project_dir", None) else None,
             )
             return 0 if result.status == "completed" else 1
         parser.error("A pdb subcommand is required")

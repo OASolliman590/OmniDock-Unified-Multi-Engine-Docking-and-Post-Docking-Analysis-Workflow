@@ -59,6 +59,8 @@ class PreparationConfig:
     autodocktools_prepare_ligand4: str = ""
     autodocktools_prepare_receptor4: str = ""
     autodocktools_python: str = ""
+    # Spec 037 R1: the project whose layered protonation policy (receptor and ligand overrides) applies.
+    project_dir: str = ""
 
 class AutoDockPreparationPipeline:
     """
@@ -273,6 +275,7 @@ class AutoDockPreparationPipeline:
                 "ph_source": self.config.ph_source,
                 "protonation_policy": self.config.protonation_policy,
                 "protonation_state_map": self.config.protonation_state_map or "",
+                "project_dir": self.config.project_dir or "",
                 "allow_bad_res": self.config.allow_bad_res,
                 "default_altloc": self.config.default_altloc,
                 "receptor_use_pdb2pqr": bool(self.config.receptor_use_pdb2pqr),
@@ -451,6 +454,10 @@ class AutoDockPreparationPipeline:
             env.pop("PDBWIZARD_LIGAND_PREP_STATE_MAP", None)
             if self.config.protonation_state_map:
                 env["PDBWIZARD_LIGAND_PREP_STATE_MAP"] = str(Path(self.config.protonation_state_map).expanduser().resolve())
+            # Spec 037 R1: receptor and ligand modules resolve their layered policy from this project.
+            env.pop("PDBWIZARD_PROJECT_DIR", None)
+            if self.config.project_dir:
+                env["PDBWIZARD_PROJECT_DIR"] = str(Path(self.config.project_dir).expanduser().resolve())
             # Receptor preparation runs under this same interpreter (Spec 033 R2b).
             env["PDBWIZARD_PYTHON"] = sys.executable
             if self.config.selected_engines:

@@ -1043,6 +1043,7 @@ def run_autodock_prepare(
     force_field_source: Optional[str] = None,
     protonation_policy: str = "ph_model",
     protonation_state_map: Optional[str] = None,
+    project_dir: Optional[str] = None,
 ) -> WorkflowStepResult:
     # Spec 034 R3: pH and force field have no default here. Each is an explicit value with its source
     # ("user_entered" from the CLI or prompt, "config_file" from an explicit configuration value).
@@ -1144,6 +1145,12 @@ def run_autodock_prepare(
                     "microspecies_smiles": _state_field(payload, "microspecies_smiles"),
                     "pdbqt_state_check": str(_protonation_field(payload, "pdbqt_state_check") or ""),
                     "human_review_required": bool(_protonation_field(payload, "human_review_required")),
+                    # Spec 037 R1/R2: policy level and hash, and the Rg recorded at ligand preparation.
+                    "policy_level": str(payload.get("policy_level") or ""),
+                    "policy_hash": str(payload.get("policy_hash") or ""),
+                    "radius_of_gyration_angstrom": payload.get("radius_of_gyration_angstrom"),
+                    "rg_method": str(payload.get("rg_method") or ""),
+                    "rg_conformer": str(payload.get("rg_conformer") or ""),
                     "is_valid": bool(contract.get("is_valid", False)),
                     "errors": "; ".join(errors),
                     "warnings": "; ".join(warnings),
@@ -1221,6 +1228,7 @@ def run_autodock_prepare(
             force_field_source=force_field_source,
             protonation_policy=policy,
             protonation_state_map=str(Path(protonation_state_map).expanduser().resolve()) if protonation_state_map else "",
+            project_dir=str(Path(project_dir).expanduser().resolve()) if project_dir else "",
             autodocktools_prepare_ligand4=str(autodocktools_prepare_ligand4 or "").strip(),
             autodocktools_prepare_receptor4=str(autodocktools_prepare_receptor4 or "").strip(),
             autodocktools_python=str(autodocktools_python or "").strip(),
@@ -1299,6 +1307,11 @@ def run_autodock_prepare(
             "microspecies_smiles",
             "pdbqt_state_check",
             "human_review_required",
+            "policy_level",
+            "policy_hash",
+            "radius_of_gyration_angstrom",
+            "rg_method",
+            "rg_conformer",
             "is_valid",
             "errors",
             "warnings",

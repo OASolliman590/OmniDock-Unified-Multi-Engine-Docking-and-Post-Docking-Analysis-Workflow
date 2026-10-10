@@ -440,6 +440,108 @@ def _selected_state_map_path() -> Optional[Path]:
     return Path(raw).expanduser().resolve() if raw else None
 
 
+# Spec 037 R1: the project directory (set by the preparation pipeline) lets this module read the layered
+# policy for each ligand: the project default, with ``ligands.<name>`` overrides above it.
+PROJECT_DIR_ENV = "PDBWIZARD_PROJECT_DIR"
+RG_METHOD = "heavy_atom_unweighted_v1"
+RG_NOTE = (
+    "heavy_atom_unweighted_v1 (unweighted radius of gyration of the heavy atoms of the prepared conformer) "
+    "is an unverified assumption: the methods section of Feinstein & Brylinski 2015 could not be retrieved "
+    "(Spec 037 R2c)."
+)
+
+
+def _project_policy_resolution(source: Path) -> Optional[Dict[str, object]]:
+    """Layered policy of this ligand from the project directory, or None when no project is named."""
+    raw = str(os.environ.get(PROJECT_DIR_ENV, "") or "").strip()
+    if not raw:
+        return None
+    from docking.project_layout import ProtonationPolicyError, resolve_entity_protonation
+
+    try:
+        return resolve_entity_protonation(Path(raw), "ligand", source.stem)
+    except ProtonationPolicyError as exc:
+        raise ProtonationStateError(exc.reason, exc.details) from exc
+
+
+def _inline_state_entry(source: Path, inline: Dict[str, object]) -> Dict[str, object]:
+    """Explicit state from a ``ligands.<name>`` override, in the shape of a state-map row (same net-charge rules)."""
+    smiles_text = str(inline.get("smiles") or "").strip()
+    net_raw = inline.get("net_charge")
+    net: Optional[int] = None
+    if net_raw is not None:
+        try:
+            net = int(net_raw)
+        except (TypeError, ValueError) as exc:
+            raise ProtonationStateError("state_map_invalid", f"{source.name}: net_charge must be an integer, got {net_raw!r}") from exc
+    if smiles_text:
+        Chem, _ = _rdkit_or_error()
+        parsed = Chem.MolFromSmiles(smiles_text)
+        if parsed is None:
+            raise ProtonationStateError("explicit_state_invalid_smiles", f"not a valid SMILES for {source.name}: {smiles_text}")
+        smiles_net = int(Chem.GetFormalCharge(parsed))
+        if net is not None and net != smiles_net:
+            raise ProtonationStateError(
+                "state_map_invalid",
+                f"{source.name}: SMILES net charge {smiles_net:+d} disagrees with net_charge {net:+d}",
+            )
+        net = smiles_net
+    return {"ligand": source.name, "smiles": smiles_text, "net_charge": net}
+
+
+def _apply_project_policy(
+    resolution: Dict[str, object],
+    policy: str,
+    protonation_ph: float,
+    ph_source: str,
+) -> Tuple[str, float, str]:
+    """Spec 037 R1a: the entity's effective policy and pH. The project default must match the explicit request."""
+    levels = dict(resolution.get("field_levels") or {})
+    resolved_policy = str(resolution.get("ligand_policy") or "")
+    if levels.get("ligand_policy") == "ligand":
+        policy = resolved_policy
+    elif resolved_policy != policy:
+        raise ProtonationStateError(
+            "protonation_policy_conflict",
+            f"ligand policy: project default {resolved_policy!r} != requested {policy!r}",
+        )
+    resolved_ph = resolution.get("ligand_ph")
+    if resolved_ph is not None:
+        if levels.get("ligand_ph") == "ligand":
+            return policy, float(resolved_ph), "user_entered"
+        env_ph_given = ph_source in {PH_SOURCE_USER_ENTERED, PH_SOURCE_CONFIG_FILE}
+        if env_ph_given and abs(float(protonation_ph) - float(resolved_ph)) > 1e-9:
+            raise ProtonationStateError(
+                "protonation_policy_conflict",
+                f"ligand pH: project default {float(resolved_ph)} != requested {float(protonation_ph)}",
+            )
+        return policy, float(resolved_ph), "user_entered"
+    return policy, protonation_ph, ph_source
+
+
+def _prepared_conformer_fields(path: Path) -> Dict[str, object]:
+    """Spec 037 R2a: heavy-atom unweighted Rg of the prepared conformer, computed once at preparation."""
+    from docking.box_policy import RG_DEFINITION_STATUS, file_sha256, heavy_atom_coordinates, radius_of_gyration
+
+    fields: Dict[str, object] = {
+        "rg_method": RG_METHOD,
+        "rg_conformer": "prepared",
+        "rg_definition_status": RG_DEFINITION_STATUS,
+        "rg_note": RG_NOTE,
+        "output_sha256": file_sha256(path) if path.is_file() else "",
+    }
+    try:
+        coords = heavy_atom_coordinates(path)
+        fields.update(
+            radius_of_gyration_angstrom=float(radius_of_gyration(coords)),
+            rg_heavy_atom_count=int(coords.shape[0]),
+            rg_error="",
+        )
+    except Exception as exc:  # recorded, never defaulted: the box step then computes or refuses
+        fields.update(radius_of_gyration_angstrom=None, rg_heavy_atom_count=0, rg_error=f"{type(exc).__name__}:{exc}")
+    return fields
+
+
 def load_protonation_state_map(path: Path) -> Dict[str, Dict[str, object]]:
     """Read the per-ligand state map: CSV with a ``ligand`` column and ``smiles`` and/or ``net_charge``."""
     try:
@@ -852,7 +954,21 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
     direct_profile = effective_profile in DIRECT_PREPARATION_PROFILES
     policy = _selected_protonation_policy()
     protonation_ph, ph_source = _selected_ph_with_source()
-    state_entry = _explicit_state_entry(source) if policy == PROTONATION_EXPLICIT_STATE else None
+    # Spec 037 R1: the ligand's effective policy (override or project default) governs this preparation.
+    resolution = _project_policy_resolution(source)
+    policy_level = "none"
+    policy_hash: Optional[str] = None
+    if resolution is not None:
+        policy_level = str(resolution["policy_level"])
+        policy_hash = resolution.get("policy_hash")
+        if policy_level != "none":
+            policy, protonation_ph, ph_source = _apply_project_policy(resolution, policy, protonation_ph, ph_source)
+    if policy != PROTONATION_EXPLICIT_STATE:
+        state_entry = None
+    elif resolution is not None and (resolution.get("field_levels") or {}).get("explicit_state") == "ligand":
+        state_entry = _inline_state_entry(source, dict(resolution["explicit_state"] or {}))
+    else:
+        state_entry = _explicit_state_entry(source)
     explicit_smiles = str(state_entry["smiles"]) if state_entry and state_entry.get("smiles") else ""
 
     with tempfile.TemporaryDirectory(prefix=f"ligand_prepare_{source.stem}_") as tmp_dir:
@@ -1021,7 +1137,23 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
         "protonation": protonation_block,
         "normalization": normalization,
         "compatibility": compatibility.to_dict(),
+        # Spec 037 R1: the resolved policy, its level and its hash (consumers refuse a changed hash).
+        "policy_level": policy_level,
+        "policy_hash": policy_hash,
+        "policy_hash_version": (resolution or {}).get("policy_hash_version") if resolution else None,
+        "resolved_protonation_policy": (
+            {
+                "entity": (resolution or {}).get("entity"),
+                "policy_level": policy_level,
+                "field_levels": (resolution or {}).get("field_levels"),
+                "effective": (resolution or {}).get("effective"),
+            }
+            if resolution is not None
+            else None
+        ),
     }
+    # Spec 037 R2a: Rg of the prepared conformer, computed once here and recorded with its method.
+    summary.update(_prepared_conformer_fields(destination))
     if meeko_error:
         summary["meeko_error"] = meeko_error
     if obabel_error:

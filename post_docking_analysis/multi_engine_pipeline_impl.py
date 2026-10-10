@@ -34,6 +34,7 @@ from docking.project_layout import (
 )
 from post_docking_analysis.complex_query import filter_frame_by_complex_query, tags_from_frame
 from post_docking_analysis.consensus import (
+    CONSENSUS_V2_METHOD,
     SINGLE_ENGINE_NATIVE_METHOD,
     build_consensus_explainability,
     build_consensus_rankings,
@@ -181,6 +182,13 @@ _PAIR_METADATA_COLUMNS = (
     "reference_receptor_file",
     "topology_file",
     "ligand_topology_file",
+    # Spec 037 R1c/R2: pair protonation coherence marks and Rg provenance
+    "receptor_policy_level",
+    "ligand_policy_level",
+    "receptor_ph",
+    "ligand_ph",
+    "pair_protonation_status",
+    "rg_source",
 )
 
 
@@ -309,6 +317,23 @@ def _restore_integer_pose(series: pd.Series) -> pd.Series:
     if numeric.notna().all():
         return numeric.astype(int)
     return numeric
+
+
+# Spec 037 R3b: rows of a tag whose v2 consensus case is incomplete carry this marker. They have no rank and are
+# never ordered by a raw affinity.
+RANKING_UNAVAILABLE_CONSENSUS_INCOMPLETE = "ranking_unavailable_consensus_incomplete"
+RANK_COLUMNS = ("consensus_score", "consensus_rank_within_protein", "consensus_rank_global", "winner_engine", "consensus_status")
+
+
+def ranking_method_for_scores(scores: pd.DataFrame) -> str:
+    """Spec 037 R3b: the ranking used by the summaries for these rows.
+
+    One engine: ``single_engine_native_v1``. Two or more engines: ``consensus_rank_geometry_qc_v2``.
+    """
+    engines: Set[str] = set()
+    if scores is not None and "engine" in scores.columns:
+        engines = {str(value).strip().lower() for value in scores["engine"].dropna().tolist() if str(value).strip()}
+    return SINGLE_ENGINE_NATIVE_METHOD if len(engines) == 1 else CONSENSUS_V2_METHOD
 
 
 class MultiEngineAnalysisPipeline:
@@ -2929,7 +2954,8 @@ class MultiEngineAnalysisPipeline:
         if run_consensus:
             consensus_base = build_consensus_rankings(
                 best_by_engine=normalized_scores,
-                consensus_mode=self.consensus_mode,
+                # Spec 037 R3b: one engine ranks by single_engine_native_v1; two or more by consensus v2.
+                consensus_mode=ranking_method_for_scores(normalized_scores),
                 favorite_engine=self.favorite_engine or self.rerun_engine,
                 normalization_method=self.normalization_method,
                 requested_engines=list(self.engines_in_scope),
@@ -4487,16 +4513,10 @@ class MultiEngineAnalysisPipeline:
         engine_scores = self._annotate_scope_columns(engine_scores)
         engine_scores.to_csv(output_dir / "scores.csv", index=False)
         engine_scores[UNIFIED_COMPAT_COLUMNS].to_csv(output_dir / "all_scores.csv", index=False)
-        best, _selected_metric = self._select_best_pose_rows(engine_scores, requested_metric=ranking_label)
+        # Spec 037 R3b: the best-pose rows are ordered by single_engine_native_v1 (the same selector as before).
+        ranking_method = ranking_method_for_scores(engine_scores)
+        best = self._best_by_tag(engine_scores)
         best["pose"] = pd.to_numeric(best.get("pose"), errors="coerce")
-        if _selected_metric == "cnn_score":
-            best.sort_values(
-                ["cnn_score", "affinity_kcal_mol", "pose", "tag"],
-                ascending=[False, True, True, True],
-                inplace=True,
-            )
-        else:
-            best.sort_values(["affinity_kcal_mol", "pose", "tag"], inplace=True)
         best = self._annotate_scope_columns(best)
         best.to_csv(output_dir / "best_poses.csv", index=False)
         best[UNIFIED_COMPAT_COLUMNS].to_csv(output_dir / "best_poses_unified.csv", index=False)
@@ -4518,12 +4538,17 @@ class MultiEngineAnalysisPipeline:
                 except Exception as exc:
                     logger.warning("GNINA solo complex export failed: %s", exc)
 
+        # Spec 037 R3b: the protein summary is ordered by the rank of its top ligand; best_affinity is that row's affinity.
+        ranked_best = best[pd.to_numeric(best["consensus_rank_global"], errors="coerce").notna()]
+        top_per_protein = ranked_best.drop_duplicates("protein", keep="first").set_index("protein")["affinity_kcal_mol"]
         summary = (
             best.groupby("protein")
-            .agg(best_affinity=("affinity_kcal_mol", "min"), ligand_count=("ligand", "nunique"))
+            .agg(ligand_count=("ligand", "nunique"), top_consensus_rank_global=("consensus_rank_global", "min"))
             .reset_index()
-            .sort_values(["best_affinity", "protein"])
         )
+        summary.insert(1, "best_affinity", summary["protein"].map(top_per_protein))
+        summary["ranking_method"] = ranking_method
+        summary = summary.sort_values(["top_consensus_rank_global", "protein"]).reset_index(drop=True)
         summary = self._annotate_scope_columns(summary)
         summary.to_csv(output_dir / "protein_summary.csv", index=False)
         collapse_warning = ""
@@ -4544,16 +4569,27 @@ class MultiEngineAnalysisPipeline:
                 save_manifest(self.project_dir, self.manifest)
             except Exception:
                 pass
+        # Spec 037 R3c: name the key that actually selects the pose. GNINA picks the highest cnn_score;
+        # the ligand ranking metric of single_engine_native_v1 is listed separately, so neither is hidden.
+        if engine == "gnina":
+            pose_selection_line = "Primary ranking score: cnn_score (pose selection key; highest cnn_score is kept)"
+            native_metric_line = "Ligand ranking metric: cnn_affinity (single_engine_native_v1; higher is better)"
+        else:
+            pose_selection_line = "Primary ranking score: affinity_kcal_mol (pose selection key; lowest is kept)"
+            native_metric_line = "Ligand ranking metric: affinity_kcal_mol (single_engine_native_v1; lower is better)"
         (output_dir / "summary.txt").write_text(
             "\n".join(
                 [
                     f"Engine: {engine}",
-                    f"Primary ranking score: {ranking_label}",
+                    f"Ranking method (Spec 037 R3b): {ranking_method}",
+                    pose_selection_line,
+                    native_metric_line,
                     *self._redocking_banner_lines(self._redocking_status_from_reports()),
                     *self._pose_reproducibility_banner_lines(pose_reproducibility_table(engine_scores)),
                     f"Complexes: {best['tag'].nunique()}",
-                    f"Best affinity: {best['affinity_kcal_mol'].min():.3f}",
-                    f"Mean best affinity: {best['affinity_kcal_mol'].mean():.3f}",
+                    *self._top_ranked_summary_lines(best, ranking_method),
+                    f"Best affinity (raw minimum, descriptive, not used for ranking): {best['affinity_kcal_mol'].min():.3f}",
+                    f"Mean best affinity (raw, descriptive): {best['affinity_kcal_mol'].mean():.3f}",
                     *([f"Complex generation parser: sdf_multiconformer", f"Complex exports written: {gnina_complex_export_count}"] if engine == "gnina" else []),
                     *( [collapse_warning] if collapse_warning else [] ),
                 ]
@@ -5022,11 +5058,44 @@ class MultiEngineAnalysisPipeline:
 
     @classmethod
     def _best_by_tag(cls, scores: pd.DataFrame) -> pd.DataFrame:
-        if scores.empty:
-            return scores.copy()
-        best = cls._best_rows_by_group(select_best_pose_rows(scores), ["tag"], "affinity_kcal_mol")
-        best.sort_values(["affinity_kcal_mol", "tag"], inplace=True)
-        return best
+        """Best row per tag, ordered by the consensus rank (Spec 037 R3b). Raw affinities are never compared across engines.
+
+        The rank is ``consensus_rank_geometry_qc_v2`` for two or more engines and ``single_engine_native_v1`` for one,
+        both from ``build_consensus_rankings`` on the same scores. A ranked tag keeps the pose of its winning engine
+        (``winner_engine``: the highest per-engine rank percentile of its complete case). A tag whose v2 case is
+        incomplete keeps every engine row, with no rank and ``ranking_method`` set to
+        ``ranking_unavailable_consensus_incomplete``.
+        """
+        if scores is None or scores.empty:
+            source_columns = list(scores.columns) if scores is not None else []
+            return pd.DataFrame(columns=source_columns + list(RANK_COLUMNS) + ["ranking_method"])
+        method = ranking_method_for_scores(scores)
+        selected = select_best_pose_rows(scores)
+        consensus = build_consensus_rankings(best_by_engine=scores, consensus_mode=method)
+        if consensus.empty:
+            return pd.DataFrame(columns=list(selected.columns) + list(RANK_COLUMNS) + ["ranking_method"])
+        is_ranked = consensus["consensus_status"].isin(["completed", "single_engine"])
+
+        ranked_keys = consensus.loc[is_ranked, ["protein", "tag", *RANK_COLUMNS]]
+        chosen = selected.merge(ranked_keys, on=["protein", "tag"], how="inner")
+        chosen = chosen[chosen["engine"] == chosen["winner_engine"]].copy()
+        chosen["ranking_method"] = method
+
+        unranked_keys = consensus.loc[~is_ranked, ["protein", "tag", "consensus_status"]]
+        unranked = selected.merge(unranked_keys, on=["protein", "tag"], how="inner").copy()
+        for column in ("consensus_score", "consensus_rank_within_protein", "consensus_rank_global", "winner_engine"):
+            unranked[column] = np.nan
+        unranked["ranking_method"] = RANKING_UNAVAILABLE_CONSENSUS_INCOMPLETE
+
+        best = pd.concat([chosen, unranked], ignore_index=True)
+        best["consensus_rank_global"] = pd.to_numeric(best["consensus_rank_global"], errors="coerce")
+        best.sort_values(
+            ["consensus_rank_global", "protein", "tag", "engine"],
+            na_position="last",
+            kind="mergesort",
+            inplace=True,
+        )
+        return best.reset_index(drop=True)
 
     def _select_best_pose_rows(
         self,
@@ -5115,6 +5184,21 @@ class MultiEngineAnalysisPipeline:
                 f"within_2A={float(row.get('pose_reproducibility_fraction_within_2A')):.2f}"
             )
         return lines + [""]
+
+    @staticmethod
+    def _top_ranked_summary_lines(best: pd.DataFrame, ranking_method: str) -> List[str]:
+        """Spec 037 R3b: the summary headline is the top row of the consensus rank, not a raw minimum."""
+        if "consensus_rank_global" in best.columns:
+            ranked = best[pd.to_numeric(best["consensus_rank_global"], errors="coerce").notna()]
+        else:
+            ranked = best.iloc[0:0]
+        if ranked.empty:
+            return [f"Top ranked complex ({ranking_method}): none; no complete consensus case (ranking_unavailable_consensus_incomplete)"]
+        top = ranked.sort_values("consensus_rank_global", kind="mergesort").iloc[0]
+        return [
+            f"Top ranked complex ({ranking_method}): {top['tag']} "
+            f"(consensus_score={float(top['consensus_score']):.3f}, affinity_kcal_mol={float(top['affinity_kcal_mol']):.3f})"
+        ]
 
     def _write_best_pose_table_outputs(
         self,
@@ -5234,37 +5318,49 @@ class MultiEngineAnalysisPipeline:
             )
             .reset_index()
         )
-        top_overall = best_poses[
-            ["complex_name", "protein", "ligand", "site_id", "vina_affinity", "pose", "engine"]
-        ].head(10)
-        best_per_protein = self._best_rows_by_group(best_poses, ["protein"], "vina_affinity").sort_values(
-            ["vina_affinity", "protein"]
+        # Spec 037 R3b: every ordering below follows the consensus rank. Rows without a rank are not ranked.
+        needed = [*RANK_COLUMNS, "ranking_method"]
+        ranked = best_poses.reindex(columns=list(best_poses.columns) + [c for c in needed if c not in best_poses.columns])
+        ranked = ranked[pd.to_numeric(ranked["consensus_rank_global"], errors="coerce").notna()].copy()
+        top_overall = ranked.reindex(
+            columns=["complex_name", "protein", "ligand", "site_id", "vina_affinity", "pose", "engine",
+                     "consensus_score", "consensus_rank_global", "ranking_method"]
+        ).head(10).reset_index(drop=True)
+        best_per_protein = self._best_rows_by_group(ranked, ["protein"], "consensus_rank_global").sort_values(
+            ["consensus_rank_global", "protein"]
         ).reset_index(drop=True)
-        best_per_ligand = self._best_rows_by_group(best_poses, ["ligand"], "vina_affinity").sort_values(
-            ["vina_affinity", "ligand"]
+        best_per_ligand = self._best_rows_by_group(ranked, ["ligand"], "consensus_rank_global").sort_values(
+            ["consensus_rank_global", "ligand"]
         ).reset_index(drop=True)
+        # The affinity column of a summary is the affinity of its top-ranked row, not a minimum across engines.
+        protein_top = best_per_protein.set_index("protein")["vina_affinity"] if not best_per_protein.empty else pd.Series(dtype=float)
+        ligand_top = best_per_ligand.set_index("ligand")["vina_affinity"] if not best_per_ligand.empty else pd.Series(dtype=float)
         protein_summary = (
-            best_poses.groupby("protein")
+            ranked.groupby("protein")
             .agg(
-                best_affinity=("vina_affinity", "min"),
                 mean_affinity=("vina_affinity", "mean"),
                 ligand_count=("ligand", "nunique"),
                 complex_count=("complex_name", "nunique"),
+                top_consensus_rank_global=("consensus_rank_global", "min"),
+                ranking_method=("ranking_method", "first"),
             )
             .reset_index()
-            .sort_values(["best_affinity", "protein"])
         )
+        protein_summary.insert(1, "best_affinity", protein_summary["protein"].map(protein_top))
+        protein_summary = protein_summary.sort_values(["top_consensus_rank_global", "protein"]).reset_index(drop=True)
         ligand_summary = (
-            best_poses.groupby("ligand")
+            ranked.groupby("ligand")
             .agg(
-                best_affinity=("vina_affinity", "min"),
                 mean_affinity=("vina_affinity", "mean"),
                 protein_count=("protein", "nunique"),
                 complex_count=("complex_name", "nunique"),
+                top_consensus_rank_global=("consensus_rank_global", "min"),
+                ranking_method=("ranking_method", "first"),
             )
             .reset_index()
-            .sort_values(["best_affinity", "ligand"])
         )
+        ligand_summary.insert(1, "best_affinity", ligand_summary["ligand"].map(ligand_top))
+        ligand_summary = ligand_summary.sort_values(["top_consensus_rank_global", "ligand"]).reset_index(drop=True)
         return {
             "full_data": full_data,
             "best_poses": best_poses,

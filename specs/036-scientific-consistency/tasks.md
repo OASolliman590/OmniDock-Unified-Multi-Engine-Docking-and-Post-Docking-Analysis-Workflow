@@ -17,9 +17,9 @@
     - R5b: replicate-aware score import, GNINA log resolver and engine coverage (pairs, not files). Source replicate and seed are kept in the best-pose table. `pose_reproducibility` is in the best-pose table and the summary report. The receptor-stem tags (R6) resolve in the pair index.
     - webui `prep pairlist` box size is blank by default, so the CLI uses `rg_scaled_v1`. A value is entered only for `user_fixed`.
   - **Remaining:**
-    - `MultiEngineAnalysisPipeline._best_by_tag` still takes the minimum raw affinity across engines. It feeds the legacy downstream tables (`affinity_analysis.best_poses`, `top_overall`, `best_per_protein`) in the simplified bridge. Needs a scientific decision on its replacement.
+    - ~~`MultiEngineAnalysisPipeline._best_by_tag` still takes the minimum raw affinity across engines.~~ Done under Spec 037 R3b (Lead decision 6): the summaries rank by the v2 consensus rank, or `single_engine_native_v1` for one engine. Remaining raw-affinity uses are listed in `consensus_inventory.md`, section "Spec 037 R3b".
     - Scientific decision to confirm: `best_pose_criteria` no longer changes the GNINA pose choice (v2 rule only).
-    - The single-engine `summary.txt` still labels GNINA's primary ranking `cnn_affinity`, while the pose is chosen by `cnn_score`.
+    - ~~The single-engine `summary.txt` still labels GNINA's primary ranking `cnn_affinity`, while the pose is chosen by `cnn_score`.~~ Done under Spec 037 R3c: the pose key `cnn_score` and the ligand ranking metric `cnn_affinity` are on separate lines. Which key ranks GNINA ligands is open for the Lead.
     - Stray file `/scripts/repro_item1.py` (debug script created by mistake). The removal was blocked by a safety check, so a person must delete it.
     - Not run: the 1IEP/STI re-dock (T009). No real docking was run. No vina/smina/gnina binaries are on this machine, so the engine paths were exercised in dry-run and synthetic fixtures only.
     - Nothing is committed or pushed yet. The test counts and smoke exit codes above are from the uncommitted working tree.
