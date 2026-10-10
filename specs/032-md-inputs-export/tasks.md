@@ -33,4 +33,6 @@ Verification evidence is recorded in `implementation_report.md`.
 
 ## Gate 11 — Scientific Review
 
-- [ ] **T021** Present method versions, selected poses/scores, pH, predicted or approved charge states, receptor policy, every G1–G8 result, missing/failed rows, provenance hashes, and limitations for Scientific Lead acceptance.
+- [x] **T021** Present method versions, selected poses/scores, pH, predicted or approved charge states, receptor policy, every G1–G8 result, missing/failed rows, provenance hashes, and limitations for Scientific Lead acceptance.
+
+**T021 acceptance:** accepted by the Scientific Lead on 2026-10-10 on the 1IEP/STI evidence in `specs/036-scientific-consistency/evidence/redock_1iep_v3_20261010.md`. Named-consumer (CHARMM-GUI/CGenFF) validation remains `reported_unverified`.
