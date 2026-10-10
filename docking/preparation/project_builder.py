@@ -17,10 +17,12 @@ from ..models import PairlistRow, ProjectManifest
 from ..project_layout import (
     LAYOUT_DOCKING_LEGACY,
     PAIRLIST_COLUMNS,
+    PROTONATION_POLICY_KEY,
     deployment_root,
     ensure_engine_layout,
     ensure_gnina_hpc_compat_layout,
     ensure_project_layout,
+    load_manifest,
     pair_curation_state_path,
     pairlist_path,
     save_manifest,
@@ -101,12 +103,51 @@ def _recorded_box_provenance(raw_row: pd.Series) -> Dict[str, object]:
     }
 
 
+# Fields that _load_existing_pairlist_rows rebuilds itself. Every other column of an existing
+# pairlist is carried through (Spec 036 R2/R5a: pair metadata must survive `prep project`).
+_ROW_BUILT_COLUMNS = {
+    "receptor",
+    "site_id",
+    "ligand",
+    "center_x",
+    "center_y",
+    "center_z",
+    "size_x",
+    "size_y",
+    "size_z",
+    "box_method",
+    "ligand_rg_angstrom",
+    "edge_angstrom",
+    "box_containment_status",
+    "box_warnings",
+}
+PAIR_INTENT_SNAPSHOT_NAME = "pair_intent.csv"
+
+
+def _carry_cell(value: object) -> object:
+    """A cell as written to CSV: missing values become empty text, not 'nan'."""
+    if value is None:
+        return ""
+    try:
+        if bool(pd.isna(value)):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return value
+
+
+def _pairlist_output_columns(carried: List[str]) -> List[str]:
+    """The canonical pairlist header, followed by every carried column it does not already name."""
+    return list(PAIRLIST_COLUMNS) + [column for column in carried if column not in PAIRLIST_COLUMNS]
+
+
 class DockingProjectBuilder:
     RECEPTOR_SUFFIXES = {".pdbqt", ".pdb"}
     LIGAND_SUFFIXES = {".pdbqt", ".pdb", ".sdf", ".mol2"}
 
     def __init__(self, config: DockingPreparationConfig):
         self.config = config
+        self._carried_columns: List[str] = []
 
     def build(self) -> Dict[str, object]:
         layout = ensure_project_layout(self.config.output_dir, self.config.layout_profile)
@@ -197,7 +238,7 @@ class DockingProjectBuilder:
         _write_csv(
             pairlist_file,
             [row.to_dict() for row in rows],
-            PAIRLIST_COLUMNS,
+            _pairlist_output_columns(self._carried_columns),
         )
 
         if self.config.excel_path:
@@ -206,7 +247,8 @@ class DockingProjectBuilder:
                 excel_snapshot = layout["metadata"] / excel_path.name
                 _copy_if_different(excel_path, excel_snapshot)
         if self.config.pair_intent:
-            intent_snapshot = layout["metadata"] / self.config.pair_intent.name
+            # Spec 036: the snapshot is always metadata/pair_intent.csv, the file every reader loads.
+            intent_snapshot = layout["metadata"] / PAIR_INTENT_SNAPSHOT_NAME
             _copy_if_different(self.config.pair_intent, intent_snapshot)
 
         for engine in engines:
@@ -262,7 +304,7 @@ class DockingProjectBuilder:
             warnings_file = layout["metadata"] / "preparation_warnings.txt"
             warnings_file.write_text("\n".join(warnings), encoding="utf-8")
             manifest.notes.append(f"warnings_file={warnings_file}")
-        save_manifest(self.config.output_dir, manifest.to_dict())
+        save_manifest(self.config.output_dir, self._merged_manifest_payload(manifest, engines))
 
         return {
             "project_root": str(self.config.output_dir),
@@ -278,6 +320,35 @@ class DockingProjectBuilder:
             "layout_profile": self.config.layout_profile,
             "autodock4_isolated_assets": "autodock4" in engines,
         }
+
+    def _merged_manifest_payload(self, manifest: ProjectManifest, engines: List[str]) -> Dict[str, object]:
+        """Fresh manifest values over the existing manifest, keeping what this writer does not model.
+
+        The project protonation policy (Spec 036 R1a), engine settings written by earlier stages and
+        unknown keys survive a re-run of `prep project`.
+        """
+        existing: Dict[str, object] = {}
+        try:
+            existing = load_manifest(self.config.output_dir, self.config.layout_profile)
+        except FileNotFoundError:
+            existing = {}
+        payload: Dict[str, object] = {**existing, **manifest.to_dict()}
+        if existing.get(PROTONATION_POLICY_KEY):
+            payload[PROTONATION_POLICY_KEY] = dict(existing[PROTONATION_POLICY_KEY])
+        if existing.get("created_at"):
+            payload["created_at"] = existing["created_at"]
+        # Per engine: a fresh empty settings dict must not erase settings recorded by an earlier stage.
+        engine_settings: Dict[str, Dict[str, object]] = {engine: {} for engine in engines}
+        for source in (dict(existing.get("engine_settings") or {}), dict(manifest.engine_settings or {})):
+            for engine, settings in source.items():
+                engine_settings[engine] = {**engine_settings.get(engine, {}), **dict(settings or {})}
+        payload["engine_settings"] = engine_settings
+        compatibility = list(existing.get("compatibility_profiles") or [])
+        for profile in manifest.compatibility_profiles:
+            if profile not in compatibility:
+                compatibility.append(profile)
+        payload["compatibility_profiles"] = compatibility
+        return payload
 
     def _index_assets(self, directory: Path, allowed_suffixes: set[str]) -> Dict[str, Path]:
         directory = Path(directory)
@@ -415,6 +486,7 @@ class DockingProjectBuilder:
         receptor_links: List[Tuple[Path, Path]] = []
         ligand_links: List[Tuple[Path, Path]] = []
         warnings: List[str] = []
+        self._carried_columns = [str(column) for column in pairlist_df.columns if column not in _ROW_BUILT_COLUMNS]
         for _, raw_row in pairlist_df.iterrows():
             try:
                 receptor_source = self._resolve_asset(str(raw_row["receptor"]), receptor_index, "receptor")
@@ -435,6 +507,7 @@ class DockingProjectBuilder:
                     size_y=float(raw_row["size_y"]),
                     size_z=float(raw_row["size_z"]),
                     **_recorded_box_provenance(raw_row),
+                    extra={column: _carry_cell(raw_row.get(column)) for column in self._carried_columns},
                 )
             )
             receptor_links.append((receptor_source, Path("receptors")))

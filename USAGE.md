@@ -53,6 +53,7 @@ python main.py dock run --project-dir <project> --engines vina \
 ```
 - `--seed` is required. Replicate k uses seed `base + k - 1`.
 - Defaults: exhaustiveness 32, 3 replicates, `--energy_range 3` (Vina/Smina), parameter preset `exhaustive`.
+- Basic mode takes num_modes from `--parameter-preset` (`exhaustive` gives 40) and refuses `--num-modes`; pass `--parameter-mode advanced --num-modes <n>` to set it. The effective value and its source are printed and written to `run_manifest.json`.
 - Every replicate writes `<pair_tag>__repNN.<ext>` and is listed in `run_manifest.json` (see `specs/036-scientific-consistency/replicate_contract.md`).
 - Use `--dry-run` to write commands and manifests without running the engine.
 

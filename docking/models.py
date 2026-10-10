@@ -54,6 +54,9 @@ class PairlistRow:
     edge_angstrom: Optional[float] = None
     box_containment_status: str = ""
     box_warnings: str = ""
+    # Other pairlist columns carried from an existing pairlist (pair metadata, reference lineage).
+    # Written back by the pairlist writers so that no source column is dropped (Spec 036 R5a / R2).
+    extra: Dict[str, object] = field(default_factory=dict, compare=False)
 
     @property
     def receptor_stem(self) -> str:
@@ -70,7 +73,10 @@ class PairlistRow:
         return legacy_pair_tag(self.receptor, self.site_id, self.ligand)
 
     def to_dict(self) -> Dict[str, object]:
-        return asdict(self)
+        payload = asdict(self)
+        extra = payload.pop("extra", {}) or {}
+        payload.update(extra)
+        return payload
 
 
 @dataclass
@@ -146,6 +152,9 @@ class EngineJobResult:
     num_modes: Optional[int] = None
     energy_range: Optional[float] = None
     poses_returned: Optional[int] = None
+    # Measured wall time of the engine process (seconds). Null for dry runs and jobs that did not start.
+    wall_time_s: Optional[float] = None
+    duration_s: Optional[float] = None
     box_method: str = ""
     ligand_rg_angstrom: Optional[float] = None
     edge_angstrom: Optional[float] = None

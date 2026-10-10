@@ -37,12 +37,21 @@ _RECEPTOR_LINEAGE_FIELDS = (
 _LEGACY_TOKENS = ("reference", "cocrystal", "co-crystal", "native", "redocking", "benchmark", "control")
 
 
+def _cell_text(value: object) -> str:
+    """Text of one cell; a missing value (None or NaN after a merge) is the empty string, never 'nan'."""
+    if value is None:
+        return ""
+    try:
+        if bool(pd.isna(value)):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip()
+
+
 def _text(row: Mapping[str, object], fields: tuple[str, ...]) -> Dict[str, str]:
-    return {
-        field: str(row.get(field) or "").strip()
-        for field in fields
-        if str(row.get(field) or "").strip()
-    }
+    values = {field: _cell_text(row.get(field)) for field in fields}
+    return {field: value for field, value in values.items() if value}
 
 
 @dataclass(frozen=True)

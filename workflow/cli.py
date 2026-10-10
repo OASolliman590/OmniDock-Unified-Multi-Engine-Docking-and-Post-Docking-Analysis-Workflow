@@ -823,8 +823,12 @@ def _add_dock_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--autodock4-ls-search-freq", type=float)
     parser.add_argument("--autodock4-torsdof", type=int)
     parser.add_argument("--exhaustiveness", type=int, default=32)
-    parser.add_argument("--num-modes", type=int, default=20)
+    # None = not given: the docking CLI applies its default (basic mode takes num_modes from the preset).
+    parser.add_argument("--num-modes", type=int, default=None, help="Advanced mode only; basic mode refuses it")
     parser.add_argument("--seed", type=int)
+    # Spec 036 R5b/R5d: documented in USAGE.md. None = the docking CLI default (3 replicates, energy_range 3).
+    parser.add_argument("--replicates", type=int, default=None, help="Seeded replicates per pair (default 3)")
+    parser.add_argument("--energy-range", type=float, default=None, help="Vina/Smina energy_range in kcal/mol (default 3)")
     parser.add_argument("--box-scale", type=float, default=1.0)
     parser.add_argument("--box-padding", type=float, default=0.0)
     parser.add_argument("--parameter-mode", choices=["basic", "advanced"], default="basic")
@@ -1045,6 +1049,8 @@ def _build_dock_argv(args: argparse.Namespace, forced_engine: Optional[str] = No
         "--exhaustiveness",
         "--num-modes",
         "--seed",
+        "--replicates",
+        "--energy-range",
         "--box-scale",
         "--box-padding",
     ]:
@@ -1352,7 +1358,13 @@ def _run_analysis_dispatch(args: argparse.Namespace, target: str) -> int:
             protonate=not bool(getattr(args, "no_protonate", False)),
             force=bool(getattr(args, "force", False)),
         )
-        print(f"MD-input manifest: {result.outputs.get('manifest_file', '')}")
+        # Print the status and the reason, so that a blocked run is never silent.
+        print(f"MD-input status: {result.status}")
+        for note in result.notes:
+            print(f"MD-input reason: {note}")
+        if result.status != "completed" and not result.notes:
+            print("MD-input reason: none recorded; see the md-inputs manifest for row-level reasons")
+        print(f"MD-input manifest: {result.outputs.get('manifest_file', '') or 'not written'}")
         print(f"MD-input counts: {result.outputs.get('counts', {})}")
         return 0 if result.status == "completed" else 1
     if target == "analyze.comparative":

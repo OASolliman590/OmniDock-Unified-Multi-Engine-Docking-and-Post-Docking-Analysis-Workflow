@@ -19,13 +19,15 @@ Producer: `docking/runners/base.py` (dock run). Consumers: post-docking pooling 
 - Legacy pose names (`<receptor file name>_site_..._<ligand>`, pre-Spec 036) are still read as their pair.
 
 ## Run manifest (`engines/<engine>/run_manifest.json`)
-- `effective`: `{engine, exhaustiveness, num_modes, energy_range, replicates, seeds, replicate_contract}`.
+- `effective`: `{engine, exhaustiveness, num_modes, num_modes_source, energy_range, replicates, seeds, replicate_contract}`.
+  `num_modes_source` is `user_explicit` (advanced mode, `--num-modes`), `basic_preset:<name>` (basic mode; the preset sets num_modes), or `advanced_default`.
 - `jobs[]`: one entry per (pair, replicate), with:
   - `tag` (replicate job tag), `pair_tag`, `replicate_id`, `seed`, `pose_file` (the output path);
   - `replicates`: the full list for this pair, `[{replicate_id, seed, output_path}, ...]`;
   - `box_method`, `ligand_rg_angstrom`, `edge_angstrom`;
   - `exhaustiveness`, `num_modes`, `energy_range`;
   - `status`, `returncode`, `poses_returned`, `warnings` (for example `poses_returned=2 is fewer than num_modes=5`).
+  - `wall_time_s` and `duration_s`: the measured engine process time in seconds (the same value). Null for dry runs and for jobs that did not start.
 - `poses_returned` is the number of `MODEL` records in a Vina/Smina pose file. It is null for dry runs and for engines without this count.
 
 ## Normalised scores (`engines/<engine>/scores/normalized_scores.csv`)

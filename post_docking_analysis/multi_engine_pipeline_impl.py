@@ -178,9 +178,27 @@ _PAIR_METADATA_COLUMNS = (
     "reference_ligand_id",
     "reference_source_structure_id",
     "reference_receptor_id",
+    "reference_receptor_file",
     "topology_file",
     "ligand_topology_file",
 )
+
+
+def _keyed_pair_metadata(frame: pd.DataFrame) -> pd.DataFrame:
+    """Pair-metadata rows indexed by tag; each pair appears under its receptor-stem and legacy tags."""
+    columns = [column for column in _PAIR_METADATA_COLUMNS if frame is not None and column in frame.columns]
+    if frame is None or frame.empty or not {"receptor", "site_id", "ligand"}.issubset(frame.columns):
+        return pd.DataFrame(columns=columns).rename_axis("tag")
+    records: List[Dict[str, object]] = []
+    for _, row in frame.iterrows():
+        receptor, site_id, ligand = str(row["receptor"]), str(row["site_id"]), str(row["ligand"])
+        values = {column: row.get(column) for column in columns}
+        for tag in dict.fromkeys((pair_tag(receptor, site_id, ligand), legacy_pair_tag(receptor, site_id, ligand))):
+            records.append({"tag": tag, **values})
+    keyed = pd.DataFrame(records, columns=["tag", *columns]).drop_duplicates("tag", keep="first")
+    return keyed.set_index("tag")
+
+
 _BEST_POSE_SELECTION_METRIC_ALIASES = {
     "auto": "auto",
     "affinity": "vina_affinity",
@@ -2568,19 +2586,34 @@ class MultiEngineAnalysisPipeline:
         return index
 
     def _pair_metadata_frame(self) -> pd.DataFrame:
-        if self.pairlist_df is None or self.pairlist_df.empty:
+        """Pair metadata keyed by the Spec 036 R6 pair tag (and the legacy tag).
+
+        Sources in order: the project pairlist, then ``metadata/pair_intent.csv`` for any field the
+        pairlist does not carry (a blank pairlist cell never hides an intent value). Pose rows carry the
+        receptor-stem tag, so the key must be ``pair_tag`` (not the legacy receptor-file-name tag).
+        """
+        pairlist_source = pd.DataFrame()
+        try:
+            pairlist_source = load_pairlist(self.project_dir)
+        except (FileNotFoundError, pd.errors.EmptyDataError):
+            pairlist_source = pd.DataFrame()
+        intent_source = pd.DataFrame()
+        intent_file = pair_intent_path(self.project_dir, self.manifest.get("layout_profile"))
+        if intent_file.is_file():
+            try:
+                intent_source = pd.read_csv(intent_file)
+            except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
+                logger.warning("Could not load pair_intent.csv for pair metadata (%s): %s", intent_file, exc)
+        primary = _keyed_pair_metadata(pairlist_source)
+        fallback = _keyed_pair_metadata(intent_source)
+        if primary.empty and fallback.empty:
             return pd.DataFrame(columns=["tag", *_PAIR_METADATA_COLUMNS])
-        frame = self.pairlist_df.copy()
-        if "tag" not in frame.columns:
-            frame["tag"] = frame.apply(
-                lambda row: f"{row['receptor']}_{row['site_id']}_{row['ligand']}",
-                axis=1,
-            ).astype(str)
-        keep = ["tag"] + [column for column in _PAIR_METADATA_COLUMNS if column in frame.columns]
-        meta = frame[keep].copy().drop_duplicates("tag")
+        combined = primary.combine_first(fallback).reset_index()
+        meta = combined[["tag", *[c for c in _PAIR_METADATA_COLUMNS if c in combined.columns]]].copy()
+        # Normalise after the merge: a blank flag must not be read as False before the intent is consulted.
         if "is_cocrystal_benchmark" in meta.columns:
             meta["is_cocrystal_benchmark"] = normalize_boolean_series(meta["is_cocrystal_benchmark"])
-        return meta
+        return meta.drop_duplicates("tag")
 
     @staticmethod
     def _merge_pair_metadata(frame: pd.DataFrame, pair_meta: pd.DataFrame) -> pd.DataFrame:

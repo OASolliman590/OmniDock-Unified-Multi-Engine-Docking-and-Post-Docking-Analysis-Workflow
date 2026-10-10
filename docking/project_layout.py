@@ -246,11 +246,23 @@ def _legacy_layout(project_root: Path) -> Dict[str, Path]:
     return layout
 
 
+def project_layout_paths(project_root: Path, layout_profile: Optional[str] = None) -> Dict[str, Path]:
+    """Layout dict of a project under its own root, without creating any directory.
+
+    Use this to resolve where a stage's files live (Spec 036 R6). Use ``ensure_project_layout``
+    when the directories must exist.
+    """
+    root = Path(project_root).expanduser().resolve()
+    profile = detect_layout_profile(root, layout_profile)
+    layout = _legacy_layout(root) if profile == LAYOUT_DOCKING_LEGACY else _canonical_layout(root)
+    layout["layout_profile"] = profile
+    return layout
+
+
 def ensure_project_layout(project_root: Path, layout_profile: str = LAYOUT_CANONICAL) -> Dict[str, Path]:
     project_root = Path(project_root).expanduser().resolve()
-    profile = detect_layout_profile(project_root, layout_profile)
-    layout = _legacy_layout(project_root) if profile == LAYOUT_DOCKING_LEGACY else _canonical_layout(project_root)
-    layout["layout_profile"] = profile
+    layout = project_layout_paths(project_root, layout_profile)
+    profile = layout["layout_profile"]
     for key, path in layout.items():
         if key in {"project_root", "layout_profile"}:
             continue

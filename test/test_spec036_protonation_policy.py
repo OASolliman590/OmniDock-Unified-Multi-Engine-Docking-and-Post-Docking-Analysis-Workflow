@@ -84,20 +84,28 @@ def _pose_copy(directory: Path, *, smiles: str | None = None, name: str = "sti_v
     return target
 
 
-def _write_manifest(project: Path) -> None:
+def _write_manifest(project: Path, layout_profile: str = "canonical") -> None:
     project.mkdir(parents=True, exist_ok=True)
     (project / "project_manifest.json").write_text(
         json.dumps(
             {
                 "project_name": "spec036",
                 "project_root": str(project),
-                "layout_profile": "canonical",
+                "layout_profile": layout_profile,
                 "engines": ["vina"],
                 "favorite_engine": "vina",
             }
         ),
         encoding="utf-8",
     )
+
+
+def _prepared_dirs_for(project: Path) -> tuple:
+    """Prepared receptor and ligand directories of the project, as its recorded layout profile puts them."""
+    profile = json.loads((project / "project_manifest.json").read_text(encoding="utf-8"))["layout_profile"]
+    if profile == "docking_legacy":
+        return project / "3-Preparation" / "2-Prepared_Protiens", project / "3-Preparation" / "4-Prepared_Ligand"
+    return project / "prepared_proteins", project / "prepared_ligands"
 
 
 def _make_docked_project(
@@ -174,14 +182,14 @@ def _write_step_report(
             "microspecies_smiles": pdbqt_canonical,
             "stereo_compared": False,
         }
-    report_dir = project / "1-Preparation" / "ligands" / "prepared" / "preparation_steps"
+    report_dir = _prepared_dirs_for(project)[1] / "preparation_steps"
     report_dir.mkdir(parents=True, exist_ok=True)
     report = report_dir / f"{name}.json"
     report.write_text(
         json.dumps(
             {
                 "input_file": str(input_file),
-                "output_file": str(project / "1-Preparation" / "ligands" / "prepared" / f"{name}.pdbqt"),
+                "output_file": str(_prepared_dirs_for(project)[1] / f"{name}.pdbqt"),
                 "protonation": {
                     "policy": policy,
                     "ph": ph if policy == "ph_model" else None,
@@ -624,9 +632,9 @@ def test_legacy_openbabel_predicted_flag_is_recorded_as_override(tmp_path):
 # ---------------------------------------------------------------- R6 subset: generated md-input maps
 
 
-def _auto_project(tmp_path: Path):
+def _auto_project(tmp_path: Path, layout_profile: str = "canonical"):
     project = tmp_path / "auto_project"
-    _write_manifest(project)
+    _write_manifest(project, layout_profile)
     pose = _pose_copy(tmp_path / "poses")
     selection = project / "4-Working" / "scores" / "unified"
     selection.mkdir(parents=True)
@@ -643,7 +651,7 @@ def _auto_project(tmp_path: Path):
             }
         ]
     ).to_csv(selection / "best_pose_per_tag_by_engine.csv", index=False)
-    receptors = project / "1-Preparation" / "receptors" / "prepared"
+    receptors = _prepared_dirs_for(project)[0]
     receptors.mkdir(parents=True)
     chain_pdb = project / "0-Input" / "receptors" / "prot_chain_A.pdb"
     _write_protein(chain_pdb)
@@ -718,7 +726,7 @@ def test_auto_maps_refuse_explicit_files_as_ambiguous(tmp_path):
 
 def test_missing_ligand_provenance_fails_with_explicit_reason(tmp_path):
     project = _auto_project(tmp_path)
-    shutil.rmtree(project / "1-Preparation" / "ligands" / "prepared" / "preparation_steps")
+    shutil.rmtree(_prepared_dirs_for(project)[1] / "preparation_steps")
     with pytest.raises(MDMapError) as caught:
         resolve_md_input_maps(project, "vina", auto_maps=True)
     assert caught.value.reason == "ligand_provenance_missing:sti"
@@ -726,7 +734,7 @@ def test_missing_ligand_provenance_fails_with_explicit_reason(tmp_path):
 
 def test_ambiguous_ligand_provenance_fails_instead_of_guessing(tmp_path):
     project = _auto_project(tmp_path)
-    report_dir = project / "1-Preparation" / "ligands" / "prepared" / "preparation_steps"
+    report_dir = _prepared_dirs_for(project)[1] / "preparation_steps"
     shutil.copy2(report_dir / "sti.json", report_dir / "sti_duplicate.json")
     with pytest.raises(MDMapError) as caught:
         resolve_md_input_maps(project, "vina", auto_maps=True)
@@ -735,7 +743,7 @@ def test_ambiguous_ligand_provenance_fails_instead_of_guessing(tmp_path):
 
 def test_missing_receptor_lineage_fails_with_explicit_reason(tmp_path):
     project = _auto_project(tmp_path)
-    (project / "1-Preparation" / "receptors" / "prepared" / "prot.pdbqt.preparation.json").unlink()
+    (_prepared_dirs_for(project)[0] / "prot.pdbqt.preparation.json").unlink()
     with pytest.raises(MDMapError) as caught:
         resolve_md_input_maps(project, "vina", auto_maps=True)
     assert caught.value.reason.startswith("receptor_preparation_record_missing")
@@ -839,3 +847,40 @@ def test_cli_md_inputs_with_auto_maps_runs_the_dag_and_completes(tmp_path):
     assert manifest["counts"]["completed"] == 1
     assert manifest["rows"][0]["gates"]["G6"]["charge_authority"] == "predicted"
     assert (project / ".meta" / "md_inputs_maps" / "auto_maps_manifest.json").is_file()
+
+
+@pytest.mark.parametrize("layout_profile", ["canonical", "docking_legacy"])
+def test_auto_maps_resolve_receptor_lineage_and_ligand_provenance_through_layout(tmp_path, layout_profile):
+    """Spec 036 R6: the auto maps find the receptor lineage and the ligand provenance through the layout."""
+    project = _auto_project(tmp_path, layout_profile)
+    resolved = resolve_md_input_maps(project, "vina", auto_maps=True)
+    receptor_map = pd.read_csv(resolved["receptor_map"], dtype=str)
+    assert Path(receptor_map.loc[0, "receptor_file"]).name == "prot_chain_A.pdb"
+    topology_map = pd.read_csv(resolved["topology_map"], dtype=str)
+    assert Path(topology_map.loc[0, "topology_file"]).resolve() == CRYSTAL_SDF.resolve()
+
+
+def test_auto_maps_do_not_read_numbered_directories_of_a_canonical_project(tmp_path):
+    """A canonical project is read from prepared_proteins only; a numbered 1-Preparation copy is ignored."""
+    project = _auto_project(tmp_path, "canonical")
+    shutil.rmtree(project / "prepared_proteins")
+    stale = project / "1-Preparation" / "receptors" / "prepared"
+    stale.mkdir(parents=True)
+    (stale / "prot.pdbqt").write_text("ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00    -0.300 N\n", encoding="utf-8")
+    with pytest.raises(MDMapError) as caught:
+        resolve_md_input_maps(project, "vina", auto_maps=True)
+    assert caught.value.reason == "receptor_lineage_missing:prot"
+
+
+def test_manifest_prepared_dir_outside_the_project_is_not_used(tmp_path):
+    """A copied project whose manifest points at another project's prepared directory must not read it."""
+    project = _auto_project(tmp_path / "copy", "canonical")
+    _auto_project(tmp_path / "original", "canonical")
+    shutil.rmtree(project / "prepared_proteins")
+    manifest_path = project / "project_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["prepared_proteins_dir"] = str(tmp_path / "original" / "auto_project" / "prepared_proteins")
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(MDMapError) as caught:
+        resolve_md_input_maps(project, "vina", auto_maps=True)
+    assert caught.value.reason == "receptor_lineage_missing:prot"

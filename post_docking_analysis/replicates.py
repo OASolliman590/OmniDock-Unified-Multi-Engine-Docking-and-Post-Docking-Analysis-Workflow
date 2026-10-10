@@ -23,8 +23,9 @@ import pandas as pd
 from .replicate_names import split_replicate_stem
 
 from .atom_mapping import (
+    IN_PLACE_METHOD,
     LineageError,
-    compare_graph_poses_in_place,
+    compare_pose_pair,
     load_pdbqt_lineage_pose,
     load_sdf_graph_pose,
 )
@@ -191,7 +192,7 @@ def pose_reproducibility_table(normalized: pd.DataFrame) -> pd.DataFrame:
                 if pose_a is None or pose_b is None:
                     reasons.append(str(reason_a or reason_b))
                     continue
-                result = compare_graph_poses_in_place(pose_a, pose_b)
+                result = compare_pose_pair(pose_a, pose_b, rmsd_frame=IN_PLACE_METHOD)
                 if result.comparable:
                     rmsd_values.append(float(result.rmsd_angstrom))
                 else:

@@ -23,8 +23,7 @@ from post_docking_analysis.atom_mapping import (
     MAPPING_METHOD,
     LineageError,
     attach_coordinates_to_topology,
-    compare_graph_poses_in_place,
-    compare_lineage_graph_poses,
+    compare_pose_pair,
     load_pdbqt_lineage_pose,
     load_sdf_graph_pose,
     not_comparable_result,
@@ -119,7 +118,10 @@ def _compute_pose_rmsd(
         except (OSError, RuntimeError, ValueError) as exc:
             result = not_comparable_result(f"reference_pose_not_comparable:{exc}")
             return None, result.reason, result.to_dict()
-        lineage_result = compare_lineage_graph_poses(lineage_docked, reference, rmsd_frame=IN_PLACE_METHOD)
+        # Spec 036 R1b/R2: redocking compares neutral parent graphs (charge-blind atom correspondence).
+        lineage_result = compare_pose_pair(
+            lineage_docked, reference, rmsd_frame=IN_PLACE_METHOD, charge_blind_parent_mapping=True
+        )
         if not lineage_result.comparable:
             return None, f"not_comparable:{lineage_result.reason}", lineage_result.to_dict()
         return float(lineage_result.rmsd_angstrom), "", lineage_result.to_dict()
@@ -134,7 +136,7 @@ def _compute_pose_rmsd(
     except (OSError, RuntimeError, ValueError) as exc:
         result = not_comparable_result(f"reference_pose_not_comparable:{exc}")
         return None, result.reason, result.to_dict()
-    result = compare_graph_poses_in_place(docked, reference)
+    result = compare_pose_pair(docked, reference, rmsd_frame=IN_PLACE_METHOD, charge_blind_parent_mapping=True)
     if not result.comparable:
         return None, f"not_comparable:{result.reason}", result.to_dict()
     return float(result.rmsd_angstrom), "", result.to_dict()
@@ -321,6 +323,7 @@ def run_redocking_validation(
         "redocking_rmsd_frame",
         "kabsch_secondary_rmsd_angstrom",
         "rmsd_secondary_method",
+        "charge_blind_parent_mapping",
     ]
     baseline_columns = [
         "protein",
@@ -454,6 +457,7 @@ def run_redocking_validation(
                 "rmsd_secondary_method": (
                     KABSCH_SECONDARY_METHOD if rmsd is not None and mapping_details.get("kabsch_rmsd_angstrom") is not None else ""
                 ),
+                "charge_blind_parent_mapping": bool(mapping_details.get("charge_blind_parent_mapping", False)),
             }
         )
 

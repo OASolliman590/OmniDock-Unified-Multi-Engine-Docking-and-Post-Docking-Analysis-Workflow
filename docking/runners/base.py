@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -118,6 +119,8 @@ class DockingEngineRunner(ABC):
             "energy_range": self.effective_energy_range,
             "replicates": self.effective_replicates,
             "seeds": seeds,
+            # Spec 036 R5c/R5d: where num_modes came from (user_explicit, basic_preset:<name>, advanced_default).
+            "num_modes_source": str(self.runtime.get("num_modes_source") or ""),
             "replicate_contract": "specs/036-scientific-consistency/replicate_contract.md",
         }
 
@@ -177,12 +180,16 @@ class DockingEngineRunner(ABC):
             runner_log = self.layout["logs"] / f"{job.tag}.runner.log"
             pair_log = Path(job.log_file)
             cwd_value = Path(str(self.runtime.get("execution_workdir") or self.project_root))
+            started = time.monotonic()
             completed = subprocess.run(
                 job.command,
                 cwd=cwd_value,
                 capture_output=True,
                 text=True,
             )
+            elapsed = round(time.monotonic() - started, 3)
+            job.wall_time_s = elapsed
+            job.duration_s = elapsed
             if not pair_log.exists() or pair_log.stat().st_size == 0:
                 pair_log.write_text(
                     f"COMMAND: {' '.join(job.command)}\n\nSTDOUT:\n{completed.stdout}\n\nSTDERR:\n{completed.stderr}",

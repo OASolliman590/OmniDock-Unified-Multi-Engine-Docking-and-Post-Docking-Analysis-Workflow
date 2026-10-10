@@ -21,6 +21,7 @@ from .box_policy import CONTAINMENT_NOT_EVALUATED, box_warnings
 from .models import PairlistRow
 from .parameter_schema import (
     DEFAULT_ENERGY_RANGE,
+    DEFAULT_NUM_MODES,
     DEFAULT_PARAMETER_PRESET,
     DEFAULT_REPLICATES,
     EXHAUSTIVENESS_LEVEL,
@@ -552,7 +553,12 @@ def dock_main(argv=None) -> int:
         default=EXHAUSTIVENESS_LEVEL,
         help="Exhaustiveness (Spec 036 R5c default 32; basic mode uses the preset value)",
     )
-    parser.add_argument("--num-modes", type=int, default=20, help="Shared num_modes default")
+    parser.add_argument(
+        "--num-modes",
+        type=int,
+        default=None,
+        help="num_modes. Advanced mode default 20. Basic mode takes num_modes from --parameter-preset and refuses this flag.",
+    )
     parser.add_argument(
         "--seed",
         type=int,
@@ -618,6 +624,10 @@ def dock_main(argv=None) -> int:
     if args.seed is None:
         print("❌ `--seed` is required for every dock run (Spec 036 R5b). Replicates use seed, seed+1, ...")
         return 1
+    # Spec 036: keep an explicit --num-modes distinct from the default, so basic mode can refuse it.
+    num_modes_explicit = args.num_modes is not None
+    if not num_modes_explicit:
+        args.num_modes = DEFAULT_NUM_MODES
     runtime_by_engine = _build_runtime_by_engine(args, docking_mode="screen", round_id=round_id)
 
     env_config = ExecutionEnvironmentConfig(
@@ -649,6 +659,7 @@ def dock_main(argv=None) -> int:
         runtime_by_engine=runtime_by_engine,
         energy_range=float(args.energy_range),
         replicates=int(args.replicates),
+        num_modes_explicit=num_modes_explicit,
     )
     schema_errors, schema_warnings = validate_parameter_schema(parameter_schema, engines)
     for warning in schema_warnings:
@@ -716,7 +727,8 @@ def dock_main(argv=None) -> int:
         effective = results[engine]["effective"]
         print(
             f"   {engine} effective: exhaustiveness={effective['exhaustiveness']} "
-            f"num_modes={effective['num_modes']} energy_range={effective['energy_range']} "
+            f"num_modes={effective['num_modes']} (source: {effective.get('num_modes_source') or 'unrecorded'}) "
+            f"energy_range={effective['energy_range']} "
             f"replicates={effective['replicates']} seeds={effective['seeds']}"
         )
         completed = sum(1 for job in results[engine]["jobs"] if job["status"] == "completed")

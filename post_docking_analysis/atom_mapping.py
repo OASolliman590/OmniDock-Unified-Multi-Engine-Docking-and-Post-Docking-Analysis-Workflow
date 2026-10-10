@@ -98,6 +98,8 @@ class AtomMappingResult:
     reference_lineage_source: str = ""
     rmsd_frame: str = ""
     kabsch_rmsd_angstrom: Optional[float] = None
+    # Spec 036 R2/R1b: True when both graphs were compared as neutral parents (formal charges removed).
+    charge_blind_parent_mapping: bool = False
 
     @property
     def comparable(self) -> bool:
@@ -126,6 +128,7 @@ class AtomMappingResult:
             "reference_lineage_source": self.reference_lineage_source,
             "rmsd_frame": self.rmsd_frame,
             "kabsch_rmsd_angstrom": self.kabsch_rmsd_angstrom,
+            "charge_blind_parent_mapping": self.charge_blind_parent_mapping,
         }
 
 
@@ -883,41 +886,88 @@ def _normalize_pose_convention(pose: GraphPose) -> GraphPose:
     return replace(pose, graph=_aromatic_convention_graph(pose.graph))
 
 
+def neutral_parent_pose(pose: GraphPose) -> GraphPose:
+    """Charge-blind copy of a heavy-atom graph: each charged atom is taken to its neutral parent.
+
+    The Spec 031 node rule compares formal charges, which differ between protonation states of
+    the same molecule. Removing the charge and one proton per unit of charge gives the parent
+    heavy-atom graph that the crystal topology describes. Heavy-atom coordinates are unchanged.
+    Used for atom correspondence only (Spec 036 R1b for the MD G3 map; redocking).
+    """
+    graph = pose.graph.copy()
+    for node in graph.nodes:
+        data = graph.nodes[node]
+        charge = int(data.get("formal_charge", 0))
+        if "total_h" in data:
+            data["total_h"] = int(data["total_h"]) - charge
+        data["formal_charge"] = 0
+    return replace(pose, graph=graph)
+
+
+def compare_pose_pair(
+    pose_a: GraphPose,
+    pose_b: GraphPose,
+    *,
+    rmsd_frame: str = KABSCH_METHOD,
+    charge_blind_parent_mapping: bool = False,
+    max_isomorphisms: int = DEFAULT_MAX_ISOMORPHISMS,
+) -> AtomMappingResult:
+    """The single pose-comparison entry point (redocking, replicate reproducibility, md-inputs G3).
+
+    Both graphs go through ``_aromatic_convention_graph`` (one bond-order convention) before the mapping
+    comparison, for either RMSD frame: ``kabsch`` (Spec 031 atom_map derivation) or ``in_place_v1``
+    (Spec 034 T002a redocking primary). ``charge_blind_parent_mapping`` compares neutral parent graphs,
+    for atom correspondence only. Failure to normalise is ``not_comparable``; nothing is loosened.
+    """
+    if rmsd_frame not in (KABSCH_METHOD, IN_PLACE_METHOD):
+        raise ValueError(f"unknown_rmsd_frame:{rmsd_frame}")
+    compare = compare_graph_poses_in_place if rmsd_frame == IN_PLACE_METHOD else compare_graph_poses
+    alignment = "in_place" if rmsd_frame == IN_PLACE_METHOD else ALIGNMENT_METHOD
+    work_a, work_b = pose_a, pose_b
+    if charge_blind_parent_mapping:
+        work_a, work_b = neutral_parent_pose(pose_a), neutral_parent_pose(pose_b)
+    try:
+        normalized_a = _normalize_pose_convention(work_a)
+        normalized_b = _normalize_pose_convention(work_b)
+    except RuntimeError as exc:
+        reason = str(exc) if str(exc).startswith("skipped_missing_dependency") else f"bond_convention_failed:{exc}"
+        result = AtomMappingResult(
+            status="not_comparable",
+            reason=reason,
+            **_pair_base_fields(pose_a, pose_b, rmsd_frame=rmsd_frame, alignment_method=alignment),
+        )
+    except Exception as exc:  # RDKit sanitisation errors do not share a base class
+        result = AtomMappingResult(
+            status="not_comparable",
+            reason=f"bond_convention_failed:{exc.__class__.__name__}",
+            **_pair_base_fields(pose_a, pose_b, rmsd_frame=rmsd_frame, alignment_method=alignment),
+        )
+    else:
+        result = compare(normalized_a, normalized_b, max_isomorphisms=max_isomorphisms)
+    return replace(result, charge_blind_parent_mapping=bool(charge_blind_parent_mapping))
+
+
 def compare_lineage_graph_poses(
     pose_a: GraphPose,
     pose_b: GraphPose,
     *,
     max_isomorphisms: int = DEFAULT_MAX_ISOMORPHISMS,
     rmsd_frame: str = KABSCH_METHOD,
+    charge_blind_parent_mapping: bool = False,
 ) -> AtomMappingResult:
-    """Compare a lineage pose with a reference graph under one bond-order convention.
+    """Lineage comparison: ``compare_pose_pair`` with the guard that one side carries Meeko lineage.
 
-    Both graphs go through ``_aromatic_convention_graph`` before the mapping comparison.
-    ``rmsd_frame`` selects ``compare_graph_poses`` (``kabsch``, the default, used by the
-    Spec 032 atom_map derivation) or ``compare_graph_poses_in_place`` (``in_place_v1``,
-    the Spec 034 T002a redocking primary).  Failure to normalise is ``not_comparable``;
-    nothing is loosened.  At least one side must carry the lineage source.
+    ``rmsd_frame`` selects ``kabsch`` (the default, Spec 032 atom_map derivation) or ``in_place_v1``
+    (Spec 034 T002a redocking primary). At least one side must carry the lineage source.
     """
     if rmsd_frame not in (KABSCH_METHOD, IN_PLACE_METHOD):
         raise ValueError(f"unknown_rmsd_frame:{rmsd_frame}")
     if LINEAGE_METHOD not in (pose_a.lineage_source, pose_b.lineage_source):
         raise ValueError("lineage_pose_required")
-    compare = compare_graph_poses_in_place if rmsd_frame == IN_PLACE_METHOD else compare_graph_poses
-    alignment = "in_place" if rmsd_frame == IN_PLACE_METHOD else ALIGNMENT_METHOD
-    try:
-        normalized_a = _normalize_pose_convention(pose_a)
-        normalized_b = _normalize_pose_convention(pose_b)
-    except RuntimeError as exc:
-        reason = str(exc) if str(exc).startswith("skipped_missing_dependency") else f"bond_convention_failed:{exc}"
-        return AtomMappingResult(
-            status="not_comparable",
-            reason=reason,
-            **_pair_base_fields(pose_a, pose_b, rmsd_frame=rmsd_frame, alignment_method=alignment),
-        )
-    except Exception as exc:  # RDKit sanitisation errors do not share a base class
-        return AtomMappingResult(
-            status="not_comparable",
-            reason=f"bond_convention_failed:{exc.__class__.__name__}",
-            **_pair_base_fields(pose_a, pose_b, rmsd_frame=rmsd_frame, alignment_method=alignment),
-        )
-    return compare(normalized_a, normalized_b, max_isomorphisms=max_isomorphisms)
+    return compare_pose_pair(
+        pose_a,
+        pose_b,
+        rmsd_frame=rmsd_frame,
+        charge_blind_parent_mapping=charge_blind_parent_mapping,
+        max_isomorphisms=max_isomorphisms,
+    )

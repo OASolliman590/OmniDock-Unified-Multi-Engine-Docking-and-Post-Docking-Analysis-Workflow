@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-import dataclasses
 
 import pandas as pd
 
@@ -24,6 +23,8 @@ from docking.project_layout import (
     load_manifest,
     load_protonation_policy,
     manifest_path,
+    project_layout_paths,
+    resolve_layout_profile,
 )
 from post_docking_analysis.atom_mapping import (
     AUTODOCK_ELEMENTS as _AUTODOCK_ELEMENTS,
@@ -33,6 +34,7 @@ from post_docking_analysis.atom_mapping import (
     compare_lineage_graph_poses,
     load_pdbqt_lineage_pose,
     load_sdf_graph_pose,
+    neutral_parent_pose,
 )
 from post_docking_analysis.complex_validation import validate_md_receptor_pdb, validate_md_system_pdb
 from post_docking_analysis.docking_parser import parse_vina_pdbqt
@@ -821,10 +823,48 @@ def _name_key(value: object, suffixes: Tuple[str, ...]) -> str:
     return text
 
 
+def _prepared_dirs(project_dir: Path) -> Tuple[Path, Path]:
+    """Prepared receptor and ligand directories of this project, through its layout (Spec 036 R6).
+
+    The layout profile recorded in the project decides the directories (canonical:
+    ``prepared_proteins`` / ``prepared_ligands``; docking_legacy: ``3-Preparation/...``). The layout is
+    read under this project's own root, so a copied project never reads another project's files. The
+    manifest ``prepared_proteins_dir`` / ``prepared_ligands_dir`` is used only when the layout directory is
+    absent and the recorded directory lies inside this project root.
+    """
+    root = Path(project_dir).expanduser().resolve()
+    layout = project_layout_paths(root, resolve_layout_profile(root))
+    try:
+        manifest = load_manifest(root)
+    except (FileNotFoundError, ValueError):
+        manifest = {}
+
+    def _inside_root(candidate: Path) -> bool:
+        try:
+            candidate.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+    def _pick(layout_key: str, manifest_key: str) -> Path:
+        layout_dir = layout[layout_key]
+        if layout_dir.is_dir():
+            return layout_dir
+        recorded = str(manifest.get(manifest_key) or "").strip()
+        if recorded:
+            candidate = Path(recorded).expanduser()
+            candidate = (root / candidate if not candidate.is_absolute() else candidate).resolve()
+            if candidate.is_dir() and _inside_root(candidate):
+                return candidate
+        return layout_dir
+
+    return _pick("prepared_proteins", "prepared_proteins_dir"), _pick("prepared_ligands", "prepared_ligands_dir")
+
+
 def _ligand_provenance_records(project_dir: Path, ligand: object) -> List[Tuple[Path, Dict[str, object]]]:
     """Ligand preparation step reports (Spec 034 R2b) whose input or output name matches ``ligand``."""
     key = _name_key(ligand, _LIGAND_SUFFIXES)
-    directory = ensure_numbered_output_layout(project_dir)["prep_ligands_prepared"] / "preparation_steps"
+    directory = _prepared_dirs(project_dir)[1] / "preparation_steps"
     records: List[Tuple[Path, Dict[str, object]]] = []
     if not key or not directory.is_dir():
         return records
@@ -934,23 +974,6 @@ def _check_row_against_project_policy(project_policy: Optional[Dict[str, object]
         )
 
 
-def _neutral_parent_pose(pose: GraphPose) -> GraphPose:
-    """Charge-blind copy of a heavy-atom graph: each charged atom is taken to its neutral parent.
-
-    The Spec 031 node rule compares formal charges, which differ between protonation states of
-    the same molecule. Removing the charge and one proton per unit of charge gives the parent
-    heavy-atom graph that the crystal topology describes. The Spec 031 rules are unchanged.
-    """
-    graph = pose.graph.copy()
-    for node in graph.nodes:
-        data = graph.nodes[node]
-        charge = int(data.get("formal_charge", 0))
-        if "total_h" in data:
-            data["total_h"] = int(data["total_h"]) - charge
-        data["formal_charge"] = 0
-    return dataclasses.replace(pose, graph=graph)
-
-
 def _derive_charge_blind_atom_map(
     pose_file: Path,
     pose: int,
@@ -968,7 +991,8 @@ def _derive_charge_blind_atom_map(
         topology_graph = load_sdf_graph_pose(topology_file, topology_pose)
     except (OSError, RuntimeError, ValueError) as exc:
         raise MDExportError("not_comparable", "G3", f"topology_not_comparable:{exc}") from exc
-    result = compare_lineage_graph_poses(_neutral_parent_pose(lineage_pose), _neutral_parent_pose(topology_graph))
+    # Spec 036 R1b: the shared entry point neutralises both parent graphs for atom correspondence only.
+    result = compare_lineage_graph_poses(lineage_pose, topology_graph, charge_blind_parent_mapping=True)
     if not result.comparable or result.selected_mapping is None:
         raise MDExportError("not_comparable", "G3", f"lineage_mapping_not_comparable:{result.reason}")
     atom_count = len(lineage_pose.elements)
@@ -1078,7 +1102,7 @@ def _best_pose_rows(project_dir: Path, engine: str) -> "pd.DataFrame":
 def _receptor_lineage_for(project_dir: Path, protein: object) -> Tuple[Path, Dict[str, object]]:
     """Strict receptor lineage (Spec 033): prepared PDBQT -> ``.preparation.json`` -> the chain PDB it was prepared from."""
     key = _name_key(protein, _RECEPTOR_SUFFIXES)
-    prepared_dir = ensure_numbered_output_layout(project_dir)["prep_receptors_prepared"]
+    prepared_dir = _prepared_dirs(project_dir)[0]
     candidates = sorted(item for item in prepared_dir.glob("*.pdbqt") if item.stem == key) if key else []
     if not candidates:
         raise MDMapError(f"receptor_lineage_missing:{key}")

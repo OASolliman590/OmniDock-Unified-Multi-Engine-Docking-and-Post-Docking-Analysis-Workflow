@@ -21,6 +21,8 @@ EXHAUSTIVENESS_LEVEL = 32
 DEFAULT_ENERGY_RANGE = 3.0
 # Spec 036 R5b default number of independent seeded replicates per pair.
 DEFAULT_REPLICATES = 3
+# num_modes used when no value is given and the mode is advanced. Basic mode takes num_modes from its preset.
+DEFAULT_NUM_MODES = 20
 
 
 @dataclass
@@ -33,6 +35,9 @@ class CommonDockingParameters:
     energy_range: float = DEFAULT_ENERGY_RANGE
     replicates: int = DEFAULT_REPLICATES
     exhaustiveness_overridden: bool = False
+    # Where num_modes came from: user_explicit, basic_preset:<name>, or advanced_default.
+    num_modes_source: str = ""
+    num_modes_explicit: bool = False
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -63,6 +68,7 @@ def resolve_parameter_schema(
     runtime_by_engine: Dict[str, Dict[str, object]],
     energy_range: float = DEFAULT_ENERGY_RANGE,
     replicates: int = DEFAULT_REPLICATES,
+    num_modes_explicit: bool = False,
 ) -> DockingParameterSchema:
     normalized_mode = str(mode or "basic").strip().lower()
     normalized_mode = normalized_mode if normalized_mode in {"basic", "advanced"} else "basic"
@@ -78,10 +84,14 @@ def resolve_parameter_schema(
         energy_range=float(energy_range),
         replicates=int(replicates),
     )
+    common.num_modes_explicit = bool(num_modes_explicit)
     if normalized_mode == "basic":
         preset_values = BASIC_PRESETS[normalized_preset]
         common.exhaustiveness = int(preset_values["exhaustiveness"])
         common.num_modes = int(preset_values["num_modes"])
+        common.num_modes_source = f"basic_preset:{normalized_preset}"
+    else:
+        common.num_modes_source = "user_explicit" if common.num_modes_explicit else "advanced_default"
     # Spec 036 R5c: advanced overrides stay possible but are recorded.
     common.exhaustiveness_overridden = normalized_mode == "advanced" and common.exhaustiveness != EXHAUSTIVENESS_LEVEL
 
@@ -122,6 +132,11 @@ def validate_parameter_schema(schema: DockingParameterSchema, selected_engines: 
         errors.append("`exhaustiveness` must be >= 1.")
     if common.num_modes < 1:
         errors.append("`num_modes` must be >= 1.")
+    if schema.mode == "basic" and common.num_modes_explicit:
+        errors.append(
+            f"`--num-modes` is not used in basic mode: num_modes comes from the basic preset "
+            f"'{schema.preset}' ({common.num_modes}). Pass `--parameter-mode advanced` to set num_modes yourself."
+        )
     if common.seed is not None and common.seed < 0:
         errors.append("`seed` must be >= 0.")
     if common.box_scale <= 0:
@@ -161,6 +176,7 @@ def apply_schema_to_runtime(
         runtime["replicates"] = int(common.replicates)
         runtime["parameter_mode"] = schema.mode
         runtime["parameter_preset"] = schema.preset
+        runtime["num_modes_source"] = common.num_modes_source
         updated[engine] = runtime
     return updated
 
