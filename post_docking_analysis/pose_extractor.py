@@ -11,9 +11,11 @@ import shutil
 from typing import Dict, Optional, List
 import csv
 import re
-import math
 
+from post_docking_analysis.replicate_names import split_replicate_stem
 from post_docking_analysis.complex_validation import validate_complex_pdb_structure
+from post_docking_analysis.pose_selection import POSE_SELECTION_RULE_ID, select_best_pose_rows
+from post_docking_analysis.replicates import load_replicate_seeds
 
 
 _BEST_POSE_CRITERIA_ALIASES = {
@@ -119,43 +121,6 @@ def _parse_pose_row(row: Dict[str, object]) -> Dict[str, object]:
 def _normalize_best_pose_criterion(value: object) -> str:
     token = str(value or "").strip().lower()
     return _BEST_POSE_CRITERIA_ALIASES.get(token, "vina_affinity")
-
-
-def _numeric_or_inf(value: object) -> float:
-    try:
-        numeric = float(value)
-    except Exception:
-        return float("inf")
-    return numeric if math.isfinite(numeric) else float("inf")
-
-
-def _is_better_pose(
-    candidate: Dict[str, object],
-    incumbent: Dict[str, object],
-    *,
-    criterion: str = "vina_affinity",
-) -> bool:
-    """
-    Deterministic tie-breaker:
-    1) lower primary criterion wins
-    2) lower vina_affinity wins
-    3) lower pose mode wins
-    """
-    cand_primary = _numeric_or_inf(candidate.get(criterion))
-    inc_primary = _numeric_or_inf(incumbent.get(criterion))
-    if cand_primary < inc_primary:
-        return True
-    if cand_primary > inc_primary:
-        return False
-
-    cand_aff = _numeric_or_inf(candidate.get("vina_affinity"))
-    inc_aff = _numeric_or_inf(incumbent.get("vina_affinity"))
-    if cand_aff < inc_aff:
-        return True
-    if cand_aff > inc_aff:
-        return False
-
-    return int(candidate.get("mode", 0)) < int(incumbent.get("mode", 0))
 
 
 def _extract_sdf_record_text(sdf_file: Path, pose_number: int) -> str:
@@ -273,6 +238,10 @@ def extract_best_poses_from_gnina(
 ) -> int:
     """
     Extract best poses as PDB files using GNINA outputs in input_dir.
+
+    Pose choice follows the shared consensus-v2 selector (Spec 036 R4/R5b): replicates of one pair are pooled,
+    and GNINA takes the highest cnn_score. ``best_pose_criteria`` is recorded in the manifest as
+    ``requested_criterion`` but no longer changes the chosen pose.
     
     Parameters
     ----------
@@ -335,7 +304,8 @@ def extract_best_poses_from_gnina(
     if all_poses_dir:
         all_poses_dir.mkdir(parents=True, exist_ok=True)
 
-    # Read CSV and pick best mode per tag according to the configured criterion.
+    # Read the GNINA rows. A replicate row is tagged "<pair>__repNN" (Spec 036 R5b); the pair tag is
+    # what the best pose is reported under, and the replicate id is kept with the chosen pose.
     rows: List[Dict[str, object]] = []
     with scores_csv.open() as f:
         reader = csv.DictReader(f)
@@ -344,56 +314,99 @@ def extract_best_poses_from_gnina(
                 parsed = _parse_pose_row(r)
             except Exception:
                 continue
+            source_tag = str(parsed.get("tag", ""))
+            pair_tag_value, replicate_id = split_replicate_stem(source_tag)
+            parsed["source_tag"] = source_tag
+            parsed["pair_tag"] = pair_tag_value
+            parsed["replicate_id"] = replicate_id
+            parsed["tag"] = pair_tag_value
             rows.append(parsed)
 
     if not rows:
         print(f"⚠️  No rows in {scores_csv}")
         return 0
 
-    # Group by tag
     if extract_all:
         # For extracting all poses, we'll process all rows
         poses_to_extract = rows
     else:
-        # For best poses only, we'll pick the best per tag
-        best_by_tag: Dict[str, Dict[str, object]] = {}
-        rows.sort(key=lambda rec: (str(rec.get("tag", "")), int(rec.get("mode", 0))))
-        for r in rows:
-            tag = str(r.get("tag", ""))
-            if tag not in best_by_tag or _is_better_pose(r, best_by_tag[tag], criterion=criterion):
-                best_by_tag[tag] = r
-        poses_to_extract = list(best_by_tag.values())
+        # Best pose per pair, pooled over replicates, by the shared v2 selector (Spec 036 R4/R5b).
+        # The requested best_pose_criteria value is recorded but does not change the pick: GNINA takes the
+        # highest cnn_score, and the lowest cnn_affinity pick was the worst-pose bug.
+        selector_frame = pd.DataFrame(
+            [
+                {
+                    "engine": "gnina",
+                    "protein": "",
+                    "ligand": "",
+                    "site_id": "",
+                    "tag": row["tag"],
+                    "pose": row.get("mode"),
+                    "affinity_kcal_mol": row.get("vina_affinity"),
+                    "cnn_score": row.get("cnn_score"),
+                    "cnn_affinity": row.get("cnn_affinity"),
+                    "replicate_id": row.get("replicate_id"),
+                    "source_index": index,
+                }
+                for index, row in enumerate(rows)
+            ]
+        )
+        selected = select_best_pose_rows(selector_frame)
+        by_index = {index: row for index, row in enumerate(rows)}
+        poses_to_extract = []
+        for _, chosen in selected.iterrows():
+            source = dict(by_index[int(chosen["source_index"])])
+            source["v2_ranking_metric"] = chosen.get("v2_ranking_metric")
+            source["v2_ranking_metric_name"] = chosen.get("v2_ranking_metric_name")
+            source["v2_pose_selection_status"] = chosen.get("v2_pose_selection_status")
+            poses_to_extract.append(source)
+
+    seeds_by_replicate: Dict[int, Optional[int]] = {}
+    for candidate_root in (gnina_dir, gnina_dir.parent):
+        seeds_by_replicate = load_replicate_seeds(candidate_root / "run_manifest.json")
+        if seeds_by_replicate:
+            break
 
     written = 0
     manifest_rows: List[Dict[str, object]] = []
     for r in poses_to_extract:
         tag = r['tag']
+        source_tag = str(r.get("source_tag", tag))
+        replicate_id = r.get("replicate_id")
+        replicate_id = int(replicate_id) if replicate_id is not None and not pd.isna(replicate_id) else None
         pose_number = int(r.get("mode", 0) or 0)
         ligand_resname = _infer_ligand_resname_from_tag(tag)
-        sdf_file = gnina_dir / f"{tag}_top.sdf"
+        sdf_file = gnina_dir / f"{source_tag}_top.sdf"
         if not sdf_file.exists():
-            fallback_sdf = gnina_dir / f"{tag}.sdf"
+            fallback_sdf = gnina_dir / f"{source_tag}.sdf"
             if fallback_sdf.exists():
                 sdf_file = fallback_sdf
 
         # Determine output directory based on extraction type
         if extract_all:
             out_dir = all_poses_dir
+            out_pdb = out_dir / f"{source_tag}_pose{pose_number}.pdb"
         else:
             # Create a separate folder for each complex
             complex_dir = best_poses_dir / tag
             complex_dir.mkdir(exist_ok=True)
             out_dir = complex_dir
-
-        out_pdb = out_dir / f"{tag}_pose{pose_number}.pdb"
+            out_pdb = out_dir / f"{tag}_pose{pose_number}.pdb"
 
         receptor_file = _infer_receptor_file_from_tag(tag, receptors_dir)
 
         manifest_row: Dict[str, object] = {
             "tag": tag,
+            "source_tag": source_tag,
+            "source_replicate_id": replicate_id if replicate_id is not None else "",
+            "source_seed": seeds_by_replicate.get(replicate_id, "") if replicate_id is not None else "",
             "selected_pose": pose_number,
-            "selection_criterion": criterion,
-            "selected_score": r.get(criterion),
+            "selection_rule": POSE_SELECTION_RULE_ID,
+            "requested_criterion": criterion,
+            "selection_key": "cnn_score:higher_is_better",
+            "selection_criterion": r.get("v2_ranking_metric_name") or "",
+            "selected_score": r.get("v2_ranking_metric"),
+            "pose_selection_status": r.get("v2_pose_selection_status") or "",
             "vina_affinity": r.get("vina_affinity"),
             "cnn_affinity": r.get("cnn_affinity"),
             "cnn_score": r.get("cnn_score"),
@@ -408,6 +421,15 @@ def extract_best_poses_from_gnina(
             "receptor_atom_count": 0,
             "ligand_atom_count": 0,
         }
+
+        selection_status = str(r.get("v2_pose_selection_status") or "completed")
+        if not extract_all and selection_status != "completed":
+            # The v2 selector could not pick a pose (for example a GNINA row without cnn_score). Record it and
+            # do not substitute another pose.
+            manifest_row["status"] = selection_status
+            manifest_rows.append(manifest_row)
+            print(f"⚠️  No v2 pose selection for tag {tag}: {selection_status}")
+            continue
 
         if pose_number <= 0:
             manifest_row["status"] = "invalid_pose_number"
@@ -435,7 +457,7 @@ def extract_best_poses_from_gnina(
             continue
 
         # Try to get docking center coordinates from log file
-        log_file = gnina_dir / f"{tag}.log"
+        log_file = gnina_dir / f"{source_tag}.log"
         manifest_row["input_log_file"] = str(log_file)
         if log_file.exists():
             try:

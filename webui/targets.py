@@ -168,7 +168,10 @@ def _build_pipeline_targets() -> dict[str, LaunchTarget]:
                 FormField("prepared_proteins", "Prepared proteins dir", "path"),
                 FormField("prepared_ligands", "Prepared ligands dir", "path"),
                 FormField("default_site_id", "Default site id", "text", default="site_1"),
-                FormField("default_box_size", "Default box size", "float", default=20.0),
+                # Spec 036 R5a: blank -> rg_scaled_v1 (2.9 x ligand Rg, per ligand). A number -> user_fixed.
+                FormField("default_box_size", "Fixed box edge (A), optional", "float", default=None,
+                          help="Leave blank for rg_scaled_v1 (2.9 x the ligand radius of gyration). "
+                               "Enter an edge only to record box_method user_fixed."),
                 FormField("freeze", "Freeze into pairlist.csv", "bool", default=False),
             ],
         ),

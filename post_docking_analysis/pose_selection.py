@@ -11,6 +11,10 @@ The rules are the approved ``consensus_rank_geometry_qc_v2`` pose-selection rule
 - Vina / Smina / AutoDock4: lowest ``affinity_kcal_mol`` selects the pose. Ties use lower
   pose index, then the stable tag. Missing affinity is kept with
   ``missing_required_affinity``.
+- Replicates (Spec 036 R5b): rows of every replicate of one (engine, protein, tag) are pooled.
+  After the v2 keys, a final tie-break on ``replicate_id`` (lower first) makes the choice
+  independent of row order. It only matters when two replicates tie exactly on every v2 key.
+  The chosen row keeps its ``replicate_id``, ``seed`` and ``pose_file``.
 
 Writers must not re-implement these rules (a ``min(cnn_affinity)`` or ``min(affinity)``
 pick selects the worst GNINA pose). Use ``select_best_pose_rows``.
@@ -41,6 +45,9 @@ def select_best_pose_rows(scores: pd.DataFrame) -> pd.DataFrame:
         if column not in frame.columns:
             frame[column] = ""
         frame[column] = frame[column].astype(str)
+    if "replicate_id" not in frame.columns:
+        frame["replicate_id"] = np.nan
+    frame["_rep_order"] = pd.to_numeric(frame["replicate_id"], errors="coerce").fillna(np.inf)
     frame["engine"] = frame["engine"].str.strip().str.lower()
     for column in _POSE_SELECTION_NUMERIC:
         frame[column] = pd.to_numeric(frame.get(column), errors="coerce")
@@ -62,8 +69,8 @@ def select_best_pose_rows(scores: pd.DataFrame) -> pd.DataFrame:
                 continue
             working["_pose_order"] = working["pose"].fillna(np.inf)
             working.sort_values(
-                ["cnn_score", "cnn_affinity", "affinity_kcal_mol", "_pose_order", "tag"],
-                ascending=[False, False, True, True, True],
+                ["cnn_score", "cnn_affinity", "affinity_kcal_mol", "_pose_order", "tag", "_rep_order"],
+                ascending=[False, False, True, True, True, True],
                 kind="mergesort",
                 inplace=True,
             )
@@ -83,8 +90,8 @@ def select_best_pose_rows(scores: pd.DataFrame) -> pd.DataFrame:
                 continue
             working["_pose_order"] = working["pose"].fillna(np.inf)
             working.sort_values(
-                ["affinity_kcal_mol", "_pose_order", "tag"],
-                ascending=[True, True, True],
+                ["affinity_kcal_mol", "_pose_order", "tag", "_rep_order"],
+                ascending=[True, True, True, True],
                 kind="mergesort",
                 inplace=True,
             )
@@ -94,5 +101,9 @@ def select_best_pose_rows(scores: pd.DataFrame) -> pd.DataFrame:
             row["v2_ranking_direction"] = "lower_is_better"
         row["v2_pose_selection_status"] = "completed"
         selected.append(row)
-    return pd.DataFrame(selected).drop(columns=["_pose_order"], errors="ignore").reset_index(drop=True)
+    return (
+        pd.DataFrame(selected)
+        .drop(columns=["_pose_order", "_rep_order"], errors="ignore")
+        .reset_index(drop=True)
+    )
 

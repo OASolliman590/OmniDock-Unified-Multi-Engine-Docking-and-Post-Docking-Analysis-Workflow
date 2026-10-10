@@ -15,6 +15,8 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from post_docking_analysis.replicate_names import legacy_pair_tag, pair_tag, replicate_job_tag, split_replicate_stem
+
 def load_pairlist_mapping(pairlist_file: Path) -> Dict[str, str]:
     """
     Load pairlist mapping for accurate complex naming.
@@ -33,18 +35,16 @@ def load_pairlist_mapping(pairlist_file: Path) -> Dict[str, str]:
         # Read the pairlist CSV
         df = pd.read_csv(pairlist_file)
         
-        # Create mapping from receptor_site_ligand to tag names
+        # Map both the receptor-stem pair tag (Spec 036 R6) and the legacy receptor-file-name tag to the tag.
         mapping = {}
         for _, row in df.iterrows():
-            receptor = row['receptor']
-            site_id = row['site_id']
-            ligand = row['ligand']
-            
-            # Create expected log filename pattern
-            log_pattern = f"{receptor}_{site_id}_{ligand}"
-            tag_name = f"{receptor}_{site_id}_{ligand}"
-            
-            mapping[log_pattern] = tag_name
+            receptor = str(row['receptor'])
+            site_id = str(row['site_id'])
+            ligand = str(row['ligand'])
+            current = pair_tag(receptor, site_id, ligand)
+            legacy = legacy_pair_tag(receptor, site_id, ligand)
+            mapping.setdefault(current, current)
+            mapping.setdefault(legacy, legacy)
             
         print(f"✅ Loaded {len(mapping)} mappings from pairlist.csv")
         return mapping
@@ -65,9 +65,13 @@ def _resolve_tag_from_pairlist(filename_stem: str, pairlist_mapping: Dict[str, s
     """
     if not pairlist_mapping:
         return filename_stem, False
-    mapped = pairlist_mapping.get(filename_stem)
+    # A replicate log (<pair>__repNN) resolves through its pair and keeps its replicate suffix.
+    pair_stem, replicate_id = split_replicate_stem(filename_stem)
+    mapped = pairlist_mapping.get(pair_stem)
     if mapped:
-        return mapped, True
+        if replicate_id is None:
+            return mapped, True
+        return replicate_job_tag(mapped, replicate_id), True
     return filename_stem, False
 
 

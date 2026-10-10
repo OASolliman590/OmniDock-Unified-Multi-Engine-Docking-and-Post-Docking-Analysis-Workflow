@@ -107,7 +107,8 @@ def _assert_manifest_job_count(project_dir: Path, engine: str, expected: int = 1
 
 
 def _assert_autodock4_pair_assets(project_dir: Path) -> None:
-    pair_dir = project_dir / "4-Docking" / "autodock4_out" / "pairs" / "R1.pdbqt_site_1_L1.pdbqt"
+    # Spec 036 R6: the pair tag uses the receptor stem (no .pdbqt); the ligand file name keeps its suffix.
+    pair_dir = project_dir / "4-Docking" / "autodock4_out" / "pairs" / "R1_site_1_L1.pdbqt"
     _assert_file(pair_dir / "grid.gpf", "AutoDock4 GPF")
     _assert_file(pair_dir / "docking.dpf", "AutoDock4 DPF")
 
@@ -167,6 +168,7 @@ def run_smoke_test(keep_temp: bool = False) -> Dict[str, str]:
     )
 
     print("3) Running all engines in dry-run mode...")
+    # Spec 036 R5b: a base seed is required for every dock run. 42 is a fixed smoke fixture value.
     _run(
         [
             sys.executable,
@@ -177,6 +179,8 @@ def run_smoke_test(keep_temp: bool = False) -> Dict[str, str]:
             str(project_dir),
             "--engines",
             ",".join(ENGINES),
+            "--seed",
+            "42",
             "--dry-run",
             "--no-ligand-qc-gate",
             "--no-receptor-qc-gate",
@@ -185,8 +189,12 @@ def run_smoke_test(keep_temp: bool = False) -> Dict[str, str]:
     )
 
     print("4) Verifying run manifests and generated AD4 parameter files...")
+    from docking.parameter_schema import DEFAULT_REPLICATES
+
     for engine in ENGINES:
-        _assert_manifest_job_count(project_dir, engine, expected=1)
+        # Vina/Smina/GNINA run DEFAULT_REPLICATES seeded replicates per pair; AutoDock4 runs one.
+        expected_jobs = 1 if engine == "autodock4" else DEFAULT_REPLICATES
+        _assert_manifest_job_count(project_dir, engine, expected=expected_jobs)
     _assert_autodock4_pair_assets(project_dir)
 
     artifacts = {

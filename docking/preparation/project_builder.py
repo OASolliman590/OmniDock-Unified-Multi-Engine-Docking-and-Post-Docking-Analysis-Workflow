@@ -16,6 +16,7 @@ from ..box_policy import compute_ligand_box
 from ..models import PairlistRow, ProjectManifest
 from ..project_layout import (
     LAYOUT_DOCKING_LEGACY,
+    PAIRLIST_COLUMNS,
     deployment_root,
     ensure_engine_layout,
     ensure_gnina_hpc_compat_layout,
@@ -196,7 +197,7 @@ class DockingProjectBuilder:
         _write_csv(
             pairlist_file,
             [row.to_dict() for row in rows],
-            ["receptor", "site_id", "ligand", "center_x", "center_y", "center_z", "size_x", "size_y", "size_z"],
+            PAIRLIST_COLUMNS,
         )
 
         if self.config.excel_path:

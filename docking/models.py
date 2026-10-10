@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Literal, Optional
 
+from post_docking_analysis.replicate_names import legacy_pair_tag, pair_tag, receptor_stem_name
+
 
 DockingEngine = Literal["gnina", "vina", "smina", "autodock4"]
 AnalysisMode = Literal["single_engine", "comparative_all_engines", "favorite_engine_continue"]
@@ -56,20 +58,16 @@ class PairlistRow:
     @property
     def receptor_stem(self) -> str:
         """Receptor file stem without the .pdbqt/.pdb suffix (Spec 036 R6)."""
-        name = str(self.receptor)
-        for suffix in (".pdbqt", ".pdb"):
-            if name.lower().endswith(suffix):
-                return name[: -len(suffix)]
-        return name
+        return receptor_stem_name(self.receptor)
 
     @property
     def tag(self) -> str:
-        return f"{self.receptor_stem}_{self.site_id}_{self.ligand}"
+        return pair_tag(self.receptor, self.site_id, self.ligand)
 
     @property
     def legacy_tag(self) -> str:
         """Pre-Spec 036 tag (receptor file name with suffix). Read-only compatibility."""
-        return f"{self.receptor}_{self.site_id}_{self.ligand}"
+        return legacy_pair_tag(self.receptor, self.site_id, self.ligand)
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -120,6 +118,9 @@ class ProjectManifest:
     top_pose_global_aggregation: str = "best_target"
     hpc_profile: Dict[str, str] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
+    # Spec 036 R1a: the one project protonation policy block. Bootstrap must carry it forward.
+    protonation_policy: Dict[str, object] = field(default_factory=dict)
+    compatibility_profiles: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)

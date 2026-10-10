@@ -11,6 +11,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
+from post_docking_analysis.replicate_names import split_replicate_stem
 from docking.project_layout import (
     ensure_numbered_output_layout,
     load_manifest,
@@ -101,6 +102,7 @@ def _gnina_details(project_dir: Path) -> Dict[str, object]:
             break
     return {
         "pose_files_found": len(pose_files),
+        "pose_pairs_found": _pose_pair_count(pose_files),
         "pose_format": "sdf",
         "valid_score_rows": int(valid_score_rows),
         "score_columns": score_columns,
@@ -173,6 +175,7 @@ def _vina_family_details(project_dir: Path, engine: str) -> Dict[str, object]:
                 break
     payload: Dict[str, object] = {
         "pose_files_found": len(pose_files),
+        "pose_pairs_found": _pose_pair_count(pose_files),
         "pose_format": "pdbqt",
         "valid_score_rows": int(valid_score_rows),
         "score_columns": score_columns,
@@ -208,6 +211,7 @@ def _autodock4_details(project_dir: Path) -> Dict[str, object]:
                 break
     return {
         "pose_files_found": len(pose_files),
+        "pose_pairs_found": _pose_pair_count(pose_files),
         "pose_format": "dlg",
         "valid_score_rows": int(valid_score_rows),
         "score_columns": score_columns,
@@ -271,6 +275,11 @@ def _detection_source_signature(project_dir: Path, manifest: Dict[str, object]) 
     return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
 
 
+def _pose_pair_count(pose_files: Iterable[Path]) -> int:
+    """Distinct pairs behind the pose files. Replicate files (``<pair>__repNN``) count once per pair (Spec 036 R5b)."""
+    return len({split_replicate_stem(Path(path).stem)[0] for path in pose_files})
+
+
 def _engine_status(details: Dict[str, object], *, total_pairs: int, min_coverage_pct: float) -> str:
     pose_files = int(details.get("pose_files_found", 0) or 0)
     valid_score_rows = int(details.get("valid_score_rows", 0) or 0)
@@ -326,7 +335,8 @@ def detect_engines(
         else:
             details = _vina_family_details(root, engine)
         coverage_base = total_pairs if total_pairs > 0 else int(details.get("pose_files_found", 0) or 0)
-        pose_files_found = int(details.get("pose_files_found", 0) or 0)
+        # Coverage counts pairs, not files: a pair with three replicate files is one covered pair.
+        pose_files_found = int(details.get("pose_pairs_found", details.get("pose_files_found", 0)) or 0)
         coverage_pct = 0.0 if coverage_base <= 0 else round((pose_files_found / float(coverage_base)) * 100.0, 2)
         details["coverage_pct"] = coverage_pct
         details["status"] = _engine_status(details, total_pairs=total_pairs, min_coverage_pct=min_coverage_pct)

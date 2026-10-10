@@ -247,7 +247,7 @@ Engine-aware analysis writes:
 - `reports/combined_engine_scores.csv`
 - `reports/best_pose_per_tag_by_engine.csv`
 - `reports/engine_summary.csv`
-- `reports/best_engine_per_complex.csv`
+- `reports/best_engine_per_complex.csv` (one row per complex: each engine's native score side by side, `comparison_status` = `not_comparable_across_engines`; no engine is chosen as best, see `specs/036-scientific-consistency/consensus_inventory.md`)
 - `reports/validation_gate_status.json`
 - `reports/consolidated_run_summary.json`
 - `reports/consensus_ranked_hits_with_classes.csv`

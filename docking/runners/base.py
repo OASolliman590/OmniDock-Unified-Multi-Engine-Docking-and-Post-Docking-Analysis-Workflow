@@ -1,37 +1,28 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import pandas as pd
 
 from ..models import EnsembleReceptorConfig, EngineJobResult, PairlistRow, normalize_ensemble_aggregation_strategy
 from ..project_layout import ensure_engine_layout, pairlist_path, shared_ligands_dir, shared_receptors_dir
 
+# Spec 036 R5b naming helpers live in post_docking_analysis.replicate_names (shared with post-docking analysis).
+from post_docking_analysis.replicate_names import (  # noqa: F401  (re-exported for runner modules and tests)
+    REPLICATE_STEM_PATTERN,
+    REPLICATE_TOKEN,
+    replicate_job_tag,
+    split_replicate_stem,
+)
 
-# Spec 036 R5b: replicate naming (see specs/036-scientific-consistency/replicate_contract.md).
-REPLICATE_TOKEN = "__rep"
-REPLICATE_STEM_PATTERN = re.compile(r"^(?P<pair>.+)__rep(?P<rep>\d{2})$")
 # Engines whose runner takes a seed and runs independent replicates. AutoDock4 is not in
 # this set: its replicate execution is outside Spec 036 R5b and is recorded as replicates: 1.
 REPLICATE_ENGINES = {"vina", "smina", "gnina"}
 VINA_FAMILY_ENGINES = {"vina", "smina"}
-
-
-def replicate_job_tag(pair_tag: str, replicate_id: int) -> str:
-    return f"{pair_tag}{REPLICATE_TOKEN}{int(replicate_id):02d}"
-
-
-def split_replicate_stem(stem: str) -> Tuple[str, Optional[int]]:
-    """Return (pair_tag, replicate_id). Legacy stems without a replicate suffix return None."""
-    match = REPLICATE_STEM_PATTERN.match(str(stem))
-    if not match:
-        return str(stem), None
-    return match.group("pair"), int(match.group("rep"))
 
 
 def build_pair_index(pairlist_rows: List[PairlistRow]) -> Dict[str, PairlistRow]:

@@ -36,5 +36,21 @@ Producer: `docking/runners/base.py` (dock run). Consumers: post-docking pooling 
 - `engine_effective_parameters`: the `effective` block per engine.
 - `box_warnings`: box warnings from the pairlist and the dock run.
 
-## Not in this contract
-- Pooling of replicates for pose selection, and the `pose_reproducibility` metric (in-place RMSD between replicate top poses, and the fraction within 2 Å). These belong to post-docking analysis and must read the naming above.
+## Consumers (post-docking analysis)
+- Naming helpers: `post_docking_analysis/replicate_names.py` (shared by `docking/runners` and post-docking analysis).
+- Pooling: the replicates of one `(engine, protein, tag)` are pooled by the shared selector
+  (`post_docking_analysis/pose_selection.py`). The chosen row keeps `replicate_id`, `seed` and `pose_file`. Exact
+  ties across replicates are broken by `replicate_id` (lower first), so the choice does not depend on row order.
+- Seeds: read from `engines/<engine>/run_manifest.json` (`jobs[].seed`, falling back to `effective.seeds`).
+- `pose_reproducibility` (`post_docking_analysis/replicates.py`, Spec 036 R5b): the top pose of each replicate is
+  compared pairwise with `compare_graph_poses_in_place` (Spec 031/034 mapping). PDBQT poses use the Meeko REMARK
+  lineage reader, SDF poses the SDF graph loader. Columns in the best-pose table:
+  `pose_reproducibility_status` (`completed`, `partial_not_comparable`, `not_comparable`, `single_replicate`,
+  `no_poses`), `pose_reproducibility_replicates`, `pose_reproducibility_pairs`,
+  `pose_reproducibility_pairs_comparable`, `pose_reproducibility_max_rmsd_angstrom`,
+  `pose_reproducibility_median_rmsd_angstrom`, `pose_reproducibility_fraction_within_2A`
+  (share of comparable pairs with RMSD <= 2.0 Å), `pose_reproducibility_method`, `pose_reproducibility_reasons`.
+  One replicate gives `single_replicate` and no RMSD values.
+- Coverage: `engine_detector` counts pairs (`pose_pairs_found`), not replicate files.
+- GNINA pose export (`pose_extractor.py`): the replicate suffix is split off the log/score tag. The
+  export reports the pair tag and records `source_tag`, `source_replicate_id` and `source_seed`.

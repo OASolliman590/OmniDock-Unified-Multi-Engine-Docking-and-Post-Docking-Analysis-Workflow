@@ -19,6 +19,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
 
+from post_docking_analysis.replicate_names import legacy_pair_tag, pair_tag, split_replicate_stem
 from docking.project_layout import (
     ensure_engine_layout,
     ensure_numbered_output_layout,
@@ -84,6 +85,7 @@ from post_docking_analysis.reference_policy import reference_mask
 from post_docking_analysis.storage_sqlite import validate_csv_sqlite_parity, write_comparative_bundle
 from post_docking_analysis.complex_validation import validate_complex_pdb_structure
 from post_docking_analysis.pose_extractor import extract_best_poses_from_gnina
+from post_docking_analysis.replicates import load_replicate_seeds, pose_reproducibility_table
 from post_docking_analysis.top_pose_selector import (
     build_top_pose_atlas,
     normalize_global_aggregation,
@@ -115,6 +117,9 @@ NORMALIZED_COLUMNS = [
     "rmsd_ub",
     "pose_file",
     "log_file",
+    # Spec 036 R5b: source replicate and its seed. Empty for legacy single poses.
+    "replicate_id",
+    "seed",
 ]
 
 UNIFIED_COMPAT_COLUMNS = [
@@ -2544,9 +2549,9 @@ class MultiEngineAnalysisPipeline:
         return frame
 
     def _pair_index(self) -> Dict[str, Dict[str, object]]:
+        """Pairs keyed by the receptor-stem tag (Spec 036 R6) and by the legacy tag (receptor file name)."""
         index: Dict[str, Dict[str, object]] = {}
         for _, row in self.pairlist_df.iterrows():
-            tag = f"{row['receptor']}_{row['site_id']}_{row['ligand']}"
             payload: Dict[str, object] = {
                 "protein": row["receptor"],
                 "ligand": row["ligand"],
@@ -2555,7 +2560,11 @@ class MultiEngineAnalysisPipeline:
             for optional in _PAIR_METADATA_COLUMNS:
                 if optional in row:
                     payload[optional] = row.get(optional)
-            index[tag] = payload
+            for tag in (
+                pair_tag(str(row["receptor"]), str(row["site_id"]), str(row["ligand"])),
+                legacy_pair_tag(str(row["receptor"]), str(row["site_id"]), str(row["ligand"])),
+            ):
+                index.setdefault(tag, payload)
         return index
 
     def _pair_metadata_frame(self) -> pd.DataFrame:
@@ -2597,6 +2606,19 @@ class MultiEngineAnalysisPipeline:
         engine_layout: Dict[str, Path],
         pair_index: Dict[str, Dict[str, object]],
     ) -> pd.DataFrame:
+        """One row per pose. Replicate files (``<pair>__repNN``) keep the pair tag and add replicate_id/seed."""
+        seeds_by_replicate = load_replicate_seeds(Path(engine_layout["root"]) / "run_manifest.json")
+
+        def _resolve(raw_stem: str) -> Tuple[Optional[str], Optional[int], Dict[str, object]]:
+            """(pair tag, replicate id, pair record); pair tag is None when the pair is not in the pairlist."""
+            pair_stem, replicate_id = split_replicate_stem(raw_stem)
+            if pair_index and pair_stem not in pair_index:
+                return None, replicate_id, {}
+            return pair_stem, replicate_id, pair_index.get(pair_stem, {})
+
+        def _seed(replicate_id: Optional[int]):
+            return seeds_by_replicate.get(replicate_id) if replicate_id is not None else None
+
         if engine == "gnina":
             scores_path = engine_layout["scores"] / "all_scores.csv"
             success = generate_all_scores_csv(
@@ -2610,15 +2632,15 @@ class MultiEngineAnalysisPipeline:
             source = pd.read_csv(scores_path)
             rows = []
             for _, record in source.iterrows():
-                tag = str(record.get("tag", ""))
-                if pair_index and tag not in pair_index:
+                raw_stem = str(record.get("tag", ""))
+                tag, replicate_id, pair = _resolve(raw_stem)
+                if tag is None:
                     continue
                 affinity = pd.to_numeric(record.get("vina_affinity"), errors="coerce")
                 if pd.isna(affinity):
                     continue
                 pose_value = pd.to_numeric(record.get("mode", 0), errors="coerce")
                 pose = int(pose_value) if pd.notna(pose_value) else 0
-                pair = pair_index.get(tag, {})
                 rows.append(
                     {
                         "engine": engine,
@@ -2634,8 +2656,10 @@ class MultiEngineAnalysisPipeline:
                         "score_secondary": float(record.get("cnn_score")) if pd.notna(record.get("cnn_score")) else None,
                         "rmsd_lb": None,
                         "rmsd_ub": None,
-                        "pose_file": str(engine_layout["poses"] / f"{tag}.sdf"),
-                        "log_file": str(engine_layout["logs"] / f"{tag}.log"),
+                        "pose_file": str(engine_layout["poses"] / f"{raw_stem}.sdf"),
+                        "log_file": str(engine_layout["logs"] / f"{raw_stem}.log"),
+                        "replicate_id": replicate_id,
+                        "seed": _seed(replicate_id),
                         "pair_source": pair.get("pair_source"),
                         "selection_mode": pair.get("selection_mode"),
                         "is_cocrystal_benchmark": pair.get("is_cocrystal_benchmark"),
@@ -2649,11 +2673,10 @@ class MultiEngineAnalysisPipeline:
         rows = []
         if engine == "autodock4":
             for pose_file in sorted(engine_layout["poses"].glob("*.dlg")):
-                tag = pose_file.stem
-                if pair_index and tag not in pair_index:
+                tag, replicate_id, pair = _resolve(pose_file.stem)
+                if tag is None:
                     continue
                 parsed = parse_autodock4_dlg(pose_file)
-                pair = pair_index.get(tag, {})
                 for _, record in parsed.iterrows():
                     affinity = pd.to_numeric(record.get("autodock4_affinity"), errors="coerce")
                     if pd.isna(affinity):
@@ -2676,7 +2699,9 @@ class MultiEngineAnalysisPipeline:
                             "rmsd_lb": None,
                             "rmsd_ub": None,
                             "pose_file": str(pose_file),
-                            "log_file": str(engine_layout["logs"] / f"{tag}.log"),
+                            "log_file": str(engine_layout["logs"] / f"{pose_file.stem}.log"),
+                            "replicate_id": replicate_id,
+                            "seed": _seed(replicate_id),
                             "pair_source": pair.get("pair_source"),
                             "selection_mode": pair.get("selection_mode"),
                             "is_cocrystal_benchmark": pair.get("is_cocrystal_benchmark"),
@@ -2688,11 +2713,10 @@ class MultiEngineAnalysisPipeline:
             return pd.DataFrame(rows)
 
         for pose_file in sorted(engine_layout["poses"].glob("*.pdbqt")):
-            tag = pose_file.stem
-            if pair_index and tag not in pair_index:
+            tag, replicate_id, pair = _resolve(pose_file.stem)
+            if tag is None:
                 continue
             parsed = parse_vina_pdbqt(pose_file)
-            pair = pair_index.get(tag, {})
             for _, record in parsed.iterrows():
                 affinity = pd.to_numeric(record.get("vina_affinity"), errors="coerce")
                 if pd.isna(affinity):
@@ -2715,7 +2739,9 @@ class MultiEngineAnalysisPipeline:
                         "rmsd_lb": float(record.get("rmsd_lb")) if pd.notna(record.get("rmsd_lb")) else None,
                         "rmsd_ub": float(record.get("rmsd_ub")) if pd.notna(record.get("rmsd_ub")) else None,
                         "pose_file": str(pose_file),
-                        "log_file": str(engine_layout["logs"] / f"{tag}.log"),
+                        "log_file": str(engine_layout["logs"] / f"{pose_file.stem}.log"),
+                        "replicate_id": replicate_id,
+                        "seed": _seed(replicate_id),
                         "pair_source": pair.get("pair_source"),
                         "selection_mode": pair.get("selection_mode"),
                         "is_cocrystal_benchmark": pair.get("is_cocrystal_benchmark"),
@@ -2725,6 +2751,52 @@ class MultiEngineAnalysisPipeline:
                     }
                 )
         return pd.DataFrame(rows)
+
+    @staticmethod
+    def _per_engine_side_by_side(best_by_engine: pd.DataFrame) -> pd.DataFrame:
+        """best_engine_per_complex.csv: one row per tag with each engine's native selected-pose score.
+
+        Spec 031 score incommensurability: GNINA CNN, Vina/Smina kcal/mol and AutoDock4 kcal/mol are not on one
+        scale, so no engine is chosen as the best engine for a complex. ``comparison_status`` is
+        ``not_comparable_across_engines`` when two or more engines are present for the tag, and ``single_engine``
+        when only one is. The v2 composite ranking is in consensus_ranked_hits.csv.
+        """
+        columns = ["tag", "protein", "ligand", "site_id", "engines_present", "engines_missing", "comparison_status"]
+        if best_by_engine is None or best_by_engine.empty:
+            return pd.DataFrame(columns=columns)
+        engines_in_table = sorted({str(value) for value in best_by_engine["engine"].astype(str)})
+        rows: List[Dict[str, object]] = []
+        for tag, group in best_by_engine.groupby("tag", sort=True):
+            first = group.iloc[0]
+            record: Dict[str, object] = {
+                "tag": tag,
+                "protein": first.get("protein", ""),
+                "ligand": first.get("ligand", ""),
+                "site_id": first.get("site_id", ""),
+            }
+            for optional in ("pair_source", "is_cocrystal_benchmark", "cocrystal_ligand_name"):
+                if optional in group.columns:
+                    record[optional] = first.get(optional)
+            present = sorted({str(value) for value in group["engine"].astype(str)})
+            for _, row in group.iterrows():
+                engine = str(row["engine"])
+                record[f"{engine}_affinity_kcal_mol"] = row.get("affinity_kcal_mol")
+                record[f"{engine}_pose"] = row.get("pose")
+                record[f"{engine}_replicate_id"] = row.get("replicate_id")
+                record[f"{engine}_seed"] = row.get("seed")
+                record[f"{engine}_pose_reproducibility_status"] = row.get("pose_reproducibility_status")
+                if engine == "gnina":
+                    record["gnina_cnn_score"] = row.get("cnn_score")
+                    record["gnina_cnn_affinity"] = row.get("cnn_affinity")
+            record["engines_present"] = ";".join(present)
+            record["engines_missing"] = ";".join(engine for engine in engines_in_table if engine not in present)
+            record["comparison_status"] = (
+                "not_comparable_across_engines" if len(present) > 1 else "single_engine"
+            )
+            rows.append(record)
+        frame = pd.DataFrame(rows)
+        ordered = [column for column in columns if column in frame.columns]
+        return frame[ordered + [column for column in frame.columns if column not in ordered]]
 
     def _write_comparative_reports(self, scores: pd.DataFrame, analysis_scope: str = "full") -> None:
         scope = str(analysis_scope or "full").strip().lower()
@@ -2770,10 +2842,7 @@ class MultiEngineAnalysisPipeline:
         engine_summary = self._annotate_scope_columns(engine_summary)
         engine_summary.to_csv(reports_dir / "engine_summary.csv", index=False)
 
-        cross_engine_best = self._best_rows_by_group(best_by_engine, ["tag"], "affinity_kcal_mol").sort_values(
-            ["affinity_kcal_mol", "tag"]
-        )
-        cross_engine_best = self._annotate_scope_columns(cross_engine_best)
+        cross_engine_best = self._annotate_scope_columns(self._per_engine_side_by_side(best_by_engine))
         cross_engine_best.to_csv(reports_dir / "best_engine_per_complex.csv", index=False)
 
         matrix = best_by_engine.pivot_table(
@@ -3161,6 +3230,7 @@ class MultiEngineAnalysisPipeline:
             "",
         ]
         summary_lines.extend(self._redocking_banner_lines(redocking_status_df))
+        summary_lines.extend(self._pose_reproducibility_banner_lines(best_by_engine))
         if self.excluded_engines:
             summary_lines.append(
                 "Excluded engines: "
@@ -4447,6 +4517,7 @@ class MultiEngineAnalysisPipeline:
                     f"Engine: {engine}",
                     f"Primary ranking score: {ranking_label}",
                     *self._redocking_banner_lines(self._redocking_status_from_reports()),
+                    *self._pose_reproducibility_banner_lines(pose_reproducibility_table(engine_scores)),
                     f"Complexes: {best['tag'].nunique()}",
                     f"Best affinity: {best['affinity_kcal_mol'].min():.3f}",
                     f"Mean best affinity: {best['affinity_kcal_mol'].mean():.3f}",
@@ -4956,17 +5027,61 @@ class MultiEngineAnalysisPipeline:
         *,
         pair_metadata: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
-        """Shared best-pose table: one row per (engine, tag) with pair metadata, scope and docked state (R1c)."""
+        """Shared best-pose table: one row per (engine, tag) with pair metadata, scope and docked state (R1c).
+
+        Spec 036 R5b: the replicates of a pair are pooled by the shared selector. The chosen pose keeps its
+        ``replicate_id``, ``seed`` and ``pose_file``. ``replicates_pooled`` counts the replicates that
+        contributed, and the pose-reproducibility columns come from ``pose_reproducibility_table``.
+        """
         best = select_best_pose_rows(normalized_scores)
         if best.empty:
             return best
         best["pose"] = _restore_integer_pose(best["pose"])
+        if "replicate_id" in normalized_scores.columns:
+            pooled = (
+                normalized_scores.assign(_rep=pd.to_numeric(normalized_scores["replicate_id"], errors="coerce"))
+                .groupby(["engine", "protein", "tag"], dropna=False)["_rep"]
+                .nunique(dropna=True)
+                .rename("replicates_pooled")
+                .reset_index()
+            )
+            pooled["replicates_pooled"] = pooled["replicates_pooled"].astype(int)
+        else:
+            pooled = pd.DataFrame(columns=["engine", "protein", "tag", "replicates_pooled"])
+        best = best.merge(pooled, on=["engine", "protein", "tag"], how="left")
+        best["replicates_pooled"] = best["replicates_pooled"].fillna(1).astype(int)
+        reproducibility = pose_reproducibility_table(normalized_scores)
+        best = best.merge(reproducibility, on=["engine", "protein", "tag"], how="left")
+        if "pose_reproducibility_status" in best.columns:
+            best["pose_reproducibility_status"] = best["pose_reproducibility_status"].fillna("not_evaluated")
         metadata = pair_metadata if pair_metadata is not None else self._pair_metadata_frame()
         best = self._merge_pair_metadata(best, metadata)
         best = self._annotate_scope_columns(best)
         best = annotate_docked_microspecies(best, self.project_dir)
         best.sort_values(["engine", "affinity_kcal_mol", "tag"], inplace=True)
         return best.reset_index(drop=True)
+
+    @staticmethod
+    def _pose_reproducibility_banner_lines(best_by_engine: Optional[pd.DataFrame]) -> List[str]:
+        """Summary-report block for the Spec 036 R5b replicate metric (descriptor, not a validation)."""
+        lines = [
+            "Pose reproducibility (Spec 036 R5b, in-place heavy-atom RMSD between replicate top poses; "
+            "fraction within 2.0 A):"
+        ]
+        if best_by_engine is None or best_by_engine.empty or "pose_reproducibility_status" not in best_by_engine.columns:
+            lines.append("  No best-pose rows; no reproducibility value.")
+            return lines + [""]
+        statuses = best_by_engine["pose_reproducibility_status"].astype(str).value_counts().to_dict()
+        lines.append("  Status counts: " + ", ".join(f"{key}={value}" for key, value in sorted(statuses.items())))
+        completed = best_by_engine[best_by_engine["pose_reproducibility_status"].astype(str) == "completed"]
+        for _, row in completed.sort_values(["engine", "tag"]).iterrows():
+            lines.append(
+                f"  - {row.get('engine', '')} {row.get('tag', '')}: replicates={row.get('pose_reproducibility_replicates', '')}, "
+                f"max={float(row.get('pose_reproducibility_max_rmsd_angstrom')):.2f} A, "
+                f"median={float(row.get('pose_reproducibility_median_rmsd_angstrom')):.2f} A, "
+                f"within_2A={float(row.get('pose_reproducibility_fraction_within_2A')):.2f}"
+            )
+        return lines + [""]
 
     def _write_best_pose_table_outputs(
         self,

@@ -5,8 +5,23 @@
 - [x] **T003** (R2) Redocking validation status marked on downstream rows and reports.
 - [x] **T004** (R3) Consensus mode inventory and removal; v2 default; explicit single-engine ranking; retire legacy RMSD paths.
 - [x] **T005** (R4) One shared pose selector and the GNINA regression test.
-- [x] **T006** (R5) Rg-scaled box, required seed with replicates and reproducibility metric, unified exhaustiveness, explicit `energy_range`.
+- [x] **T006** (R5) Rg-scaled box, required seed, unified exhaustiveness, explicit `energy_range` (done earlier). Replicate pooling and the `pose_reproducibility` metric (R5b) are done in software (T008 follow-up, 2026-10-10): pooled selection with source replicate and seed in the best-pose table, pairwise in-place RMSD with max, median and fraction within 2 Å, verified on synthetic 3-replicate fixtures in `test/test_spec036_followups.py`. The metric has not been run on real 1IEP replicates (T009).
 - [x] **T007** (R6) Software fixes: single-engine best-pose table, tag stems, exit status, centre provenance check, legacy script retirement, single documented path, generated md-input maps.
-- [ ] **T008** Partial: full suite 343 passed / 2 skipped and contract smoke pass at the implementation commit. Open follow-ups: protonation_policy dropped by bootstrap_project_layout; full dry-run smoke fails at `prep project` (pairlist DictWriter fieldnames); pose_extractor GNINA cnn_affinity export bug; best_engine_per_complex compares raw cross-engine affinities. Full suite, smoke test and evidence.
+- [ ] **T008** Integration follow-ups. At the working tree on top of a2154ef (uncommitted): full suite 368 passed / 2 skipped; contract smoke (`--skip-all-engines --skip-prep-matrix`) exit 0; full dry-run smoke (no flags) exit 0. Open items are listed below.
+  - **Fixed:**
+    - `bootstrap_project_layout` keeps `protonation_policy`, `compatibility_profiles` and unknown manifest keys (also through `workflow init` on an existing project).
+    - One pairlist column set for every writer, including the box columns. Old pairlists without them still load. The full smoke passes `prep project`.
+    - Smoke harness: `dock run` passes `--seed 42` (a fixture value). It expects `DEFAULT_REPLICATES` jobs for vina/smina/gnina and 1 for AutoDock4. The AutoDock4 pair path follows R6.
+    - GNINA pose export uses the shared v2 selector: highest `cnn_score`, pooled over replicates, with a regression test. A row without `cnn_score` is recorded as `missing_required_cnn_score` and no pose is exported. The `best_pose_criteria` setting is recorded as `requested_criterion` and no longer changes the pick.
+    - `best_engine_per_complex.csv` shows each engine's native score side by side, with `comparison_status = not_comparable_across_engines` and no winner. See `consensus_inventory.md`.
+    - R5b: replicate-aware score import, GNINA log resolver and engine coverage (pairs, not files). Source replicate and seed are kept in the best-pose table. `pose_reproducibility` is in the best-pose table and the summary report. The receptor-stem tags (R6) resolve in the pair index.
+    - webui `prep pairlist` box size is blank by default, so the CLI uses `rg_scaled_v1`. A value is entered only for `user_fixed`.
+  - **Remaining:**
+    - `MultiEngineAnalysisPipeline._best_by_tag` still takes the minimum raw affinity across engines. It feeds the legacy downstream tables (`affinity_analysis.best_poses`, `top_overall`, `best_per_protein`) in the simplified bridge. Needs a scientific decision on its replacement.
+    - Scientific decision to confirm: `best_pose_criteria` no longer changes the GNINA pose choice (v2 rule only).
+    - The single-engine `summary.txt` still labels GNINA's primary ranking `cnn_affinity`, while the pose is chosen by `cnn_score`.
+    - Stray file `/scripts/repro_item1.py` (debug script created by mistake). The removal was blocked by a safety check, so a person must delete it.
+    - Not run: the 1IEP/STI re-dock (T009). No real docking was run. No vina/smina/gnina binaries are on this machine, so the engine paths were exercised in dry-run and synthetic fixtures only.
+    - Nothing is committed or pushed yet. The test counts and smoke exit codes above are from the uncommitted working tree.
 - [ ] **T009** Bounded 1IEP/STI re-dock on the new defaults; software and scientific evidence kept separate.
 - [ ] **T010** Scientific Lead review (agent does not mark done).

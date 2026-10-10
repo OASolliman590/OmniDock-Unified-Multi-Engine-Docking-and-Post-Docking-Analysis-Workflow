@@ -120,7 +120,7 @@ Current output is split into:
 For canonical multi-engine projects, the engine-aware layer also writes:
 - `reports/combined_engine_scores.csv`
 - `reports/best_pose_per_tag_by_engine.csv`
-- `reports/best_engine_per_complex.csv`
+- `reports/best_engine_per_complex.csv` (native per-engine scores side by side; no cross-engine winner)
 - `raw_data/unified_all_scores.csv`
 - `raw_data/unified_best_poses.csv`
 

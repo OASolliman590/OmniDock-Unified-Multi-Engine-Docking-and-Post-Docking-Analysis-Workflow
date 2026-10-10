@@ -32,6 +32,25 @@ Unknown or removed mode names used to fall back silently to `dockbox_geometric` 
 | Best-pose writers using `_best_rows_by_group(..., "affinity_kcal_mol")` (min raw affinity) or `_select_best_pose_rows` (GNINA min `cnn_affinity`) | replaced by `pose_selection.select_best_pose_rows` (R4) | The GNINA worst-pose bug. See the fixture in the R4 test file. |
 | `simplified_pipeline_impl.py` `mean_pairwise_rmsd` | out of scope | Best-pose RMSD summaries, not consensus. |
 | `webui/targets.py` mode list | updated to v2 default; legacy names removed from the choice list | Same CLI option. |
+| `best_engine_per_complex` (`reports/best_engine_per_complex.csv`, `multi_engine_pipeline_impl`) | **changed (Spec 036 follow-up)** | Picked one "best engine" per tag by the minimum raw affinity across engines (`_best_rows_by_group(best_by_engine, ["tag"], "affinity_kcal_mol")`). That compares Vina, Smina and AD4 kcal/mol values and GNINA's Vina-style affinity directly, which Spec 031 forbids. Now one row per tag with each engine's native selected-pose score in its own column (see below). |
+
+### Follow-up change: `best_engine_per_complex.csv` (Spec 036, T008)
+
+- **Before:** one row per tag. Columns are the winning row (`engine`, `affinity_kcal_mol`, `score_primary`, `pose_file`, ...).
+  The winner was the lowest raw affinity across engines.
+- **After:** one row per tag, with no winner.
+  - `<engine>_affinity_kcal_mol`, `<engine>_pose`, `<engine>_replicate_id`, `<engine>_seed` and
+    `<engine>_pose_reproducibility_status` for every engine present. GNINA also gives `gnina_cnn_score` and `gnina_cnn_affinity`.
+  - `engines_present`, `engines_missing`, `comparison_status`.
+  - `comparison_status = not_comparable_across_engines` when two or more engines are present for the tag.
+    `single_engine` when only one is.
+  - Kept columns: `tag`, `protein`, `ligand`, `site_id`, and the pair metadata and scope columns.
+  - Dropped: `engine` and the raw `affinity_kcal_mol` winner columns.
+- **Composite ranking:** not added to this file. The v2 composite (`consensus_rank_geometry_qc_v2`) is the only
+  cross-engine ranking and is in `consensus_ranked_hits.csv`.
+- **Not changed (remaining, see tasks.md T008):** `MultiEngineAnalysisPipeline._best_by_tag` still takes the minimum
+  raw affinity across engines. It feeds the legacy downstream tables (`affinity_analysis.best_poses`, `top_overall`,
+  `best_per_protein`) in the simplified bridge.
 
 ## Spec 031 conflict (for the Scientific Lead)
 

@@ -16,6 +16,7 @@ from ..box_policy import (
 )
 from ..project_layout import load_manifest
 from ..project_layout import (
+    PAIRLIST_COLUMNS,
     LAYOUT_DOCKING_LEGACY,
     detect_layout_profile,
     ensure_project_layout,
@@ -58,30 +59,7 @@ PAIR_INTENT_COLUMNS = [
     "box_warnings",
 ]
 
-PAIRLIST_COLUMNS = [
-    "receptor",
-    "site_id",
-    "ligand",
-    "center_x",
-    "center_y",
-    "center_z",
-    "size_x",
-    "size_y",
-    "size_z",
-    "protein_display_name",
-    "ligand_display_name",
-    "pdb_id",
-    "pair_source",
-    "is_cocrystal_benchmark",
-    "cocrystal_ligand_name",
-    "cocrystal_ligand_display_name",
-    "selection_mode",
-    "box_method",
-    "ligand_rg_angstrom",
-    "edge_angstrom",
-    "box_containment_status",
-    "box_warnings",
-]
+# PAIRLIST_COLUMNS is defined once in docking.project_layout (Spec 036 R5a box columns included).
 
 
 def _normalize_key(value: str) -> str:

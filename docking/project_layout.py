@@ -11,6 +11,7 @@ import pandas as pd
 from .models import ProjectManifest
 
 
+# Single source of the pairlist header (pairlist_builder, pair_curation and project_builder import it).
 PAIRLIST_COLUMNS = [
     "receptor",
     "site_id",
@@ -29,6 +30,13 @@ PAIRLIST_COLUMNS = [
     "cocrystal_ligand_name",
     "cocrystal_ligand_display_name",
     "selection_mode",
+    # Spec 036 R5a box provenance. Written by every pairlist writer; readers tolerate old pairlists
+    # that lack these columns (missing values load as empty or None).
+    "box_method",
+    "ligand_rg_angstrom",
+    "edge_angstrom",
+    "box_containment_status",
+    "box_warnings",
 ]
 
 LAYOUT_CANONICAL = "canonical"
@@ -781,13 +789,18 @@ def bootstrap_project_layout(
         top_pose_global_aggregation=str(existing.get("top_pose_global_aggregation", "best_target") or "best_target"),
         hpc_profile=dict(existing.get("hpc_profile", {})),
         notes=merged_notes,
+        protonation_policy=dict(existing.get(PROTONATION_POLICY_KEY) or {}),
+        compatibility_profiles=compatibility_profiles,
     )
     manifest.engine_settings = {
         **{engine: {} for engine in merged_engines},
         **dict(existing.get("engine_settings", {})),
         **dict(manifest.engine_settings),
     }
-    save_manifest(project_root, manifest.to_dict(), layout_profile=profile)
+    # Keys this function does not model (for example protonation_policy written by a newer command,
+    # or a key from another writer) are kept. Modelled fields take the values computed above.
+    payload = {**existing, **manifest.to_dict()}
+    save_manifest(project_root, payload, layout_profile=profile)
     return {
         "project_root": str(project_root),
         "docking_root": str(layout["docking_root"]),
