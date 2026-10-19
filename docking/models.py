@@ -54,6 +54,14 @@ class PairlistRow:
     edge_angstrom: Optional[float] = None
     box_containment_status: str = ""
     box_warnings: str = ""
+    # Spec 035 S18: reference provenance and the frame each coordinate set belongs to. A reference whose
+    # frame differs from the receptor's frame is cleared (D17). Empty for pairs without a reference.
+    reference_source: str = ""
+    reference_frame_id: str = ""
+    receptor_frame_id: str = ""
+    reference_pdb_id: str = ""
+    reference_pose_file: str = ""
+    reference_ligand_file: str = ""
     # Other pairlist columns carried from an existing pairlist (pair metadata, reference lineage).
     # Written back by the pairlist writers so that no source column is dropped (Spec 036 R5a / R2).
     extra: Dict[str, object] = field(default_factory=dict, compare=False)

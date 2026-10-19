@@ -178,6 +178,10 @@ _PAIR_METADATA_COLUMNS = (
     "cocrystal_ligand_name",
     "reference_pose_file",
     "reference_ligand_file",
+    # Spec 035 S18: the frame of the reference and of the receptor (D17 guard), and the PDB id (D8 key).
+    "reference_pdb_id",
+    "reference_frame_id",
+    "receptor_frame_id",
     "reference_ligand_id",
     "reference_source_structure_id",
     "reference_receptor_id",

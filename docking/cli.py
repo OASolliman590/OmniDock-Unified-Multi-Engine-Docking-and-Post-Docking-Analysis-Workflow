@@ -108,6 +108,12 @@ def _pairlist_rows_from_df(df: pd.DataFrame) -> List[PairlistRow]:
             edge_angstrom=_optional_float(row.get("edge_angstrom")),
             box_containment_status=_optional_text(row.get("box_containment_status")),
             box_warnings=_optional_text(row.get("box_warnings")),
+            reference_source=_optional_text(row.get("reference_source")),
+            reference_frame_id=_optional_text(row.get("reference_frame_id")),
+            receptor_frame_id=_optional_text(row.get("receptor_frame_id")),
+            reference_pdb_id=_optional_text(row.get("reference_pdb_id")),
+            reference_pose_file=_optional_text(row.get("reference_pose_file")),
+            reference_ligand_file=_optional_text(row.get("reference_ligand_file")),
         )
         for _, row in df.iterrows()
     ]

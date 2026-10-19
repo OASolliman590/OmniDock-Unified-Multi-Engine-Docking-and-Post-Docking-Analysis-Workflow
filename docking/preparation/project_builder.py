@@ -27,6 +27,7 @@ from ..project_layout import (
     pairlist_path,
     save_manifest,
 )
+from .asset_identity import REFERENCE_FIELDS, pair_reference_metadata
 from .excel_sites import load_site_catalog_from_summary
 from .ligand_quality import validate_prepared_ligand_pdbqt
 
@@ -139,8 +140,15 @@ _ROW_BUILT_COLUMNS = {
     "edge_angstrom",
     "box_containment_status",
     "box_warnings",
+    # Spec 035 S18: reference fields are read into PairlistRow, not carried as extra columns.
+    *REFERENCE_FIELDS,
 }
 PAIR_INTENT_SNAPSHOT_NAME = "pair_intent.csv"
+
+
+def _reference_cells(raw_row: pd.Series) -> Dict[str, str]:
+    """Reference provenance cells of a pair-intent or pairlist row. A missing cell is the empty string."""
+    return {key: str(raw_row.get(key)) if pd.notna(raw_row.get(key)) else "" for key in REFERENCE_FIELDS}
 
 
 def _carry_cell(value: object) -> object:
@@ -212,6 +220,17 @@ class DockingProjectBuilder:
         warnings.extend(row_warnings)
         if not rows:
             raise ValueError("No valid pairlist rows were generated")
+
+        # Spec 035 S18: empty reference cells are filled from the prepared-asset sidecars. A sidecar reference
+        # whose frame differs from the receptor's is not filled (D17). A reference supplied in the pairlist is
+        # kept as written; the analysis-time guard (reference_policy.classify_reference_row) clears it.
+        receptor_sources = {source.name: source for source, _ in receptor_links}
+        ligand_sources = {source.name: source for source, _ in ligand_links}
+        for row in rows:
+            metadata = pair_reference_metadata(receptor_sources[row.receptor], ligand_sources[row.ligand])
+            for key, value in metadata.items():
+                if not getattr(row, key, ""):
+                    setattr(row, key, value)
 
         for source, dest_dir in receptor_links:
             self._materialize_asset(source, layout["receptors"] / source.name)
@@ -489,6 +508,7 @@ class DockingProjectBuilder:
                 box_method=box.box_method,
                 ligand_rg_angstrom=box.ligand_rg_angstrom,
                 edge_angstrom=box.edge_angstrom,
+                **_reference_cells(raw_row),
             )
             rows.append(row)
             receptor_links.append((receptor_source, Path("receptors")))
@@ -531,6 +551,7 @@ class DockingProjectBuilder:
                     size_y=float(raw_row["size_y"]),
                     size_z=float(raw_row["size_z"]),
                     **_recorded_box_provenance(raw_row),
+                    **_reference_cells(raw_row),
                     extra={column: _carry_cell(raw_row.get(column)) for column in self._carried_columns},
                 )
             )
@@ -595,6 +616,15 @@ class DockingProjectBuilder:
         return rows, receptor_links, ligand_links, warnings
 
     def _materialize_asset(self, source: Path, destination: Path) -> None:
+        self._materialize_asset_file(source, destination)
+        # Spec 035 S18: the preparation sidecar (reference and chemistry provenance) travels with its asset.
+        metadata = source.with_suffix(source.suffix + ".preparation.json")
+        if metadata.exists():
+            target_metadata = destination.with_suffix(destination.suffix + ".preparation.json")
+            if metadata.resolve() != target_metadata.resolve():
+                shutil.copy2(metadata, target_metadata)
+
+    def _materialize_asset_file(self, source: Path, destination: Path) -> None:
         if destination.exists():
             return
         destination.parent.mkdir(parents=True, exist_ok=True)

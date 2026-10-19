@@ -16,7 +16,7 @@ from core_pipeline import MolecularDockingPipeline, extract_residue_level_coordi
 from cli_pipeline import run_single_pdb_cli
 from docking.preparation import ligand_preparation as preparation
 from docking.preparation import receptor_preparation
-# Spec 035: main's docking.preparation.asset_identity (S18) is not ported; the two tests that need it are xfail.
+from docking.preparation.asset_identity import pair_reference_metadata
 from docking.preparation.excel_sites import load_site_catalog_from_summary
 from docking.preparation.ligand_quality import sanitize_ligand_pdb_file, sanitize_prepared_ligand_pdbqt, validate_prepared_ligand_pdbqt
 from docking.preparation.project_builder import DockingPreparationConfig, DockingProjectBuilder
@@ -251,7 +251,6 @@ def test_materialization_rejects_stale_copied_input(tmp_path):
         builder._materialize_asset(source, destination)
 
 
-@pytest.mark.xfail(strict=True, reason="Spec 035 S18 deferred: main asset_identity.pair_reference_metadata is not ported")
 def test_reference_metadata_does_not_mislabel_cross_docking(tmp_path):
     receptor, ligand = tmp_path / "rec.pdbqt", tmp_path / "lig.pdbqt"
     receptor.with_suffix(".pdbqt.preparation.json").write_text(json.dumps({"receptor_frame_id": "frame2"}))
@@ -275,7 +274,6 @@ def test_spreadsheet_rejects_duplicate_sites_and_nonfinite_centers(tmp_path):
         load_site_catalog_from_summary(book)
 
 
-@pytest.mark.xfail(strict=True, reason="Spec 035 S18 deferred: pair reference and frame fields are not ported")
 def test_project_build_preserves_verified_native_reference_and_frame(tmp_path):
     receptors, ligands = tmp_path / "receptors", tmp_path / "ligands"
     receptors.mkdir()

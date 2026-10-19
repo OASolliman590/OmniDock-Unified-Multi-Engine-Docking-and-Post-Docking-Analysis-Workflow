@@ -248,7 +248,6 @@ def test_nonfinite_box_schema_rejected():
     assert len(errors) == 2
 
 
-@pytest.mark.xfail(strict=True, reason="Spec 035 S18 deferred: PairlistRow reference_frame_id/receptor_frame_id are not ported")
 def test_reference_coordinate_provenance_survives_conversion_and_scaling(project):
     pair = replace(project[1], reference_source="crystal", reference_frame_id="source-frame", receptor_frame_id="source-frame", reference_pdb_id="1ABC", reference_pose_file="reference.sdf")
     parsed = _pairlist_rows_from_df(pd.DataFrame([pair.to_dict()]))[0]

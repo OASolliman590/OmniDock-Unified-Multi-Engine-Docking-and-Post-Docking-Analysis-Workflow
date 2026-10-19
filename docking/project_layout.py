@@ -46,6 +46,13 @@ PAIRLIST_COLUMNS = [
     "receptor_ph",
     "ligand_ph",
     "pair_protonation_status",
+    # Spec 035 S18: reference provenance (same six names as docking.preparation.asset_identity.REFERENCE_FIELDS).
+    "reference_source",
+    "reference_frame_id",
+    "receptor_frame_id",
+    "reference_pdb_id",
+    "reference_pose_file",
+    "reference_ligand_file",
 ]
 
 LAYOUT_CANONICAL = "canonical"
