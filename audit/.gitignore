@@ -1,8 +1,8 @@
 # Local probe outputs and intermediate regression runs.
 probe-data/
 postdocking-probe-artifacts/
+# Machine-generated run outputs embed local paths and host names; never commit them.
 *.log
-!correctness-tests.log
-!build-correctness.log
 !wheel-verification.log
-!docking-dry-run.log
+*.xml
+*-results.json
