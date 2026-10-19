@@ -39,6 +39,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
+from .prepared_reuse import PREPARED, REUSED_UNCHANGED, load_provenance, request_fingerprint, reuse_block_reason
 from .receptor_quality import validate_receptor_file
 from .structure_contract import coordinates
 
@@ -308,9 +309,19 @@ def _autodocktools_python(preparation: Dict[str, Any]) -> str:
     return python
 
 
-def prepare_receptor(source: Path, destination: Path, config: Dict[str, Any]) -> Dict[str, Any]:
-    """Prepare one receptor. Raises ReceptorPreparationError; never writes a partial output."""
+def prepare_receptor(source: Path, destination: Path, config: Dict[str, Any], force: bool = False) -> Dict[str, Any]:
+    """Prepare one receptor. Raises ReceptorPreparationError; never writes a partial output.
+
+    Spec 037 R4a (prepare once): an existing output whose provenance matches the current policy hash,
+    request, and input and output SHA-256 is reused and returned with ``status: reused_unchanged``.
+    ``force`` (or ``preparation.force``) always prepares again.
+    """
     source, destination = Path(source).resolve(), Path(destination).resolve()
+    preparation = dict(config.get("preparation") or {})
+    force = bool(force or preparation.get("force", False))
+    reused = _reused_receptor(source, destination, preparation, force)
+    if reused is not None:
+        return reused
     destination.parent.mkdir(parents=True, exist_ok=True)
     log_path = destination.parent / (destination.name + ".preparation.log")
     # Always regenerate: a stale receptor or provenance must never survive a failed run.
@@ -319,9 +330,47 @@ def prepare_receptor(source: Path, destination: Path, config: Dict[str, Any]) ->
             stale.unlink()
     log_lines: List[str] = []
     try:
-        return _prepare(source, destination, dict(config.get("preparation") or {}), log_lines)
+        return _prepare(source, destination, preparation, log_lines)
     finally:
         log_path.write_text("\n".join(log_lines), encoding="utf-8")
+
+
+def _reused_receptor(source: Path, destination: Path, preparation: Dict[str, Any], force: bool) -> Optional[Dict[str, Any]]:
+    """Spec 037 R4a: the provenance record of a reusable receptor, or None when it must be prepared again."""
+    provenance_path = destination.parent / (destination.name + ".preparation.json")
+    try:
+        request = _resolve_request(source, preparation)
+    except ReceptorPreparationError:
+        return None  # the preparation itself reports the invalid request
+    record, _ = load_provenance(provenance_path)
+    reason = reuse_block_reason(
+        record,
+        output=destination,
+        input_file=source,
+        policy_hash=request["policy_hash"],
+        fingerprint=request_fingerprint(_request_fingerprint_fields(request)),
+        force=force,
+    )
+    if reason or record is None:
+        return None
+    payload = dict(record)
+    payload.update(
+        status=REUSED_UNCHANGED,
+        preparation_status=REUSED_UNCHANGED,
+        reuse_provenance_file=str(provenance_path),
+    )
+    return payload
+
+
+def _request_fingerprint_fields(request: Dict[str, Any]) -> Dict[str, Any]:
+    """The request values that shape the output and that the policy hash does not cover (Spec 037 R4a)."""
+    return {
+        "use_pdb2pqr": request["use_pdb2pqr"],
+        "ph": request["ph"],
+        "force_field": request["force_field"] or None,
+        "backend": request["backend"],
+        "pdb2pqr_options": list(PDB2PQR_OPTIONS) if request["use_pdb2pqr"] else [],
+    }
 
 
 def _receptor_policy_resolution(source: Path, preparation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -337,7 +386,8 @@ def _receptor_policy_resolution(source: Path, preparation: Dict[str, Any]) -> Op
         raise ReceptorPreparationError(exc.reason, exc.details) from exc
 
 
-def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_lines: List[str]) -> Dict[str, Any]:
+def _resolve_request(source: Path, preparation: Dict[str, Any]) -> Dict[str, Any]:
+    """The effective preparation request (shared by the reuse check and the preparation; Spec 037 R4a)."""
     if _bool_option(preparation, "allow_bad_res", False):
         raise ReceptorPreparationError(
             "allow_bad_res_unsupported",
@@ -382,6 +432,25 @@ def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_l
         preparation.get("ligand_preparation_profile", preparation.get("ligand_preparation_backend", "engine_aware_full")) or "engine_aware_full"
     ).strip().lower()
     backend = "autodocktools" if profile == "autodocktools_only" else "meeko"
+    return {
+        "use_pdb2pqr": use_pdb2pqr,
+        "ph": ph,
+        "ph_source": ph_source,
+        "force_field": force_field,
+        "force_field_source": force_field_source,
+        "policy_resolution": policy_resolution,
+        "policy_hash": policy_resolution.get("policy_hash") if policy_resolution else None,
+        "backend": backend,
+    }
+
+
+def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_lines: List[str]) -> Dict[str, Any]:
+    request = _resolve_request(source, preparation)
+    use_pdb2pqr = request["use_pdb2pqr"]
+    ph, ph_source = request["ph"], request["ph_source"]
+    force_field, force_field_source = request["force_field"], request["force_field_source"]
+    policy_resolution = request["policy_resolution"]
+    backend = request["backend"]
 
     lines = source.read_text(encoding="utf-8").splitlines()
     if sum(line.startswith("MODEL ") for line in lines) > 1:
@@ -508,6 +577,9 @@ def _prepare(source: Path, destination: Path, preparation: Dict[str, Any], log_l
         "policy_level": policy_resolution["policy_level"] if policy_resolution else "none",
         "policy_hash": policy_resolution.get("policy_hash") if policy_resolution else None,
         "policy_hash_version": policy_resolution.get("policy_hash_version") if policy_resolution else None,
+        # Spec 037 R4a: what a later run must match to reuse this output (see docking/preparation/prepared_reuse.py).
+        "request_fingerprint": request_fingerprint(_request_fingerprint_fields(request)),
+        "preparation_status": PREPARED,
         "resolved_protonation_policy": (
             {
                 "entity": policy_resolution.get("entity"),
@@ -540,18 +612,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("source", type=Path)
     parser.add_argument("destination", type=Path)
     parser.add_argument("config", type=Path)
+    parser.add_argument("--force", action="store_true", help="Prepare again even when the existing output is reusable (Spec 037 R4a)")
     args = parser.parse_args(argv)
     try:
         config = json.loads(args.config.read_text(encoding="utf-8"))
-        payload = prepare_receptor(args.source, args.destination, config)
+        payload = prepare_receptor(args.source, args.destination, config, force=args.force)
     except ReceptorPreparationError as exc:
         print(json.dumps({"status": "failed", "reason": exc.reason, "details": exc.details}))
         return 1
     except Exception as exc:  # fail closed with a machine-readable reason
         print(json.dumps({"status": "failed", "reason": "preparation_error", "details": f"{type(exc).__name__}: {exc}"}))
         return 1
+    reused = payload.get("status") == "reused_unchanged"
     print(json.dumps({
-        "status": "completed",
+        "status": "reused_unchanged" if reused else "completed",
         "output_file": payload["output_file"],
         "backend": payload["backend"],
         "protonation_status": payload["protonation_status"],

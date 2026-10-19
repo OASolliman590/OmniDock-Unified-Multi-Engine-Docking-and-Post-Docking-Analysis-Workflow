@@ -162,7 +162,7 @@ Examples:
     parser.add_argument("--winner-only", action="store_true",
                         help="Only promote pairs where the target engine wins across engines")
     parser.add_argument("--min-affinity-advantage", type=float, default=0.0,
-                        help="Require the target engine to beat the best competing engine by at least this many kcal/mol")
+                        help="Removed by Spec 037 R4b (raw cross-engine gate). Must stay 0; promotion uses the consensus v2 winner")
     parser.add_argument("--max-rerun-pairs", type=int, default=0,
                         help="Optional global cap on promoted exhaustive rerun pairs")
     parser.add_argument("--pair-allowlist",
@@ -222,8 +222,11 @@ Examples:
     parser.add_argument(
         "--top-pose-policy",
         choices=["hybrid", "best_affinity", "best_consensus"],
-        default="best_affinity",
-        help="Top-pose atlas selection policy",
+        default="best_consensus",
+        help=(
+            "Top-pose atlas selection policy (Spec 037 R4b). Default best_consensus ranks by the v2 consensus rank "
+            "(single_engine_native_v1 for one engine). best_affinity compares raw affinities and is accepted for one engine only."
+        ),
     )
     parser.add_argument(
         "--top-pose-aggregation",

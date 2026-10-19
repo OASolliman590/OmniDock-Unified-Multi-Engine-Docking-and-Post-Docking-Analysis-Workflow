@@ -88,6 +88,8 @@ from post_docking_analysis.complex_validation import validate_complex_pdb_struct
 from post_docking_analysis.pose_extractor import extract_best_poses_from_gnina
 from post_docking_analysis.replicates import load_replicate_seeds, pose_reproducibility_table
 from post_docking_analysis.top_pose_selector import (
+    DEFAULT_SELECTION_POLICY,
+    DESCRIPTIVE_SCOPE,
     build_top_pose_atlas,
     normalize_global_aggregation,
     normalize_selection_policy,
@@ -375,7 +377,7 @@ class MultiEngineAnalysisPipeline:
         hit_class_policy: str = "target_percentile",
         hit_class_strong_percentile: float = 0.10,
         hit_class_moderate_percentile: float = 0.35,
-        top_pose_selection_policy: str = "best_affinity",
+        top_pose_selection_policy: str = DEFAULT_SELECTION_POLICY,
         top_pose_global_aggregation: str = "best_target",
         best_pose_selection_metric: str = "auto",
         engines_in_scope: Optional[List[str]] = None,
@@ -401,7 +403,13 @@ class MultiEngineAnalysisPipeline:
         self.rerun_engine = rerun_engine
         self.top_per_protein = max(int(top_per_protein or 1), 1)
         self.winner_only = bool(winner_only)
-        self.min_affinity_advantage = float(min_affinity_advantage or 0.0)
+        # Spec 037 R4b: promotion no longer gates on a raw affinity difference across engines. The v2 consensus winner decides.
+        if float(min_affinity_advantage or 0.0) > 0:
+            raise ValueError(
+                "min_affinity_advantage was removed by Spec 037 R4b: it gated on a raw affinity difference between "
+                "engines. Promotion uses the consensus v2 winner (is_target_engine_winner). Leave it at 0."
+            )
+        self.min_affinity_advantage = 0.0
         self.max_rerun_pairs = max(int(max_rerun_pairs or 0), 0)
         self.pair_allowlist = pair_allowlist
         self.consensus_mode = normalize_consensus_mode(consensus_mode)
@@ -2851,6 +2859,7 @@ class MultiEngineAnalysisPipeline:
             record["comparison_status"] = (
                 "not_comparable_across_engines" if len(present) > 1 else "single_engine"
             )
+            record["comparison_scope"] = DESCRIPTIVE_SCOPE
             rows.append(record)
         frame = pd.DataFrame(rows)
         ordered = [column for column in columns if column in frame.columns]
@@ -2910,6 +2919,7 @@ class MultiEngineAnalysisPipeline:
             aggfunc="min",
         ).reset_index()
         matrix = self._annotate_scope_columns(matrix)
+        matrix["comparison_scope"] = DESCRIPTIVE_SCOPE
         matrix.to_csv(reports_dir / "engine_affinity_matrix.csv", index=False)
 
         validation_bundle = run_redocking_validation(
@@ -2995,6 +3005,9 @@ class MultiEngineAnalysisPipeline:
             favorite_engine=self.favorite_engine or self.rerun_engine,
             normalization_method=self.normalization_method,
         )
+        # Spec 037 R4b: the raw minimum over engines is descriptive. It never orders a candidate.
+        explainability["comparison_scope"] = DESCRIPTIVE_SCOPE
+        explainability["descriptive_not_comparable_across_engines"] = ["proteins[].descriptive_best_affinity_kcal_mol"]
         explainability_file = reports_dir / "consensus_explainability.json"
         explainability_file.write_text(json.dumps(explainability, indent=2), encoding="utf-8")
 
@@ -3021,6 +3034,8 @@ class MultiEngineAnalysisPipeline:
                     score_columns=["consensus_score", "best_affinity_kcal_mol"],
                     biology_prefix="bio_",
                 )
+                biology_global_corr = self._label_biology_correlations(biology_global_corr)
+                biology_per_protein_corr = self._label_biology_correlations(biology_per_protein_corr)
                 consensus_df = annotated_consensus
                 consensus_df.to_csv(annotated_consensus_file, index=False)
                 rescoring_df = select_rescoring_candidates(
@@ -3076,8 +3091,8 @@ class MultiEngineAnalysisPipeline:
         )
 
         per_protein_corr, global_corr = compute_cross_engine_rank_correlations(best_by_engine)
-        per_protein_corr = self._annotate_scope_columns(per_protein_corr)
-        global_corr = self._annotate_scope_columns(global_corr)
+        per_protein_corr = self._annotate_scope_columns(per_protein_corr).assign(comparison_scope=DESCRIPTIVE_SCOPE)
+        global_corr = self._annotate_scope_columns(global_corr).assign(comparison_scope=DESCRIPTIVE_SCOPE)
         per_protein_corr_file = reports_dir / "engine_rank_correlation_per_protein.csv"
         global_corr_file = reports_dir / "engine_rank_correlation_global.csv"
         per_protein_corr.to_csv(per_protein_corr_file, index=False)
@@ -3607,7 +3622,7 @@ class MultiEngineAnalysisPipeline:
 
         protein_name_map, ligand_name_map = self._build_comparative_name_maps()
         labelled = self._label_cross_engine_rows(best_by_engine, protein_name_map, ligand_name_map)
-        labelled.to_csv(reports_dir / "cross_engine_pair_best_scores.csv", index=False)
+        labelled.assign(comparison_scope=DESCRIPTIVE_SCOPE).to_csv(reports_dir / "cross_engine_pair_best_scores.csv", index=False)
 
         engine_order = [engine for engine in ("gnina", "vina", "smina") if engine in set(labelled["engine"].astype(str))]
         if not engine_order:
@@ -3644,14 +3659,19 @@ class MultiEngineAnalysisPipeline:
         present_engine_order = [engine for engine in engine_order if engine in wide.columns]
         if not present_engine_order:
             present_engine_order = [column for column in wide.columns if column not in {"tag", "protein_label", "ligand_display_name"}]
-        wide["best_affinity"] = wide[present_engine_order].min(axis=1, skipna=True)
+        # Spec 037 R4b: these cross-engine columns are descriptive diagnostics. They never choose a pose or a winner.
+        wide["descriptive_best_affinity_kcal_mol"] = wide[present_engine_order].min(axis=1, skipna=True)
         wide["worst_affinity"] = wide[present_engine_order].max(axis=1, skipna=True)
-        wide["affinity_spread"] = wide["worst_affinity"] - wide["best_affinity"]
+        wide["descriptive_affinity_spread_kcal_mol"] = wide["worst_affinity"] - wide["descriptive_best_affinity_kcal_mol"]
         wide["is_reference_ligand"] = wide["ligand_display_name"].astype(str).str.contains(r"\[Ref\]", case=False, na=False)
         wide["pair_label"] = wide["protein_label"].astype(str) + " | " + wide["ligand_display_name"].astype(str)
         best_engine_indices = wide[present_engine_order].idxmin(axis=1)
-        wide["best_engine"] = best_engine_indices.where(best_engine_indices.notna(), "")
-        wide.sort_values(["is_reference_ligand", "best_affinity", "pair_label"], ascending=[False, True, True], inplace=True)
+        wide["descriptive_lowest_raw_affinity_engine"] = best_engine_indices.where(best_engine_indices.notna(), "")
+        wide.sort_values(
+            ["is_reference_ligand", "descriptive_best_affinity_kcal_mol", "pair_label"],
+            ascending=[False, True, True],
+            inplace=True,
+        )
 
         heatmap_df = wide.head(min(60, len(wide))).set_index("pair_label")[present_engine_order]
         self._plot_cross_engine_pair_heatmap(
@@ -3698,6 +3718,17 @@ class MultiEngineAnalysisPipeline:
         }
 
     @staticmethod
+    def _label_biology_correlations(frame: pd.DataFrame) -> pd.DataFrame:
+        """Spec 037 R4b: a correlation with the raw cross-engine minimum is descriptive. The v2 consensus score is not."""
+        if frame is None or frame.empty or "score_column" not in frame.columns:
+            return frame
+        labelled = frame.copy()
+        labelled["comparison_scope"] = labelled["score_column"].map(
+            lambda name: DESCRIPTIVE_SCOPE if str(name) == "best_affinity_kcal_mol" else CONSENSUS_V2_METHOD
+        )
+        return labelled
+
+    @staticmethod
     def _safe_subset(frame: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
         if frame is None or frame.empty:
             return pd.DataFrame(columns=columns)
@@ -3715,6 +3746,8 @@ class MultiEngineAnalysisPipeline:
     ) -> Dict[str, str]:
         root.mkdir(parents=True, exist_ok=True)
         bio_columns = sorted([column for column in consensus_df.columns if str(column).startswith("bio_")])
+        # Spec 037 R4b: rows are ordered by the v2 consensus rank. best_affinity_kcal_mol is descriptive
+        # (the minimum over engines of one tag) and is labelled as such in every table below.
         base_columns = [
             "protein",
             "ligand",
@@ -3722,16 +3755,17 @@ class MultiEngineAnalysisPipeline:
             "engine",
             "best_affinity_kcal_mol",
             "consensus_score",
-            "consensus_rank",
+            "consensus_rank_global",
             "docking_quality_class",
             "qc_status",
             "admet_status",
         ]
         pair_level = MultiEngineAnalysisPipeline._safe_subset(consensus_df, base_columns + bio_columns)
+        pair_level = pair_level.rename(columns={"best_affinity_kcal_mol": "descriptive_best_affinity_kcal_mol"})
         pair_level_file = root / "polypharmacology_pair_level_with_biology.csv"
         pair_level.to_csv(pair_level_file, index=False)
 
-        ligand_summary_cols = ["ligand", "best_affinity_kcal_mol", "consensus_score", "consensus_rank", "docking_quality_class"]
+        ligand_summary_cols = ["ligand", "best_affinity_kcal_mol", "consensus_score", "consensus_rank_global", "docking_quality_class"]
         ligand_summary = MultiEngineAnalysisPipeline._safe_subset(consensus_df, ligand_summary_cols + bio_columns)
         if not ligand_summary.empty and "ligand" in ligand_summary.columns:
             aggregations: Dict[str, str] = {}
@@ -3739,20 +3773,22 @@ class MultiEngineAnalysisPipeline:
                 aggregations["best_affinity_kcal_mol"] = "min"
             if "consensus_score" in ligand_summary.columns:
                 aggregations["consensus_score"] = "mean"
-            if "consensus_rank" in ligand_summary.columns:
-                aggregations["consensus_rank"] = "min"
+            if "consensus_rank_global" in ligand_summary.columns:
+                aggregations["consensus_rank_global"] = "min"
             for column in bio_columns:
                 if column in ligand_summary.columns:
                     aggregations[column] = "mean"
             if aggregations:
                 ligand_summary = ligand_summary.groupby("ligand", dropna=False).agg(aggregations).reset_index()
-            sort_columns = [column for column in ("consensus_rank", "best_affinity_kcal_mol") if column in ligand_summary.columns]
+            sort_columns = [column for column in ("consensus_rank_global", "ligand") if column in ligand_summary.columns]
             if sort_columns:
                 ligand_summary = ligand_summary.sort_values(sort_columns, ascending=[True] * len(sort_columns))
+        ligand_summary = ligand_summary.rename(columns={"best_affinity_kcal_mol": "descriptive_best_affinity_kcal_mol"})
+        ligand_summary["comparison_scope"] = DESCRIPTIVE_SCOPE
         ligand_summary_file = root / "polypharmacology_ligand_summary_with_biology.csv"
         ligand_summary.to_csv(ligand_summary_file, index=False)
 
-        protein_summary_cols = ["protein", "best_affinity_kcal_mol", "consensus_score", "consensus_rank"] + bio_columns
+        protein_summary_cols = ["protein", "best_affinity_kcal_mol", "consensus_score", "consensus_rank_global"] + bio_columns
         protein_summary = MultiEngineAnalysisPipeline._safe_subset(consensus_df, protein_summary_cols)
         if not protein_summary.empty and "protein" in protein_summary.columns:
             aggregations: Dict[str, str] = {}
@@ -3760,17 +3796,19 @@ class MultiEngineAnalysisPipeline:
                 aggregations["best_affinity_kcal_mol"] = "min"
             if "consensus_score" in protein_summary.columns:
                 aggregations["consensus_score"] = "mean"
-            if "consensus_rank" in protein_summary.columns:
-                aggregations["consensus_rank"] = "mean"
+            if "consensus_rank_global" in protein_summary.columns:
+                aggregations["consensus_rank_global"] = "min"
             for column in bio_columns:
                 if column in protein_summary.columns:
                     aggregations[column] = "mean"
             if aggregations:
                 protein_summary = protein_summary.groupby("protein", dropna=False).agg(aggregations).reset_index()
-            sort_columns = [column for column in ("consensus_score", "best_affinity_kcal_mol") if column in protein_summary.columns]
+            sort_columns = [column for column in ("consensus_score", "consensus_rank_global") if column in protein_summary.columns]
             if sort_columns:
                 ascending = [False if column == "consensus_score" else True for column in sort_columns]
                 protein_summary = protein_summary.sort_values(sort_columns, ascending=ascending)
+        protein_summary = protein_summary.rename(columns={"best_affinity_kcal_mol": "descriptive_best_affinity_kcal_mol"})
+        protein_summary["comparison_scope"] = DESCRIPTIVE_SCOPE
         protein_summary_file = root / "polypharmacology_protein_summary_with_biology.csv"
         protein_summary.to_csv(protein_summary_file, index=False)
 
@@ -4009,7 +4047,11 @@ class MultiEngineAnalysisPipeline:
             cbar_kws={"label": "Affinity (kcal/mol)"},
             ax=ax,
         )
-        ax.set_title("Cross-Engine Affinity Heatmap (Same Protein-Ligand Pair)", fontsize=14, fontweight="bold")
+        ax.set_title(
+            "Cross-Engine Affinity Heatmap (Same Protein-Ligand Pair)\ndescriptive_not_comparable_across_engines",
+            fontsize=13,
+            fontweight="bold",
+        )
         ax.set_xlabel("Docking Engine")
         ax.set_ylabel("Protein | Ligand")
         plt.setp(ax.get_yticklabels(), fontsize=8)
@@ -4051,7 +4093,11 @@ class MultiEngineAnalysisPipeline:
             jitter=0.18,
             ax=ax,
         )
-        ax.set_title("Cross-Engine Affinity Distribution on Matched Pairs", fontsize=14, fontweight="bold")
+        ax.set_title(
+            "Cross-Engine Affinity Distribution on Matched Pairs\ndescriptive_not_comparable_across_engines",
+            fontsize=13,
+            fontweight="bold",
+        )
         ax.set_xlabel("Docking Engine")
         ax.set_ylabel("Best-Pose Affinity (kcal/mol; positive = unfavorable)")
         ax.axhline(-7.0, color="red", linestyle="--", alpha=0.45)
@@ -4087,7 +4133,9 @@ class MultiEngineAnalysisPipeline:
     ) -> None:
         import matplotlib.pyplot as plt
 
-        disagreement = wide.sort_values(["affinity_spread", "best_affinity"], ascending=[False, True]).head(min(30, len(wide))).copy()
+        disagreement = wide.sort_values(
+            ["descriptive_affinity_spread_kcal_mol", "descriptive_best_affinity_kcal_mol"], ascending=[False, True]
+        ).head(min(30, len(wide))).copy()
         if disagreement.empty:
             self._save_cross_engine_placeholder(
                 output_file,
@@ -4096,14 +4144,18 @@ class MultiEngineAnalysisPipeline:
             )
             return
 
-        colors = [engine_palette.get(str(value), "#999999") for value in disagreement["best_engine"].tolist()]
+        colors = [engine_palette.get(str(value), "#999999") for value in disagreement["descriptive_lowest_raw_affinity_engine"].tolist()]
         fig_height = max(7, len(disagreement) * 0.34 + 1.5)
         fig, ax = plt.subplots(figsize=(12, fig_height))
-        ax.barh(disagreement["pair_label"], disagreement["affinity_spread"], color=colors, edgecolor="black")
+        ax.barh(disagreement["pair_label"], disagreement["descriptive_affinity_spread_kcal_mol"], color=colors, edgecolor="black")
         ax.invert_yaxis()
         ax.set_xlabel("Worst-to-Best Affinity Spread (kcal/mol)")
         ax.set_ylabel("Protein | Ligand")
-        ax.set_title("Largest Cross-Engine Disagreements (Same Pair)", fontsize=14, fontweight="bold")
+        ax.set_title(
+            "Largest Cross-Engine Disagreements (Same Pair)\ndescriptive_not_comparable_across_engines",
+            fontsize=13,
+            fontweight="bold",
+        )
         plt.tight_layout()
         plt.savefig(output_file, dpi=300, bbox_inches="tight")
         plt.close(fig)
@@ -4121,7 +4173,7 @@ class MultiEngineAnalysisPipeline:
         count = 0
         for protein_label, protein_df in wide.groupby("protein_label", dropna=False):
             matrix = protein_df.copy()
-            matrix.sort_values(["best_affinity", "ligand_display_name"], inplace=True)
+            matrix.sort_values(["descriptive_best_affinity_kcal_mol", "ligand_display_name"], inplace=True)
             matrix = matrix.head(min(28, len(matrix)))
             if matrix.empty:
                 continue
@@ -4152,7 +4204,11 @@ class MultiEngineAnalysisPipeline:
             ax.axvline(0.0, color="darkorange", linestyle=":", alpha=0.65)
             ax.set_xlabel("Best-Pose Affinity (kcal/mol)")
             ax.set_ylabel("Ligand")
-            ax.set_title(f"Cross-Engine Comparison: {protein_label}", fontsize=14, fontweight="bold")
+            ax.set_title(
+                f"Cross-Engine Comparison: {protein_label}\ndescriptive_not_comparable_across_engines",
+                fontsize=13,
+                fontweight="bold",
+            )
             ax.legend(loc="best")
             plt.tight_layout()
             output_file = batch_dir / f"{count + 1:02d}_{self._slugify_plot_name(str(protein_label))}_cross_engine.png"
@@ -4250,28 +4306,29 @@ class MultiEngineAnalysisPipeline:
         if engine_best.empty:
             raise ValueError(f"No comparative scores were available for rerun engine '{target_engine}'")
 
-        promoted = engine_best.merge(
-            self._build_pair_competition(best_by_engine, target_engine),
-            how="left",
-            on="tag",
-        )
-        if self.winner_only:
-            promoted = promoted[promoted["is_target_engine_winner"] == True].copy()
-        if self.min_affinity_advantage > 0:
-            promoted = promoted[
-                promoted["affinity_advantage_kcal_mol"].fillna(float("-inf")) >= self.min_affinity_advantage
-            ].copy()
-        allowlist_tags = self._load_pair_allowlist_tags()
-        if allowlist_tags:
-            promoted = promoted[promoted["tag"].isin(allowlist_tags)].copy()
-
-        # Consensus-first gating before engine-specific promotion details are finalized.
+        # Spec 037 R4b: the v2 consensus decides the winner engine of each tag and the ranked tags.
         consensus_df = build_consensus_rankings(
             best_by_engine=best_by_engine,
             consensus_mode=self.consensus_mode,
             favorite_engine=target_engine,
             normalization_method=self.normalization_method,
         )
+        rank_keys = (
+            consensus_df[["tag", "consensus_rank_global"]].drop_duplicates("tag")
+            if not consensus_df.empty
+            else pd.DataFrame(columns=["tag", "consensus_rank_global"])
+        )
+        promoted = engine_best.merge(
+            self._build_pair_competition(best_by_engine, target_engine, consensus_df),
+            how="left",
+            on="tag",
+        ).merge(rank_keys, how="left", on="tag")
+        if self.winner_only:
+            promoted = promoted[promoted["is_target_engine_winner"] == True].copy()
+        allowlist_tags = self._load_pair_allowlist_tags()
+        if allowlist_tags:
+            promoted = promoted[promoted["tag"].isin(allowlist_tags)].copy()
+
         rescoring_df = select_rescoring_candidates(
             consensus_df=consensus_df,
             rescoring_scope=self.rescoring_scope,
@@ -4284,9 +4341,10 @@ class MultiEngineAnalysisPipeline:
         if promoted.empty:
             raise ValueError(f"No rerun candidates were selected for engine '{target_engine}'")
 
+        # Within the target engine only: its own affinity orders its rows, and the v2 rank breaks ties.
         promoted.sort_values(
-            ["protein", "affinity_kcal_mol", "affinity_advantage_kcal_mol", "tag"],
-            ascending=[True, True, False, True],
+            ["protein", "affinity_kcal_mol", "consensus_rank_global", "tag"],
+            ascending=[True, True, True, True],
             inplace=True,
         )
         promoted = (
@@ -4298,8 +4356,8 @@ class MultiEngineAnalysisPipeline:
             raise ValueError(f"No rerun candidates were selected for engine '{target_engine}'")
         if self.max_rerun_pairs:
             promoted.sort_values(
-                ["affinity_kcal_mol", "affinity_advantage_kcal_mol", "protein", "tag"],
-                ascending=[True, False, True, True],
+                ["affinity_kcal_mol", "consensus_rank_global", "protein", "tag"],
+                ascending=[True, True, True, True],
                 inplace=True,
             )
             promoted = promoted.head(self.max_rerun_pairs).copy()
@@ -4322,12 +4380,16 @@ class MultiEngineAnalysisPipeline:
                     "protein",
                     "affinity_kcal_mol",
                     "rank_within_protein",
+                    "consensus_rank_global",
                     "winner_engine",
-                    "winner_affinity_kcal_mol",
+                    "winner_basis",
+                    "target_engine_consensus_percentile",
                     "best_other_engine",
-                    "best_other_affinity_kcal_mol",
-                    "affinity_advantage_kcal_mol",
+                    "best_other_consensus_percentile",
                     "is_target_engine_winner",
+                    "descriptive_winner_affinity_kcal_mol",
+                    "descriptive_best_other_affinity_kcal_mol",
+                    "descriptive_affinity_difference_kcal_mol",
                 ]
             ],
             how="inner",
@@ -4362,6 +4424,13 @@ class MultiEngineAnalysisPipeline:
             "max_rerun_pairs": self.max_rerun_pairs,
             "pair_allowlist": self.pair_allowlist or "",
             "promotion_rule": self._promotion_rule_label(),
+            "winner_basis": "consensus_rank_geometry_qc_v2_per_engine_percentile",
+            "comparison_scope": DESCRIPTIVE_SCOPE,
+            "descriptive_not_comparable_across_engines": [
+                "descriptive_winner_affinity_kcal_mol",
+                "descriptive_best_other_affinity_kcal_mol",
+                "descriptive_affinity_difference_kcal_mol",
+            ],
             "consensus_mode": self.consensus_mode,
             "rescoring_scope": self.rescoring_scope,
             "rescoring_top_n": int(self.rescoring_top_n),
@@ -4375,34 +4444,80 @@ class MultiEngineAnalysisPipeline:
         return str(csv_path)
 
     @staticmethod
-    def _build_pair_competition(best_by_engine: pd.DataFrame, target_engine: str) -> pd.DataFrame:
+    def _build_pair_competition(
+        best_by_engine: pd.DataFrame,
+        target_engine: str,
+        consensus_df: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
+        """Per tag, the consensus winner and the target engine's standing (Spec 037 R4b).
+
+        The winner is the engine with the highest per-engine v2 rank percentile in the tag's complete case
+        (``winner_engine`` and ``engine_percentiles_json`` of ``consensus_df``). A tag without a complete case has no
+        winner (``winner_basis`` = ``consensus_incomplete_no_winner``); no raw affinity decides it. The raw affinity
+        columns are descriptive only, and their names say so.
+        """
+        columns = [
+            "tag",
+            "winner_engine",
+            "winner_basis",
+            "target_engine_consensus_percentile",
+            "best_other_engine",
+            "best_other_consensus_percentile",
+            "is_target_engine_winner",
+            "descriptive_winner_affinity_kcal_mol",
+            "descriptive_best_other_affinity_kcal_mol",
+            "descriptive_affinity_difference_kcal_mol",
+        ]
+        if best_by_engine is None or best_by_engine.empty:
+            return pd.DataFrame(columns=columns)
+        consensus_by_tag: Dict[str, pd.Series] = {}
+        if consensus_df is not None and not consensus_df.empty:
+            for _, row in consensus_df.drop_duplicates("tag").iterrows():
+                consensus_by_tag[str(row["tag"])] = row
         rows = []
         for tag, group in best_by_engine.groupby("tag", dropna=False):
-            ordered = group.sort_values(["affinity_kcal_mol", "engine"], ascending=[True, True]).reset_index(drop=True)
-            target_rows = ordered[ordered["engine"] == target_engine]
+            target_rows = group[group["engine"] == target_engine]
             if target_rows.empty:
                 continue
-            target_row = target_rows.iloc[0]
-            best_row = ordered.iloc[0]
-            other_rows = ordered[ordered["engine"] != target_engine]
-            best_other = other_rows.iloc[0] if not other_rows.empty else None
-            best_other_affinity = float(best_other["affinity_kcal_mol"]) if best_other is not None else None
-            target_affinity = float(target_row["affinity_kcal_mol"])
-            affinity_advantage = None
-            if best_other_affinity is not None:
-                affinity_advantage = best_other_affinity - target_affinity
+            raw_affinity = {
+                str(row["engine"]): float(row["affinity_kcal_mol"]) for _, row in group.iterrows()
+            }
+            consensus_row = consensus_by_tag.get(str(tag))
+            complete = consensus_row is not None and str(consensus_row.get("consensus_status", "")) in {
+                "completed",
+                "single_engine",
+            }
+            percentiles: Dict[str, float] = {}
+            winner = ""
+            if complete:
+                percentiles = {
+                    str(engine): float(value)
+                    for engine, value in json.loads(str(consensus_row.get("engine_percentiles_json") or "{}")).items()
+                }
+                winner = str(consensus_row.get("winner_engine") or "")
+            others = {engine: value for engine, value in percentiles.items() if engine != target_engine}
+            best_other = max(sorted(others), key=lambda engine: others[engine]) if others else ""
+            target_raw = raw_affinity.get(target_engine)
+            best_other_raw = raw_affinity.get(best_other) if best_other else None
             rows.append(
                 {
                     "tag": tag,
-                    "winner_engine": str(best_row["engine"]),
-                    "winner_affinity_kcal_mol": float(best_row["affinity_kcal_mol"]),
-                    "best_other_engine": str(best_other["engine"]) if best_other is not None else "",
-                    "best_other_affinity_kcal_mol": best_other_affinity,
-                    "affinity_advantage_kcal_mol": affinity_advantage,
-                    "is_target_engine_winner": bool(str(best_row["engine"]) == target_engine),
+                    "winner_engine": winner,
+                    "winner_basis": (
+                        "consensus_rank_geometry_qc_v2_per_engine_percentile" if complete else "consensus_incomplete_no_winner"
+                    ),
+                    "target_engine_consensus_percentile": percentiles.get(target_engine),
+                    "best_other_engine": best_other,
+                    "best_other_consensus_percentile": others.get(best_other) if best_other else None,
+                    "is_target_engine_winner": bool(complete and winner == target_engine),
+                    "descriptive_winner_affinity_kcal_mol": raw_affinity.get(winner) if winner else None,
+                    "descriptive_best_other_affinity_kcal_mol": best_other_raw,
+                    "descriptive_affinity_difference_kcal_mol": (
+                        best_other_raw - target_raw if best_other_raw is not None and target_raw is not None else None
+                    ),
                 }
             )
-        return pd.DataFrame(rows)
+        return pd.DataFrame(rows, columns=columns)
 
     def _load_pair_allowlist_tags(self) -> Set[str]:
         if not self.pair_allowlist:
@@ -4443,8 +4558,6 @@ class MultiEngineAnalysisPipeline:
         ]
         if self.winner_only:
             labels.append("winner_only")
-        if self.min_affinity_advantage > 0:
-            labels.append(f"min_affinity_advantage={self.min_affinity_advantage:g}")
         if self.max_rerun_pairs > 0:
             labels.append(f"max_rerun_pairs={self.max_rerun_pairs}")
         if self.pair_allowlist:
@@ -4455,9 +4568,9 @@ class MultiEngineAnalysisPipeline:
     def _promotion_reason(row: pd.Series) -> str:
         reasons = [f"rank_within_protein={int(row['rank_within_protein'])}"]
         if bool(row.get("is_target_engine_winner", False)):
-            reasons.append("target_engine_won_pair")
-        if pd.notna(row.get("affinity_advantage_kcal_mol")):
-            reasons.append(f"advantage={float(row['affinity_advantage_kcal_mol']):.3f}")
+            reasons.append("target_engine_won_pair_consensus_v2")
+        if pd.notna(row.get("descriptive_affinity_difference_kcal_mol")):
+            reasons.append(f"descriptive_affinity_difference={float(row['descriptive_affinity_difference_kcal_mol']):.3f}")
         return ";".join(reasons)
 
     def _write_single_engine_reports(self, scores: pd.DataFrame, engine: str, output_dir: Path) -> None:
@@ -5307,17 +5420,19 @@ class MultiEngineAnalysisPipeline:
         full_data["cnn_score"] = pd.to_numeric(full_data["cnn_score"], errors="coerce")
 
         best_poses = self._best_by_tag(full_data)
+        # Spec 037 R4b: descriptive aggregates over all engines of a complex. Not used for ordering.
         summary_stats = (
             full_data.groupby(["complex_name", "protein", "ligand", "site_id"])
             .agg(
-                vina_affinity_min=("vina_affinity", "min"),
-                vina_affinity_max=("vina_affinity", "max"),
-                vina_affinity_mean=("vina_affinity", "mean"),
-                vina_affinity_std=("vina_affinity", "std"),
+                descriptive_vina_affinity_min=("vina_affinity", "min"),
+                descriptive_vina_affinity_max=("vina_affinity", "max"),
+                descriptive_vina_affinity_mean=("vina_affinity", "mean"),
+                descriptive_vina_affinity_std=("vina_affinity", "std"),
                 pose_count=("pose", "count"),
             )
             .reset_index()
         )
+        summary_stats["comparison_scope"] = DESCRIPTIVE_SCOPE
         # Spec 037 R3b: every ordering below follows the consensus rank. Rows without a rank are not ranked.
         needed = [*RANK_COLUMNS, "ranking_method"]
         ranked = best_poses.reindex(columns=list(best_poses.columns) + [c for c in needed if c not in best_poses.columns])
@@ -5338,7 +5453,7 @@ class MultiEngineAnalysisPipeline:
         protein_summary = (
             ranked.groupby("protein")
             .agg(
-                mean_affinity=("vina_affinity", "mean"),
+                descriptive_mean_affinity_kcal_mol=("vina_affinity", "mean"),
                 ligand_count=("ligand", "nunique"),
                 complex_count=("complex_name", "nunique"),
                 top_consensus_rank_global=("consensus_rank_global", "min"),
@@ -5347,11 +5462,12 @@ class MultiEngineAnalysisPipeline:
             .reset_index()
         )
         protein_summary.insert(1, "best_affinity", protein_summary["protein"].map(protein_top))
+        protein_summary["comparison_scope"] = DESCRIPTIVE_SCOPE
         protein_summary = protein_summary.sort_values(["top_consensus_rank_global", "protein"]).reset_index(drop=True)
         ligand_summary = (
             ranked.groupby("ligand")
             .agg(
-                mean_affinity=("vina_affinity", "mean"),
+                descriptive_mean_affinity_kcal_mol=("vina_affinity", "mean"),
                 protein_count=("protein", "nunique"),
                 complex_count=("complex_name", "nunique"),
                 top_consensus_rank_global=("consensus_rank_global", "min"),
@@ -5360,6 +5476,7 @@ class MultiEngineAnalysisPipeline:
             .reset_index()
         )
         ligand_summary.insert(1, "best_affinity", ligand_summary["ligand"].map(ligand_top))
+        ligand_summary["comparison_scope"] = DESCRIPTIVE_SCOPE
         ligand_summary = ligand_summary.sort_values(["top_consensus_rank_global", "ligand"]).reset_index(drop=True)
         return {
             "full_data": full_data,

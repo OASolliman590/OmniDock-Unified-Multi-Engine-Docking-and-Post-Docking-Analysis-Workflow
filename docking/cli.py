@@ -216,6 +216,68 @@ def _build_runtime_by_engine_map(
     }
 
 
+def _print_effective_parameters(parameter_schema) -> None:
+    """Spec 037 R4c: the effective values and sources that the deployment bundle records."""
+    common = parameter_schema.common
+    print(
+        f"   Parameters ({parameter_schema.mode}/{parameter_schema.preset}): exhaustiveness={common.exhaustiveness} "
+        f"(source: {common.exhaustiveness_source or 'unrecorded'}) num_modes={common.num_modes} "
+        f"(source: {common.num_modes_source or 'unrecorded'}) energy_range={common.energy_range:g} "
+        f"replicates={common.replicates} seed={common.seed}"
+    )
+
+
+def _apply_parameter_defaults(args: argparse.Namespace) -> Tuple[bool, bool]:
+    """Spec 036 R5c and 037 R3a: an explicit --exhaustiveness or --num-modes is kept distinct from the default.
+
+    Basic mode refuses an explicit value. Returns (exhaustiveness_explicit, num_modes_explicit).
+    """
+    exhaustiveness_explicit = args.exhaustiveness is not None
+    if not exhaustiveness_explicit:
+        args.exhaustiveness = EXHAUSTIVENESS_LEVEL
+    num_modes_explicit = args.num_modes is not None
+    if not num_modes_explicit:
+        args.num_modes = DEFAULT_NUM_MODES
+    return exhaustiveness_explicit, num_modes_explicit
+
+
+def _resolve_run_parameters(
+    args: argparse.Namespace,
+    *,
+    engines: List[str],
+    runtime_by_engine: Dict[str, Dict[str, object]],
+    exhaustiveness_explicit: bool,
+    num_modes_explicit: bool,
+):
+    """The one docking parameter schema of a dock run and of a dock deploy (Spec 036 R5, 037 R3a, 037 R4c).
+
+    Returns ``(schema, runtime_by_engine with the schema applied, errors, warnings)``. The caller prints the
+    errors and stops. Required seed, replicates, energy_range, basic-mode refusals and the recorded sources are
+    all decided here, so ``dock deploy`` cannot drift from ``dock run``.
+    """
+    parameter_schema = resolve_parameter_schema(
+        mode=args.parameter_mode,
+        preset=args.parameter_preset,
+        exhaustiveness=args.exhaustiveness,
+        num_modes=args.num_modes,
+        seed=args.seed,
+        box_scale=args.box_scale,
+        box_padding=args.box_padding,
+        runtime_by_engine=runtime_by_engine,
+        energy_range=float(args.energy_range),
+        replicates=int(args.replicates),
+        num_modes_explicit=num_modes_explicit,
+        exhaustiveness_explicit=exhaustiveness_explicit,
+    )
+    schema_errors, schema_warnings = validate_parameter_schema(parameter_schema, engines)
+    return (
+        parameter_schema,
+        apply_schema_to_runtime(parameter_schema, runtime_by_engine),
+        schema_errors,
+        schema_warnings,
+    )
+
+
 def _deployment_manifest_path(project_dir: Path, round_id: str, mode: str) -> Path:
     return deployment_root(project_dir) / round_id / mode / "deployment_manifest.json"
 
@@ -624,14 +686,7 @@ def dock_main(argv=None) -> int:
     if args.seed is None:
         print("❌ `--seed` is required for every dock run (Spec 036 R5b). Replicates use seed, seed+1, ...")
         return 1
-    # Spec 037 R3a: an explicit --exhaustiveness is kept distinct from the default, so basic mode can refuse it.
-    exhaustiveness_explicit = args.exhaustiveness is not None
-    if not exhaustiveness_explicit:
-        args.exhaustiveness = EXHAUSTIVENESS_LEVEL
-    # Spec 036: keep an explicit --num-modes distinct from the default, so basic mode can refuse it.
-    num_modes_explicit = args.num_modes is not None
-    if not num_modes_explicit:
-        args.num_modes = DEFAULT_NUM_MODES
+    exhaustiveness_explicit, num_modes_explicit = _apply_parameter_defaults(args)
     runtime_by_engine = _build_runtime_by_engine(args, docking_mode="screen", round_id=round_id)
 
     env_config = ExecutionEnvironmentConfig(
@@ -652,21 +707,13 @@ def dock_main(argv=None) -> int:
         return 1
     runtime_by_engine = apply_environment_runtime(engines, runtime_by_engine, env_config)
 
-    parameter_schema = resolve_parameter_schema(
-        mode=args.parameter_mode,
-        preset=args.parameter_preset,
-        exhaustiveness=args.exhaustiveness,
-        num_modes=args.num_modes,
-        seed=args.seed,
-        box_scale=args.box_scale,
-        box_padding=args.box_padding,
+    parameter_schema, runtime_by_engine, schema_errors, schema_warnings = _resolve_run_parameters(
+        args,
+        engines=engines,
         runtime_by_engine=runtime_by_engine,
-        energy_range=float(args.energy_range),
-        replicates=int(args.replicates),
-        num_modes_explicit=num_modes_explicit,
         exhaustiveness_explicit=exhaustiveness_explicit,
+        num_modes_explicit=num_modes_explicit,
     )
-    schema_errors, schema_warnings = validate_parameter_schema(parameter_schema, engines)
     for warning in schema_warnings:
         print(f"⚠️  {warning}")
     if schema_errors:
@@ -674,7 +721,6 @@ def dock_main(argv=None) -> int:
         for issue in schema_errors:
             print(f"   - {issue}")
         return 1
-    runtime_by_engine = apply_schema_to_runtime(parameter_schema, runtime_by_engine)
     transformed_rows = transform_pairlist_rows(rows, parameter_schema)
     box_messages = _dock_box_messages(rows, transformed_rows)
     for message in box_messages:
@@ -828,8 +874,28 @@ def deploy_main(argv=None) -> int:
     parser.add_argument("--autodocktools-python", help="Python executable used to run AutoDockTools prepare_gpf4.py/prepare_dpf4.py")
     parser.add_argument("--autodocktools-prepare-gpf4", help="Path to AutoDockTools prepare_gpf4.py script")
     parser.add_argument("--autodocktools-prepare-dpf4", help="Path to AutoDockTools prepare_dpf4.py script")
-    parser.add_argument("--exhaustiveness", type=int, default=EXHAUSTIVENESS_LEVEL, help="Exhaustiveness (Spec 036 R5c default 32)")
-    parser.add_argument("--num-modes", type=int, default=20, help="Shared num_modes default")
+    # Spec 037 R4c: the same parameter schema as dock run. Advanced mode only for an explicit --exhaustiveness or --num-modes.
+    parser.add_argument(
+        "--exhaustiveness",
+        type=int,
+        default=None,
+        help="Advanced mode only; basic mode refuses it (default 32 in advanced mode)",
+    )
+    parser.add_argument("--num-modes", type=int, default=None, help="Advanced mode only; basic mode refuses it")
+    parser.add_argument(
+        "--parameter-mode",
+        choices=["basic", "advanced"],
+        default="basic",
+        help="Parameter profile mode (same as dock run)",
+    )
+    parser.add_argument(
+        "--parameter-preset",
+        choices=["screening_fast", "balanced", "exhaustive"],
+        default=DEFAULT_PARAMETER_PRESET,
+        help="Basic-mode preset for shared docking parameters (default exhaustive: exhaustiveness 32, num_modes 40)",
+    )
+    parser.add_argument("--box-scale", type=float, default=1.0, help="Scale factor applied to pairlist box sizes")
+    parser.add_argument("--box-padding", type=float, default=0.0, help="Padding added to each side of docking box sizes (Angstrom)")
     parser.add_argument("--seed", type=int, help="Base seed (REQUIRED, Spec 036 R5b); replicates use seed+k")
     parser.add_argument("--replicates", type=int, default=DEFAULT_REPLICATES, help="Seeded replicates per pair (default 3)")
     parser.add_argument("--energy-range", type=float, default=DEFAULT_ENERGY_RANGE, help="Vina/Smina --energy_range (kcal/mol)")
@@ -958,12 +1024,27 @@ def deploy_main(argv=None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    if args.seed is None:
-        parser.error("`--seed` is required for every deployed docking run (Spec 036 R5b).")
+    # Spec 037 R4c: the same parameter rules as dock run (required seed, replicates, energy_range, basic-mode refusals).
+    exhaustiveness_explicit, num_modes_explicit = _apply_parameter_defaults(args)
     runtime_by_engine = merge_runtime_with_profile(
         _build_runtime_by_engine(args, docking_mode=args.mode, round_id=round_id),
         hpc_profile,
     )
+    parameter_schema, runtime_by_engine, schema_errors, schema_warnings = _resolve_run_parameters(
+        args,
+        engines=engines,
+        runtime_by_engine=runtime_by_engine,
+        exhaustiveness_explicit=exhaustiveness_explicit,
+        num_modes_explicit=num_modes_explicit,
+    )
+    for warning in schema_warnings:
+        print(f"⚠️  {warning}")
+    if schema_errors:
+        print("❌ Docking parameter schema is invalid:")
+        for issue in schema_errors:
+            print(f"   - {issue}")
+        return 1
+    rows = transform_pairlist_rows(rows, parameter_schema)
     slurm_options = {
         "time": args.slurm_time,
         "mem": args.slurm_mem,
@@ -1006,6 +1087,7 @@ def deploy_main(argv=None) -> int:
                 pair_source_sha256=pair_source_sha256,
                 pair_source_kind=pair_source_kind,
                 rerun_manifest_file=str(rerun_manifest_file) if rerun_manifest_file else "",
+                parameter_schema=parameter_schema.to_dict(),
             )
         except ValueError as exc:
             print(f"❌ {exc}")
@@ -1024,6 +1106,7 @@ def deploy_main(argv=None) -> int:
         save_manifest(project_dir, manifest)
 
         print("✅ HTCondor deployment assets generated")
+        _print_effective_parameters(parameter_schema)
         print(f"   Stage root: {summary.get('generation_stage_root', summary['stage_root'])}")
         if args.remote_project_dir:
             print(f"   Execution project root: {args.remote_project_dir}")
@@ -1063,6 +1146,7 @@ def deploy_main(argv=None) -> int:
             pair_source_sha256=pair_source_sha256,
             pair_source_kind=pair_source_kind,
             rerun_manifest_file=str(rerun_manifest_file) if rerun_manifest_file else "",
+            parameter_schema=parameter_schema.to_dict(),
         )
     except ValueError as exc:
         print(f"❌ {exc}")
@@ -1081,6 +1165,7 @@ def deploy_main(argv=None) -> int:
     save_manifest(project_dir, manifest)
 
     print("✅ Slurm deployment assets generated")
+    _print_effective_parameters(parameter_schema)
     print(f"   Stage root: {summary.get('generation_stage_root', summary['stage_root'])}")
     if args.remote_project_dir:
         print(f"   Execution project root: {args.remote_project_dir}")

@@ -2699,9 +2699,9 @@ def _run_analysis_stage(questionary, project_root: Path) -> None:
     hit_class_policy = "target_percentile"
     hit_class_strong_percentile = 0.10
     hit_class_moderate_percentile = 0.35
-    top_pose_policy = str(manifest.get("top_pose_selection_policy", "best_affinity") or "best_affinity").strip().lower()
+    top_pose_policy = str(manifest.get("top_pose_selection_policy", "best_consensus") or "best_consensus").strip().lower()
     if top_pose_policy not in {"best_affinity", "best_consensus", "hybrid"}:
-        top_pose_policy = "best_affinity"
+        top_pose_policy = "best_consensus"
     top_pose_aggregation = str(manifest.get("top_pose_global_aggregation", "best_target") or "best_target").strip().lower()
     if top_pose_aggregation not in {"best_target"}:
         top_pose_aggregation = "best_target"
@@ -2799,9 +2799,9 @@ def _run_analysis_stage(questionary, project_root: Path) -> None:
                 questionary,
                 "Top-pose atlas selection policy",
                 [
-                    ("best_affinity", "Best affinity first (recommended)"),
+                    ("best_consensus", "Best consensus rank first (recommended; Spec 037 R4b)"),
                     ("hybrid", "Hybrid (consensus then affinity)"),
-                    ("best_consensus", "Best consensus first"),
+                    ("best_affinity", "Best affinity (one engine only; rejected across engines)"),
                 ],
                 default=top_pose_policy,
             )

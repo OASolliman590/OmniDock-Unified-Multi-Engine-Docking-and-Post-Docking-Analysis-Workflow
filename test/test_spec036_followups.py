@@ -109,7 +109,8 @@ def _pipeline(project_dir: Path, output_dir: Path) -> MultiEngineAnalysisPipelin
         hit_class_policy="target_percentile",
         hit_class_strong_percentile=0.10,
         hit_class_moderate_percentile=0.40,
-        top_pose_selection_policy="best_affinity",
+        # Spec 037 R4b: best_affinity compares raw affinities across engines and is rejected for two engines.
+        top_pose_selection_policy="best_consensus",
         top_pose_global_aggregation="best_target",
     )
 

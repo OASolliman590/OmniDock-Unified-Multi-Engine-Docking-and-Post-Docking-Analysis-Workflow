@@ -256,7 +256,7 @@ Examples:
     workflow_jump.add_argument("--rerun-engine", help="Engine to promote into exhaustive reruns")
     workflow_jump.add_argument("--top-per-protein", type=int, default=1, help="Number of best ligands per protein to promote into the rerun manifest")
     workflow_jump.add_argument("--winner-only", action="store_true", help="Only promote pairs where the target engine wins against the other engines")
-    workflow_jump.add_argument("--min-affinity-advantage", type=float, default=0.0, help="Require the target engine to beat the best competing engine by at least this many kcal/mol")
+    workflow_jump.add_argument("--min-affinity-advantage", type=float, default=0.0, help="Removed by Spec 037 R4b (raw cross-engine gate). Must stay 0; promotion uses the consensus v2 winner")
     workflow_jump.add_argument("--max-rerun-pairs", type=int, default=0, help="Optional global cap on promoted exhaustive rerun pairs")
     workflow_protonation = workflow_sub.add_parser(
         "protonation-policy",
@@ -432,6 +432,12 @@ Examples:
         command.add_argument("--autodocktools-prepare-ligand4", help="Optional path to prepare_ligand4.py")
         command.add_argument("--autodocktools-prepare-receptor4", help="Optional path to prepare_receptor4.py")
         command.add_argument("--autodocktools-python", help="Optional python executable for prepare_ligand4.py")
+        # Spec 037 R4a: by default an entity whose existing output and provenance match is reused.
+        command.add_argument(
+            "--force",
+            action="store_true",
+            help="Prepare every entity again instead of reusing outputs whose provenance matches (Spec 037 R4a)",
+        )
 
     prep = subparsers.add_parser("prep", help="Docking project preparation")
     prep_sub = prep.add_subparsers(dest="prep_command")
@@ -586,7 +592,7 @@ Examples:
     analyze_comparative.add_argument("--rerun-engine", help="Engine to promote into exhaustive reruns")
     analyze_comparative.add_argument("--top-per-protein", type=int, default=1, help="Number of best ligands per protein to promote into the rerun manifest")
     analyze_comparative.add_argument("--winner-only", action="store_true", help="Only promote pairs where the target engine wins against the other engines")
-    analyze_comparative.add_argument("--min-affinity-advantage", type=float, default=0.0, help="Require the target engine to beat the best competing engine by at least this many kcal/mol")
+    analyze_comparative.add_argument("--min-affinity-advantage", type=float, default=0.0, help="Removed by Spec 037 R4b (raw cross-engine gate). Must stay 0; promotion uses the consensus v2 winner")
     analyze_comparative.add_argument("--max-rerun-pairs", type=int, default=0, help="Optional global cap on promoted exhaustive rerun pairs")
     analyze_comparative.add_argument("--pair-allowlist", help="Optional TXT/CSV file restricting promotion to explicit pair tags or receptor/site_id/ligand rows")
     analyze_comparative.add_argument(
@@ -637,7 +643,7 @@ Examples:
     analyze_comparative.add_argument(
         "--top-pose-policy",
         choices=["hybrid", "best_affinity", "best_consensus"],
-        default="best_affinity",
+        default="best_consensus",
         help="Top-pose atlas selection policy",
     )
     analyze_comparative.add_argument(
@@ -749,7 +755,7 @@ Examples:
     analyze_favorite.add_argument(
         "--top-pose-policy",
         choices=["hybrid", "best_affinity", "best_consensus"],
-        default="best_affinity",
+        default="best_consensus",
         help="Top-pose atlas selection policy",
     )
     analyze_favorite.add_argument(
@@ -937,8 +943,16 @@ def _add_deploy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--autodock4-ga-run", type=int)
     parser.add_argument("--autodock4-ls-search-freq", type=float)
     parser.add_argument("--autodock4-torsdof", type=int)
-    parser.add_argument("--exhaustiveness", type=int, default=32)
-    parser.add_argument("--num-modes", type=int, default=20)
+    # Spec 037 R4c: the same parameter options and defaults as dock run. None = not given (basic mode refuses an explicit value).
+    parser.add_argument("--exhaustiveness", type=int, default=None, help="Advanced mode only; basic mode refuses it")
+    parser.add_argument("--num-modes", type=int, default=None, help="Advanced mode only; basic mode refuses it")
+    parser.add_argument("--parameter-mode", choices=["basic", "advanced"], default="basic")
+    parser.add_argument("--parameter-preset", choices=["screening_fast", "balanced", "exhaustive"], default="exhaustive")
+    parser.add_argument("--seed", type=int, help="Base seed (required for every deployed docking run)")
+    parser.add_argument("--replicates", type=int, default=None, help="Seeded replicates per pair (default 3)")
+    parser.add_argument("--energy-range", type=float, default=None, help="Vina/Smina energy_range in kcal/mol (default 3)")
+    parser.add_argument("--box-scale", type=float, default=None, help="Scale factor applied to pairlist box sizes (default 1)")
+    parser.add_argument("--box-padding", type=float, default=None, help="Padding per box side in A (default 0)")
     parser.add_argument("--slurm-time")
     parser.add_argument("--slurm-mem")
     parser.add_argument("--slurm-cpus-per-task", type=int)
@@ -1145,6 +1159,14 @@ def _build_deploy_argv(args: argparse.Namespace) -> List[str]:
     ]:
         if getattr(args, flag[2:].replace("-", "_")):
             argv.append(flag)
+    # Spec 037 R4c: the parameter options that dock run forwards are forwarded here too (seed was missing).
+    for flag in [
+        "--parameter-mode",
+        "--parameter-preset",
+    ]:
+        value = getattr(args, flag[2:].replace("-", "_"))
+        if value:
+            argv.extend([flag, str(value)])
     for flag in [
         "--gnina-cpu",
         "--vina-cpu",
@@ -1158,6 +1180,11 @@ def _build_deploy_argv(args: argparse.Namespace) -> List[str]:
         "--autodock4-torsdof",
         "--exhaustiveness",
         "--num-modes",
+        "--seed",
+        "--replicates",
+        "--energy-range",
+        "--box-scale",
+        "--box-padding",
         "--slurm-cpus-per-task",
         "--slurm-gpus",
         "--slurm-array-parallelism",
@@ -1462,7 +1489,7 @@ def _run_analysis_dispatch(args: argparse.Namespace, target: str) -> int:
             hit_class_policy=str(getattr(args, "hit_class_policy", "target_percentile") or "target_percentile"),
             hit_class_strong_percentile=float(getattr(args, "hit_class_strong_percentile", 0.10) or 0.10),
             hit_class_moderate_percentile=float(getattr(args, "hit_class_moderate_percentile", 0.35) or 0.35),
-            top_pose_selection_policy=str(getattr(args, "top_pose_policy", "best_affinity") or "best_affinity"),
+            top_pose_selection_policy=str(getattr(args, "top_pose_policy", "best_consensus") or "best_consensus"),
             top_pose_global_aggregation=str(getattr(args, "top_pose_aggregation", "best_target") or "best_target"),
             best_pose_selection_metric=str(getattr(args, "best_pose_selection_metric", "auto") or "auto"),
         )
@@ -1520,7 +1547,7 @@ def _run_analysis_dispatch(args: argparse.Namespace, target: str) -> int:
             hit_class_policy=str(getattr(args, "hit_class_policy", "target_percentile") or "target_percentile"),
             hit_class_strong_percentile=float(getattr(args, "hit_class_strong_percentile", 0.10) or 0.10),
             hit_class_moderate_percentile=float(getattr(args, "hit_class_moderate_percentile", 0.35) or 0.35),
-            top_pose_selection_policy=str(getattr(args, "top_pose_policy", "best_affinity") or "best_affinity"),
+            top_pose_selection_policy=str(getattr(args, "top_pose_policy", "best_consensus") or "best_consensus"),
             top_pose_global_aggregation=str(getattr(args, "top_pose_aggregation", "best_target") or "best_target"),
             best_pose_selection_metric=str(getattr(args, "best_pose_selection_metric", "auto") or "auto"),
         )
@@ -1712,6 +1739,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 protonation_state_map=resolved["protonation_state_map"],
                 # Spec 037 R1: receptor and ligand overrides are read from this project.
                 project_dir=str(Path(args.project_dir).expanduser().resolve()) if getattr(args, "project_dir", None) else None,
+                force=bool(getattr(args, "force", False)),
             )
             return 0 if result.status == "completed" else 1
         parser.error("A pdb subcommand is required")

@@ -77,7 +77,7 @@ summary, so no DAG ordering is needed:
   - Single-engine writer `_write_single_engine_reports`: `best_poses.csv` (ordered by rank), `protein_summary.csv`,
     and `summary.txt` (method, the pose selection key and the native metric, the top-ranked complex).
   - Comparative consensus call: one engine uses `single_engine_native_v1`, two or more use v2.
-- **Not changed by R3b (remaining raw-affinity uses, for the Scientific Lead to decide):**
+- **Not changed by R3b (remaining raw-affinity uses; the three named ones were resolved by R4b, see the next section):**
   - `top_pose_selector.build_top_pose_atlas`, default `top_pose_selection_policy = best_affinity`. It sorts by
     `affinity_kcal_mol` first across engines (`top_pose_per_ligand_global.csv`). The `best_consensus` and `hybrid`
     policies keep the rank as the primary key. Changing the default is a policy decision.
@@ -93,6 +93,56 @@ summary, so no DAG ordering is needed:
 - **Single-engine GNINA label (Spec 037 R3c):** `summary.txt` names `cnn_score` as the pose selection key. The
   single-engine ligand ranking metric is `cnn_affinity`, which the v2 ranking already used. The two are reported on
   separate lines, and the choice between them is open for the Lead.
+
+## Spec 037 R4b: no raw cross-engine comparison
+
+Scope: the three decisions named in Spec 037 R4b, plus the cross-engine diagnostics that R4b asks to keep and label.
+Fixtures that make the raw minimum and the v2 consensus disagree are in `test/test_spec037_r4b_consensus.py`.
+
+| Decision | Before (HEAD `64aebd6`) | After | Fixture result (before -> after) |
+|---|---|---|---|
+| Top-pose selector default (`build_top_pose_atlas`, `top_pose_selection_policy`) | default `best_affinity`: the tag with the lowest raw affinity across engines | default `best_consensus`: the v2 consensus score, then `consensus_rank_global`, then the tag. Each ranked tag keeps its consensus winner engine's pose. `best_affinity` is accepted for one engine only and raises `ValueError` for two or more engines. Without a consensus table the rank is computed from the same rows. | fixture A: `p_s1_L` -> `p_s2_L` |
+| Rerun promotion (`_build_pair_competition`, `is_target_engine_winner`) | winner = lower raw affinity of the two engines | winner = the engine with the highest per-engine v2 rank percentile in the complete case (`winner_engine`, `engine_percentiles_json`). No complete case means no winner (`winner_basis = consensus_incomplete_no_winner`). The raw difference is kept as `descriptive_affinity_difference_kcal_mol`. `min_affinity_advantage > 0` is refused. | fixture B, target `vina`, tag `p_s1_L`: `True` -> `False` (winner `vina` -> `smina`) |
+| Rescoring tie-break (`select_rescoring_candidates`, also the explainability ordering) | `consensus_score`, then `best_affinity_kcal_mol` | `consensus_score`, then `consensus_rank_global`, then the tag. No raw affinity breaks a tie. | tie fixture, top-1 global: `P_raw` -> `P_rank` |
+
+Rules that the three decisions follow:
+
+- Raw affinities are compared only within one engine. The rerun promotion keeps the target engine's own affinity as the
+  first sort key inside that engine, and the v2 rank breaks ties.
+- An identity row (one pose per tag) is the pose of the tag's consensus winner engine. A tag without a complete v2 case
+  keeps every engine row and is never ordered by a raw affinity (the same rule as `_best_by_tag`).
+- `ligand_performance_summary` is ordered by `best_consensus_score`, not by an affinity.
+- The polypharmacology ligand and protein summaries order by `consensus_rank_global`. The column `consensus_rank`, which
+  those summaries used to sort on, never existed in the consensus table.
+
+### Labelled as `descriptive_not_comparable_across_engines`
+
+Each label is in the column name or in a `comparison_scope` column, and in the manifest or JSON that the output belongs to.
+
+| Output | Label |
+|---|---|
+| `top_pose_ligand_performance/ligand_performance_summary.csv`: `descriptive_best_affinity_kcal_mol` (renamed from `best_affinity_kcal_mol`) | column name |
+| `top_pose_selection_manifest.json`: `comparison_scope`, `descriptive_not_comparable_across_engines` | manifest |
+| `best_engine_per_complex.csv`, `engine_affinity_matrix.csv`, `cross_engine_pair_best_scores.csv` | `comparison_scope` column |
+| `engine_rank_correlation_per_protein.csv`, `engine_rank_correlation_global.csv` | `comparison_scope` column |
+| Cross-engine plots (pair heatmap, distribution, disagreement, per-protein batches) | title; `descriptive_best_affinity_kcal_mol`, `descriptive_affinity_spread_kcal_mol`, `descriptive_lowest_raw_affinity_engine` in the plotted table |
+| `exhaustive_rerun_manifest.csv` and `.json`: `descriptive_winner_affinity_kcal_mol`, `descriptive_best_other_affinity_kcal_mol`, `descriptive_affinity_difference_kcal_mol` (renamed from `winner_affinity_kcal_mol`, `best_other_affinity_kcal_mol`, `affinity_advantage_kcal_mol`) | column name and manifest |
+| `_build_downstream_results` `summary_stats` (`descriptive_vina_affinity_*`), `protein_summary` and `ligand_summary` (`descriptive_mean_affinity_kcal_mol`) | column name |
+| `consensus_explainability.json` (`descriptive_best_affinity_kcal_mol`) | JSON key and manifest key |
+| Polypharmacology summaries (`descriptive_best_affinity_kcal_mol`) and biology correlations of `best_affinity_kcal_mol` (`comparison_scope`) | column name |
+
+### Still raw-affinity, for the Scientific Lead to decide (not changed by R4b)
+
+- `consensus.classify_hits_target_aware`, reference-anchor policy: `delta_vs_reference` compares the raw minimum over
+  engines with a redocking reference affinity. This is an opt-in policy that needs a validated reference.
+- `consensus.classify_hits_target_aware` and `_apply_problematic_ligand_filters`: `fail_positive_affinity` is a sign
+  check (affinity greater than zero). It does not rank anything.
+- `simplified_pipeline_impl._best_pose_per_protein_ligand`: `idxmin` on `vina_affinity` runs only when the input has no
+  `consensus_rank_global`. It is a single-engine path; this needs confirming.
+- `hierarchical_analyzer.py` and `binding_affinity_analyzer.py` (`vina_affinity` idxmin, minimum): used by the
+  single-engine simplified pipeline, so the comparison is within one engine.
+- `correlation_analyzer.compute_cross_engine_rank_correlations` and `enhanced_rmsd_analyzer.py`: diagnostics. The rank
+  correlation output is labelled above.
 
 ## Spec 031 conflict (for the Scientific Lead)
 

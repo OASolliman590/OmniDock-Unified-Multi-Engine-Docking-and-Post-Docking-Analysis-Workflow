@@ -120,7 +120,7 @@ class ProjectManifest:
     latest_pair_round: str = ""
     deployment_root: str = ""
     latest_rerun_manifest_file: str = ""
-    top_pose_selection_policy: str = "best_affinity"
+    top_pose_selection_policy: str = "best_consensus"
     top_pose_global_aggregation: str = "best_target"
     hpc_profile: Dict[str, str] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)

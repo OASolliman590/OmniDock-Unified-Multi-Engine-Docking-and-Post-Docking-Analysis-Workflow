@@ -431,6 +431,24 @@ def _render_single_job_condor_script(
     return "\n".join(lines)
 
 
+EFFECTIVE_PARAMETER_KEYS = (
+    "exhaustiveness",
+    "exhaustiveness_source",
+    "num_modes",
+    "num_modes_source",
+    "energy_range",
+    "replicates",
+    "seed",
+    "parameter_mode",
+    "parameter_preset",
+)
+
+
+def effective_parameters(runtime: Dict[str, object]) -> Dict[str, object]:
+    """Spec 037 R4c: the effective values and their sources for one engine, as applied by the parameter schema."""
+    return {key: runtime.get(key) for key in EFFECTIVE_PARAMETER_KEYS}
+
+
 def generate_condor_deployment(
     project_root: Path,
     engines: List[str],
@@ -446,6 +464,7 @@ def generate_condor_deployment(
     pair_source_sha256: str = "",
     pair_source_kind: str = "",
     rerun_manifest_file: str = "",
+    parameter_schema: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     root = Path(project_root).expanduser().resolve()
     execution_root = Path(remote_project_root).expanduser() if remote_project_root else root
@@ -464,6 +483,11 @@ def generate_condor_deployment(
         "round_id": round_id,
         "docking_mode": docking_mode,
         "engines": engines,
+        # Spec 037 R4c: the parameter schema of this bundle and the effective values and sources of each engine.
+        "parameter_schema": dict(parameter_schema or {}),
+        "engine_effective_parameters": {
+            engine: effective_parameters(runtime_by_engine.get(engine, {})) for engine in engines
+        },
         "pair_count": len(pairlist_rows),
         "pair_source_file": _map_project_path(pair_source_file, root, execution_root) if pair_source_file else "",
         "pair_source_sha256": str(pair_source_sha256 or ""),
@@ -669,6 +693,7 @@ def generate_slurm_deployment(
     pair_source_sha256: str = "",
     pair_source_kind: str = "",
     rerun_manifest_file: str = "",
+    parameter_schema: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     root = Path(project_root).expanduser().resolve()
     execution_root = Path(remote_project_root).expanduser() if remote_project_root else root
@@ -687,6 +712,11 @@ def generate_slurm_deployment(
         "round_id": round_id,
         "docking_mode": docking_mode,
         "engines": engines,
+        # Spec 037 R4c: the parameter schema of this bundle and the effective values and sources of each engine.
+        "parameter_schema": dict(parameter_schema or {}),
+        "engine_effective_parameters": {
+            engine: effective_parameters(runtime_by_engine.get(engine, {})) for engine in engines
+        },
         "pair_count": len(pairlist_rows),
         "pair_source_file": _map_project_path(pair_source_file, root, execution_root) if pair_source_file else "",
         "pair_source_sha256": str(pair_source_sha256 or ""),

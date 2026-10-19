@@ -1167,7 +1167,7 @@ def bootstrap_project_layout(
         latest_pair_round=existing.get("latest_pair_round", ""),
         deployment_root=str(existing.get("deployment_root", "") or deployment_root(project_root, profile)),
         latest_rerun_manifest_file=existing.get("latest_rerun_manifest_file", ""),
-        top_pose_selection_policy=str(existing.get("top_pose_selection_policy", "best_affinity") or "best_affinity"),
+        top_pose_selection_policy=str(existing.get("top_pose_selection_policy", "best_consensus") or "best_consensus"),
         top_pose_global_aggregation=str(existing.get("top_pose_global_aggregation", "best_target") or "best_target"),
         hpc_profile=dict(existing.get("hpc_profile", {})),
         notes=merged_notes,

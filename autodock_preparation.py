@@ -61,6 +61,8 @@ class PreparationConfig:
     autodocktools_python: str = ""
     # Spec 037 R1: the project whose layered protonation policy (receptor and ligand overrides) applies.
     project_dir: str = ""
+    # Spec 037 R4a: prepare every entity again, even when its existing output is reusable.
+    force: bool = False
 
 class AutoDockPreparationPipeline:
     """
@@ -276,6 +278,7 @@ class AutoDockPreparationPipeline:
                 "protonation_policy": self.config.protonation_policy,
                 "protonation_state_map": self.config.protonation_state_map or "",
                 "project_dir": self.config.project_dir or "",
+                "force": bool(self.config.force),
                 "allow_bad_res": self.config.allow_bad_res,
                 "default_altloc": self.config.default_altloc,
                 "receptor_use_pdb2pqr": bool(self.config.receptor_use_pdb2pqr),
@@ -649,6 +652,7 @@ def main():
         ),
     )
     parser.add_argument("--selected-engines", default="", help="Comma-separated engines for engine-aware profile")
+    parser.add_argument("--force", action="store_true", help="Prepare every entity again; do not reuse existing outputs (Spec 037 R4a)")
     parser.add_argument("--create-config", action="store_true", help="Create configuration file and exit")
     
     args = parser.parse_args()
@@ -680,6 +684,7 @@ def main():
         ligand_preparation_profile=normalize_ligand_preparation_profile(args.ligand_profile),
         ligand_preparation_backend=normalize_ligand_preparation_profile(args.ligand_profile),
         selected_engines=[token.strip().lower() for token in str(args.selected_engines or "").split(",") if token.strip()],
+        force=bool(args.force),
     )
     
     # Initialize pipeline

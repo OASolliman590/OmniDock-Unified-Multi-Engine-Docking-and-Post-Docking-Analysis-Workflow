@@ -44,6 +44,7 @@ DEFAULT_CONFIG='{
     "ph_source": null,
     "protonation_policy": "ph_model",
     "protonation_state_map": "",
+    "force": false,
     "allow_bad_res": false,
     "default_altloc": "A",
     "receptor_use_pdb2pqr": true,
@@ -81,6 +82,8 @@ log_info() {
 # ── Reporting Helpers ──────────────────────────────────────────────────────
 LIGAND_FAILURE_REPORT=""
 LIGAND_SKIPPED_REPORT=""
+# Status of the last ligand preparation: prepared or reused_unchanged (Spec 037 R4a).
+LAST_LIGAND_PREP_STATUS=""
 RECEPTOR_FAILURE_REPORT=""
 RECEPTOR_SKIPPED_REPORT=""
 
@@ -547,15 +550,24 @@ prepare_ligand_to_pdbqt() {
         state_map_args=(--protonation-state-map "$state_map")
     fi
 
+    # Spec 037 R4a: the module decides whether an existing output is reused; it reports its status on stdout.
+    local force_args=()
+    if [[ "$(jq -r '.preparation.force // false' "$CONFIG_FILE")" == "true" ]]; then
+        force_args=(--force)
+    fi
+    LAST_LIGAND_PREP_STATUS="prepared"
     if command -v python3 >/dev/null 2>&1; then
-        if PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+        local ligand_result_json=""
+        if ligand_result_json=$(PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
             python3 -m docking.preparation.ligand_preparation \
                 --input "$input_file" \
                 --output "$output_file" \
                 --backend-profile "$profile" \
                 --protonation-policy "$protonation_policy" \
                 ${state_map_args[@]+"${state_map_args[@]}"} \
-                --engines "$selected_engines" >/dev/null 2>&1; then
+                --engines "$selected_engines" \
+                ${force_args[@]+"${force_args[@]}"} 2>/dev/null); then
+            LAST_LIGAND_PREP_STATUS=$(printf '%s' "$ligand_result_json" | jq -r '.preparation_status // "prepared"' 2>/dev/null || echo "prepared")
             return 0
         fi
         if [[ "$profile" != "engine_aware_full" ]]; then
@@ -764,18 +776,16 @@ prepare_ligands() {
             started_epoch=$(date +%s)
             log_info "[$processed_files/$total_files] Preparing ligand: $(basename "$mol_file")"
             
-            # Skip if already exists and valid
-            if [[ -f "$output_file" ]] && validate_file "$output_file"; then
-                log_info "Skipping existing valid ligand output: $(basename "$output_file")"
-                append_report_row "$LIGAND_SKIPPED_REPORT" "ligand" "$mol_file" "skipped" "already_prepared" "$output_file"
-                continue
-            fi
-            
             if prepare_ligand_to_pdbqt "$mol_file" "$output_file"; then
                 if validate_ligand_pdbqt "$output_file"; then
                     local elapsed
                     elapsed=$(( $(date +%s) - started_epoch ))
-                    log_success "Prepared ligand: $base_name (${elapsed}s)"
+                    if [[ "$LAST_LIGAND_PREP_STATUS" == "reused_unchanged" ]]; then
+                        log_info "Reused unchanged ligand (provenance matches): $base_name"
+                        append_report_row "$LIGAND_SKIPPED_REPORT" "ligand" "$mol_file" "skipped" "reused_unchanged" "$output_file"
+                    else
+                        log_success "Prepared ligand: $base_name (${elapsed}s)"
+                    fi
                 else
                     log_error "Invalid output file: $output_file"
                     append_report_row "$LIGAND_FAILURE_REPORT" "ligand" "$mol_file" "failed" "invalid_pdbqt_output" "$output_file"
@@ -866,15 +876,17 @@ prepare_receptors() {
 
             # Spec 033 R2b: the strict Python receptor module is the only receptor backend.
             # The output is always regenerated, and a stale PDBQT must not survive a failed run.
-            rm -f "$pdbqt_file"
+            # Spec 037 R4a: the module removes a stale output itself, or reuses it when its provenance matches.
             local result_json=""
             local prepared_ok="false"
+            local receptor_status="completed"
             local reason=""
             local details=""
             if result_json=$(PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
                     "${PDBWIZARD_PYTHON:-python3}" -m docking.preparation.receptor_preparation \
                         "$pdb_file" "$pdbqt_file" "$CONFIG_FILE" 2>> "${LOG_FILE:-/dev/null}"); then
                 prepared_ok="true"
+                receptor_status=$(printf '%s' "$result_json" | jq -r '.status // "completed"' 2>/dev/null || echo "completed")
             else
                 reason=$(printf '%s' "$result_json" | jq -r '.reason // empty' 2>/dev/null || true)
                 details=$(printf '%s' "$result_json" | jq -r '.details // empty' 2>/dev/null || true)
@@ -889,7 +901,12 @@ prepare_receptors() {
                     local elapsed hd_count
                     elapsed=$(( $(date +%s) - started_epoch ))
                     hd_count=$(printf '%s' "$result_json" | jq -r '.hd_count // 0' 2>/dev/null || echo 0)
-                    log_success "Prepared receptor: $base_name (${elapsed}s, polar H atoms: ${hd_count})"
+                    if [[ "$receptor_status" == "reused_unchanged" ]]; then
+                        log_info "Reused unchanged receptor (provenance matches): $base_name"
+                        append_report_row "$RECEPTOR_SKIPPED_REPORT" "receptor" "$pdb_file" "skipped" "reused_unchanged" "$pdbqt_file"
+                    else
+                        log_success "Prepared receptor: $base_name (${elapsed}s, polar H atoms: ${hd_count})"
+                    fi
                 else
                     log_error "Invalid output file: $pdbqt_file"
                     append_report_row "$RECEPTOR_FAILURE_REPORT" "receptor" "$pdb_file" "failed" "invalid_pdbqt_output" "$pdbqt_file"
@@ -1012,8 +1029,11 @@ main() {
     else
         log_success "Preparation completed successfully!"
     fi
-    log_info "Ligands prepared: $total_ligands"
-    log_info "Receptors prepared: $total_receptors"
+    local ligands_reused receptors_reused
+    ligands_reused=$(grep -c ',"reused_unchanged",' "$LIGAND_SKIPPED_REPORT" 2>/dev/null || true)
+    receptors_reused=$(grep -c ',"reused_unchanged",' "$RECEPTOR_SKIPPED_REPORT" 2>/dev/null || true)
+    log_info "Ligands prepared: $total_ligands (reused unchanged: ${ligands_reused:-0})"
+    log_info "Receptors prepared: $total_receptors (reused unchanged: ${receptors_reused:-0})"
     log_info "Log file saved: $LOG_FILE"
     log_info "Ligand failure report: $LIGAND_FAILURE_REPORT"
     log_info "Ligand skipped report: $LIGAND_SKIPPED_REPORT"
@@ -1034,6 +1054,9 @@ Results:
 --------
 Ligands prepared: $total_ligands
 Receptors prepared: $total_receptors
+Reused unchanged (prepare once, provenance matches; Spec 037 R4a):
+  Ligands: ${ligands_reused:-0}
+  Receptors: ${receptors_reused:-0}
 
 Output Directories:
 ------------------

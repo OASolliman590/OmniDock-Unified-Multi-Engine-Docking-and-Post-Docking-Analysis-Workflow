@@ -366,6 +366,18 @@ def build_consensus_rankings(
     return _build_single_engine_native(best_by_engine, requested_engines=requested_engines)
 
 
+def _consensus_order(frame: pd.DataFrame) -> tuple:
+    """Spec 037 R4b: the v2 order. Higher consensus_score first, then the v2 rank, then the tag.
+
+    Raw affinities (``best_affinity_kcal_mol``) are not compared across engines, so they never break a tie.
+    """
+    keys = ["consensus_score"]
+    if "consensus_rank_global" in frame.columns:
+        keys.append("consensus_rank_global")
+    keys.append("tag")
+    return keys, [False] + [True] * (len(keys) - 1)
+
+
 def select_rescoring_candidates(
     consensus_df: pd.DataFrame,
     rescoring_scope: str = "top_n_per_protein",
@@ -378,10 +390,8 @@ def select_rescoring_candidates(
         return pd.DataFrame(columns=list(consensus_df.columns) if consensus_df is not None else [])
 
     frame = consensus_df.copy()
-    frame = frame.sort_values(
-        ["consensus_score", "best_affinity_kcal_mol", "tag"],
-        ascending=[False, True, True],
-    )
+    keys, ascending = _consensus_order(frame)
+    frame = frame.sort_values(keys, ascending=ascending)
     if scope == "top_n_global":
         selected = frame.head(top_n).copy()
     else:
@@ -418,30 +428,26 @@ def build_consensus_explainability(
             "top_global": [],
         }
 
+    keys, ascending = _consensus_order(consensus_df)
     proteins: Dict[str, Dict[str, object]] = {}
     for protein, group in consensus_df.groupby("protein", dropna=False):
         protein_key = str(protein)
         proteins[protein_key] = {
             "candidate_count": int(len(group)),
             "best_consensus_score": float(group["consensus_score"].max()),
-            "best_affinity_kcal_mol": float(group["best_affinity_kcal_mol"].min()),
+            # Spec 037 R4b: descriptive, the minimum over the engines of one tag. Not used for ordering.
+            "descriptive_best_affinity_kcal_mol": float(group["best_affinity_kcal_mol"].min()),
             "mean_normalized_affinity_score": float(
                 pd.to_numeric(group.get("mean_normalized_affinity_score"), errors="coerce").dropna().mean()
             )
             if "mean_normalized_affinity_score" in group.columns
             else None,
-            "top_tags": group.sort_values(
-                ["consensus_score", "best_affinity_kcal_mol", "tag"],
-                ascending=[False, True, True],
-            )["tag"].astype(str).head(5).tolist(),
+            "top_tags": group.sort_values(keys, ascending=ascending)["tag"].astype(str).head(5).tolist(),
         }
 
     top_global_rows: List[Dict[str, object]] = []
     for _, row in (
-        consensus_df.sort_values(
-            ["consensus_score", "best_affinity_kcal_mol", "tag"],
-            ascending=[False, True, True],
-        )
+        consensus_df.sort_values(keys, ascending=ascending)
         .head(20)
         .iterrows()
     ):

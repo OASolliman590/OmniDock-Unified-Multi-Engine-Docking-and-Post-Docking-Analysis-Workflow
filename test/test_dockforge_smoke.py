@@ -1275,7 +1275,7 @@ def _smoke_sqlite_parity_and_skip_rationale() -> None:
             hit_class_policy="target_percentile",
             hit_class_strong_percentile=0.10,
             hit_class_moderate_percentile=0.40,
-            top_pose_selection_policy="best_affinity",
+            top_pose_selection_policy="best_consensus",
             top_pose_global_aggregation="best_target",
         )
         _assert(pipeline.run() is True, "SQLite-enabled comparative run should complete")
@@ -1314,7 +1314,7 @@ def _smoke_sqlite_parity_and_skip_rationale() -> None:
             hit_class_policy="target_percentile",
             hit_class_strong_percentile=0.10,
             hit_class_moderate_percentile=0.40,
-            top_pose_selection_policy="best_affinity",
+            top_pose_selection_policy="best_consensus",
             top_pose_global_aggregation="best_target",
         )
         _assert(pipeline_skip.run() is True, "SQLite-disabled comparative run should still complete")
@@ -2166,7 +2166,7 @@ def _smoke_interactive_run_tracking_summary_surface_contract() -> None:
             "per_engine_rank",
             "auto",
             "target_percentile",
-            "best_affinity",
+            "best_consensus",
             "best_target",
             "standard",
             "run",
@@ -2246,7 +2246,7 @@ def _smoke_interactive_favorite_flow_clean_followup_contract() -> None:
             "per_engine_rank",
             "auto",
             "target_percentile",
-            "best_affinity",
+            "best_consensus",
             "best_target",
             "standard",
             "run",
@@ -2806,20 +2806,34 @@ def _smoke_top_pose_selector_determinism() -> None:
         selection_policy="hybrid",
     )
     hybrid_row = hybrid_payload["top_pose_per_ligand_per_protein"].iloc[0]
+    # Spec 037 R4b: the v2 consensus score is higher-is-better, so C (0.80) is selected. Ties are covered in
+    # test/test_spec037_r4b_consensus.py.
     _assert(
-        str(hybrid_row.get("tag")) == "P1_site_1_L1_A",
-        "Hybrid policy should deterministically select lexical tag on consensus/affinity ties",
+        str(hybrid_row.get("tag")) == "P1_site_1_L1_C",
+        "Hybrid policy should select the highest v2 consensus score (higher is better, Spec 037 R4b)",
     )
 
-    affinity_payload = build_top_pose_atlas(
-        best_by_engine=best_by_engine,
-        consensus_df=consensus_df,
-        selection_policy="best_affinity",
-    )
-    affinity_row = affinity_payload["top_pose_per_ligand_per_protein"].iloc[0]
+    # Spec 037 R4b: best_affinity compares raw affinities across engines (smina -9.5 vs gnina/vina -8.0), so it is
+    # refused for two engines. The default (best_consensus) ranks by the v2 consensus and selects C (0.80).
+    refused = False
+    try:
+        build_top_pose_atlas(
+            best_by_engine=best_by_engine,
+            consensus_df=consensus_df,
+            selection_policy="best_affinity",
+        )
+    except ValueError as exc:
+        refused = "compares raw affinities across engines" in str(exc)
+    _assert(refused, "best_affinity must be refused across engines (Spec 037 R4b)")
+    default_payload = build_top_pose_atlas(best_by_engine=best_by_engine, consensus_df=consensus_df)
+    default_row = default_payload["top_pose_per_ligand_per_protein"].iloc[0]
     _assert(
-        str(affinity_row.get("tag")) == "P1_site_1_L1_C",
-        "best_affinity policy should select the strongest affinity tag",
+        str(default_row.get("tag")) == "P1_site_1_L1_C",
+        "default best_consensus policy should select the highest consensus tag",
+    )
+    _assert(
+        str(default_payload["manifest"]["selection_policy"]) == "best_consensus",
+        "the default top-pose policy should be best_consensus (Spec 037 R4b)",
     )
 
 
@@ -4079,7 +4093,7 @@ def _smoke_post_docking_allscore_contracts() -> None:
             hit_class_policy="reference_anchor",
             hit_class_strong_percentile=0.10,
             hit_class_moderate_percentile=0.40,
-            top_pose_selection_policy="best_affinity",
+            top_pose_selection_policy="best_consensus",
             top_pose_global_aggregation="best_target",
         )
         _assert(pipeline.run() is True, "comparative allscore pipeline should complete")
@@ -4161,7 +4175,7 @@ def _smoke_post_docking_allscore_contracts() -> None:
         _assert(top_pose_manifest_file.exists(), "top-pose selection manifest missing")
         top_pose_manifest = json.loads(top_pose_manifest_file.read_text(encoding="utf-8"))
         _assert(
-            str(top_pose_manifest.get("selection_policy", "")) == "best_affinity",
+            str(top_pose_manifest.get("selection_policy", "")) == "best_consensus",
             "top-pose manifest should reflect selected policy",
         )
         _assert(
@@ -4205,7 +4219,7 @@ def _smoke_post_docking_allscore_contracts() -> None:
             hit_class_policy="target_percentile",
             hit_class_strong_percentile=0.10,
             hit_class_moderate_percentile=0.40,
-            top_pose_selection_policy="best_affinity",
+            top_pose_selection_policy="best_consensus",
             top_pose_global_aggregation="best_target",
         )
         _assert(top_pose_only_pipeline.run() is True, "top_pose_only scope run should complete")
@@ -4338,7 +4352,7 @@ def _smoke_biology_unresolved_mapping_reporting() -> None:
             hit_class_policy="target_percentile",
             hit_class_strong_percentile=0.10,
             hit_class_moderate_percentile=0.40,
-            top_pose_selection_policy="best_affinity",
+            top_pose_selection_policy="best_consensus",
             top_pose_global_aggregation="best_target",
         )
         _assert(pipeline.run() is True, "comparative run with unresolved biology keys should complete")

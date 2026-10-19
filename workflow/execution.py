@@ -1044,6 +1044,7 @@ def run_autodock_prepare(
     protonation_policy: str = "ph_model",
     protonation_state_map: Optional[str] = None,
     project_dir: Optional[str] = None,
+    force: bool = False,
 ) -> WorkflowStepResult:
     # Spec 034 R3: pH and force field have no default here. Each is an explicit value with its source
     # ("user_entered" from the CLI or prompt, "config_file" from an explicit configuration value).
@@ -1077,6 +1078,12 @@ def run_autodock_prepare(
         if not root_path.exists():
             return 0
         return sum(1 for _ in root_path.rglob("*.pdbqt"))
+
+    def _count_reused_unchanged(skipped_report: Path) -> int:
+        """Spec 037 R4a: rows the shell loop wrote as reused_unchanged in its skipped report."""
+        if not skipped_report.is_file():
+            return 0
+        return sum(1 for line in skipped_report.read_text(encoding="utf-8").splitlines() if ',"reused_unchanged",' in line)
 
     def _collect_step_reports(ligands_output_dir: str) -> List[Dict[str, object]]:
         reports: List[Dict[str, object]] = []
@@ -1229,6 +1236,7 @@ def run_autodock_prepare(
             protonation_policy=policy,
             protonation_state_map=str(Path(protonation_state_map).expanduser().resolve()) if protonation_state_map else "",
             project_dir=str(Path(project_dir).expanduser().resolve()) if project_dir else "",
+            force=bool(force),
             autodocktools_prepare_ligand4=str(autodocktools_prepare_ligand4 or "").strip(),
             autodocktools_prepare_receptor4=str(autodocktools_prepare_receptor4 or "").strip(),
             autodocktools_python=str(autodocktools_python or "").strip(),
@@ -1372,6 +1380,13 @@ def run_autodock_prepare(
             "step_reports_count": int(len(validation_rows)),
             "step_reports_invalid_count": int(len(invalid_contract_rows)),
             "step_reports_valid_count": int(len(validation_rows) - len(invalid_contract_rows)),
+            # Spec 037 R4a: entities reused because their provenance matched (prepare once).
+            "ligand_reused_unchanged_count": int(
+                _count_reused_unchanged(Path(cfg.ligands_output) / "ligand_preparation_skipped.csv") if requested_ligands else 0
+            ),
+            "receptor_reused_unchanged_count": int(
+                _count_reused_unchanged(Path(cfg.receptors_output) / "receptor_preparation_skipped.csv") if requested_receptors else 0
+            ),
             "notes_count": int(len(notes)),
         }
         preflight_summary_csv = preflight_dir / "preparation_preflight_summary.csv"
@@ -1582,7 +1597,7 @@ def run_analysis_comparative(
     hit_class_policy: str = "target_percentile",
     hit_class_strong_percentile: float = 0.10,
     hit_class_moderate_percentile: float = 0.35,
-    top_pose_selection_policy: str = "best_affinity",
+    top_pose_selection_policy: str = "best_consensus",
     top_pose_global_aggregation: str = "best_target",
     best_pose_selection_metric: str = "auto",
     config_file: Optional[str] = None,
@@ -1649,7 +1664,7 @@ def run_analysis_comparative(
     ).strip().lower()
     single_engine_root = Path(output) / effective_single_engine if effective_single_engine else Path(output)
     resolved_top_pose_policy = str(
-        getattr(pipeline, "top_pose_selection_policy", top_pose_selection_policy) or "best_affinity"
+        getattr(pipeline, "top_pose_selection_policy", top_pose_selection_policy) or "best_consensus"
     )
     resolved_top_pose_aggregation = str(
         getattr(pipeline, "top_pose_global_aggregation", top_pose_global_aggregation) or "best_target"
@@ -1935,7 +1950,7 @@ def run_analysis_favorite(
     hit_class_policy: str = "target_percentile",
     hit_class_strong_percentile: float = 0.10,
     hit_class_moderate_percentile: float = 0.35,
-    top_pose_selection_policy: str = "best_affinity",
+    top_pose_selection_policy: str = "best_consensus",
     top_pose_global_aggregation: str = "best_target",
     best_pose_selection_metric: str = "auto",
     config_file: Optional[str] = None,
@@ -1992,7 +2007,7 @@ def run_analysis_favorite(
     )
     success = pipeline.run()
     resolved_top_pose_policy = str(
-        getattr(pipeline, "top_pose_selection_policy", top_pose_selection_policy) or "best_affinity"
+        getattr(pipeline, "top_pose_selection_policy", top_pose_selection_policy) or "best_consensus"
     )
     resolved_top_pose_aggregation = str(
         getattr(pipeline, "top_pose_global_aggregation", top_pose_global_aggregation) or "best_target"

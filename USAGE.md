@@ -26,6 +26,11 @@ python main.py pdb prepare-ligand --ligands-input <raw_ligands_dir> \
 ```
 `autodock/prep_autodock.sh` is retired and only prints a pointer here.
 
+**Prepare once (Spec 037 R4a).** An existing prepared receptor or ligand is reused, and the step reports it as `reused_unchanged` (in `receptor_preparation_skipped.csv` / `ligand_preparation_skipped.csv` and in `preparation_summary.txt`), when its provenance matches all of: the resolved protonation policy hash, the request (pH, force field, profile, engines, state map), the input file SHA-256, and the output file SHA-256. A changed input, a changed policy or request, or an edited output is prepared again. Add `--force` to the `pdb prepare-*` commands to prepare every entity again:
+```bash
+python main.py pdb prepare-ligand ... --force
+```
+
 ## 4. Build the pairlist (box centre and box size)
 ```bash
 python main.py prep pairlist --project-dir <project> --mode cocrystal_only \
@@ -57,6 +62,18 @@ python main.py dock run --project-dir <project> --engines vina \
 - Every replicate writes `<pair_tag>__repNN.<ext>` and is listed in `run_manifest.json` (see `specs/036-scientific-consistency/replicate_contract.md`).
 - Use `--dry-run` to write commands and manifests without running the engine.
 
+### 6a. Deploy (HPC export, Spec 037 R4c)
+```bash
+python main.py dock deploy --project-dir <project> --engines vina --seed <base_seed> \
+    [--replicates 3] [--energy-range 3] [--parameter-mode basic --parameter-preset exhaustive] \
+    [--box-scale 1] [--box-padding 0] [--round <round>] [--mode screen|exhaustive]
+```
+`dock deploy` applies the same parameter schema as `dock run`:
+- `--seed` is required. `--replicates` must be at least 1. `--energy-range` is always passed to Vina/Smina, and it must be positive. Its value is recorded.
+- Basic mode refuses `--exhaustiveness` and `--num-modes`, as `dock run` does. Use `--parameter-mode advanced` with both to set them.
+- `--box-scale` and `--box-padding` apply to the deployed pairlist boxes, as they do in `dock run`.
+- The bundle's `deployment_manifest.json` records `parameter_schema` and `engine_effective_parameters` for each engine: the values, and their sources (`basic_preset:<name>`, `user_explicit` or `advanced_default`).
+
 ## 7. Analyse
 ```bash
 python main.py analyze comparative --project-dir <project>
@@ -65,3 +82,5 @@ python main.py analyze md-inputs --project-dir <project> --engine vina --tags-fi
     --receptor-map <receptor_map.csv> [--topology-map <map.csv>] [--charge-map <charges.csv>]
 ```
 `analyze md-inputs` takes the protonation policy from step 2 (the project manifest), so the ligand state is the docked microspecies by default. The `--ph` flag is legacy and only applies to the `openbabel_predicted` policy. Final flag set: Spec 036 R1, being added by Agent A.
+
+**Top-pose policy and cross-engine comparison (Spec 037 R4b).** `--top-pose-policy` defaults to `best_consensus`, which ranks by the v2 consensus rank (`consensus_rank_geometry_qc_v2`, or `single_engine_native_v1` for one engine). `best_affinity` compares raw affinities, so it is accepted for one engine only and is refused for two or more engines with an error. `--min-affinity-advantage` gated on a raw cross-engine difference and was removed; it must stay `0`. Rerun promotion takes the winning engine of each tag from the consensus. Cross-engine affinity tables, plots and summaries stay, and they are labelled `descriptive_not_comparable_across_engines` in their column names, headers and manifests.

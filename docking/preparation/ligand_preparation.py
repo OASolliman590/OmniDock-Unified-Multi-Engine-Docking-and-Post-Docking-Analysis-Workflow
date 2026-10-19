@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from docking.preparation import prepared_reuse as _reuse
 from docking.models import (
     DEFAULT_PREPARATION_PH,
     LIGAND_PREPARATION_PROFILES,
@@ -940,7 +941,28 @@ def _effective_profile(profile: str, selected_engines: Tuple[str, ...]) -> str:
     return resolve_effective_ligand_preparation_profile(profile, list(selected_engines))
 
 
-def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict[str, object]:
+def _step_report_path(report_dir: Path, input_file: object) -> Path:
+    """Spec 037 R4a: the step report (provenance) of one ligand, named as ``write_ligand_preparation_step_report`` names it."""
+    input_name = Path(str(input_file or "ligand")).name
+    stem = Path(input_name).stem or "ligand"
+    safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in stem).strip("_") or "ligand"
+    return Path(report_dir).expanduser().resolve() / f"{safe_stem}.json"
+
+
+def _state_map_sha256() -> str:
+    raw = str(os.environ.get("PDBWIZARD_LIGAND_PREP_STATE_MAP", "") or "").strip()
+    if not raw:
+        return ""
+    try:
+        return _reuse.sha256_file(Path(raw).expanduser())
+    except OSError:
+        return "unreadable"
+
+
+def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path, force: bool = False) -> Dict[str, object]:
+    """Prepare one ligand. Spec 037 R4a (prepare once): an existing output whose step report matches the
+    resolved policy hash, the request fingerprint, and the input and output SHA-256 is reused and returned
+    with ``preparation_status: reused_unchanged``. ``force`` prepares again."""
     source = Path(input_path).expanduser().resolve()
     destination = Path(output_pdbqt).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -970,6 +992,47 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
     else:
         state_entry = _explicit_state_entry(source)
     explicit_smiles = str(state_entry["smiles"]) if state_entry and state_entry.get("smiles") else ""
+
+    # Spec 037 R4a: the request that shapes this output. Values the policy hash does not cover are included,
+    # so a changed pH, profile, engine set or state map re-prepares even without a project policy.
+    fingerprint = _reuse.request_fingerprint({
+        "protonation_policy": policy,
+        "protonation_ph": float(protonation_ph) if protonation_ph is not None else None,
+        "explicit_smiles": explicit_smiles,
+        "explicit_net_charge": (
+            int(state_entry["net_charge"])
+            if state_entry is not None and state_entry.get("net_charge") is not None else None
+        ),
+        "state_map_sha256": _state_map_sha256(),
+        "requested_profile": selected_profile,
+        "effective_profile": effective_profile,
+        "selected_engines": list(selected_engines),
+    })
+    input_sha256 = _reuse.sha256_file(source)
+    report_dir_text = str(os.environ.get("PDBWIZARD_LIGAND_PREP_REPORT_DIR", "") or "").strip()
+    record_path = _step_report_path(Path(report_dir_text), source) if report_dir_text else None
+    record = _reuse.load_provenance(record_path)[0] if record_path is not None else None
+    if record is not None and Path(str(record.get("output_file") or "")).name != destination.name:
+        record = None
+    block = _reuse.reuse_block_reason(
+        record,
+        output=destination,
+        input_file=source,
+        policy_hash=policy_hash,
+        fingerprint=fingerprint,
+        force=force,
+    )
+    if not block and record is not None:
+        reused = dict(record)
+        reused.update(
+            status=_reuse.REUSED_UNCHANGED,
+            preparation_status=_reuse.REUSED_UNCHANGED,
+            reuse_step_report_file=str(record_path),
+            reuse_block_reason="",
+        )
+        return reused
+    # Re-prepare: a stale output must never survive a failed run.
+    destination.unlink(missing_ok=True)
 
     with tempfile.TemporaryDirectory(prefix=f"ligand_prepare_{source.stem}_") as tmp_dir:
         normalized_sdf = Path(tmp_dir) / f"{source.stem}_normalized.sdf"
@@ -1154,6 +1217,13 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path) -> Dict
     }
     # Spec 037 R2a: Rg of the prepared conformer, computed once here and recorded with its method.
     summary.update(_prepared_conformer_fields(destination))
+    # Spec 037 R4a: what a later run compares against (see docking/preparation/prepared_reuse.py).
+    summary.update(
+        input_sha256=input_sha256,
+        request_fingerprint=fingerprint,
+        preparation_status=_reuse.PREPARED,
+        reuse_block_reason=block,
+    )
     if meeko_error:
         summary["meeko_error"] = meeko_error
     if obabel_error:
@@ -1297,11 +1367,7 @@ def write_ligand_preparation_step_report(
     if report_file is not None:
         target_path = Path(report_file).expanduser().resolve()
     elif report_dir is not None:
-        directory = Path(report_dir).expanduser().resolve()
-        input_file = Path(str(summary.get("input_file") or "ligand")).name
-        stem = Path(input_file).stem or "ligand"
-        safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in stem).strip("_") or "ligand"
-        target_path = directory / f"{safe_stem}.json"
+        target_path = _step_report_path(Path(report_dir), summary.get("input_file"))
     if target_path is None:
         return None
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1348,6 +1414,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--engines", default="", help="Comma-separated selected engines for engine-aware profile decisions")
     parser.add_argument("--summary-file", help="Optional JSON summary output path")
+    parser.add_argument("--force", action="store_true", help="Prepare again even when the existing output is reusable (Spec 037 R4a)")
     return parser.parse_args(argv)
 
 
@@ -1386,7 +1453,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.engines:
         os.environ["PDBWIZARD_SELECTED_ENGINES"] = args.engines
     try:
-        summary = prepare_ligand_for_vina_family(Path(args.input), Path(args.output))
+        summary = prepare_ligand_for_vina_family(Path(args.input), Path(args.output), force=args.force)
     except ProtonationStateError as exc:
         print(json.dumps({"status": "failed", "reason": exc.reason, "details": exc.details}))
         return 1
