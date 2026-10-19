@@ -9,6 +9,7 @@ This module provides a conservative validation workflow:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -288,6 +289,8 @@ def run_redocking_validation(
     pass_threshold_angstrom: float = 2.0,
     warn_threshold_angstrom: float = 3.5,
     legacy_reference_mode: bool = False,
+    minimum_reference_complexes: int = 3,
+    minimum_coverage: float = 1.0,
 ) -> Dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     validation_file = output_dir / "redocking_validation.csv"
@@ -517,9 +520,31 @@ def run_redocking_validation(
     total_reference_rows = int(len(validation_df))
     not_evaluable_count = int((validation_df["redocking_classification"] == "not_evaluable").sum())
     pass_rate = float(pass_count / evaluable_count) if evaluable_count else 0.0
+    coverage = float(evaluable_count / total_reference_rows) if total_reference_rows else 0.0
+    # Aliases and additional engines do not create independent experimental complexes: a complex is
+    # counted once by its PDB id, frame and reference pose content (Spec 035 D8).
+    reference_complex_keys = set()
+    for _, reference_row in references.iterrows():
+        reference_path = _find_reference_pose_file(project_dir, reference_row, legacy_mode=legacy_reference_mode)
+        if reference_path is None or not reference_path.exists():
+            continue
+        reference_complex_keys.add((
+            str(reference_row.get("reference_pdb_id", "")).upper(),
+            str(reference_row.get("reference_frame_id", "")),
+            hashlib.sha256(reference_path.read_bytes()).hexdigest(),
+        ))
+    unique_reference_count = len(reference_complex_keys)
+    # D8 (Lead decision, Spec 035): HIGH, and therefore validated, needs full coverage, at least
+    # `minimum_reference_complexes` independent experimental complexes, and a pass rate of at least 0.80.
+    # The gate marks the rows; it does not block the run (Spec 036 R2).
+    sufficient = (
+        coverage >= float(minimum_coverage)
+        and unique_reference_count >= int(minimum_reference_complexes)
+        and pass_rate >= 0.80
+    )
     if total_reference_rows == 0 or evaluable_count == 0:
         confidence = "LOW"
-    elif pass_rate >= 0.80:
+    elif sufficient:
         confidence = "HIGH"
     elif pass_rate >= 0.50:
         confidence = "MEDIUM"
@@ -535,14 +560,21 @@ def run_redocking_validation(
         "not_evaluable_rows": not_evaluable_count,
         "pass_rate": f"{pass_rate:.3f}",
         "confidence_signal": confidence,
+        "coverage": coverage,
+        "unique_reference_complexes": unique_reference_count,
+        "minimum_coverage": float(minimum_coverage),
+        "minimum_reference_complexes": int(minimum_reference_complexes),
     }
     gate_state = "validated" if confidence == "HIGH" else "needs_review"
     allow_reference_anchor = gate_state == "validated"
-    gate_reason = (
-        "high_confidence_redocking"
-        if gate_state == "validated"
-        else "redocking_confidence_not_high"
-    )
+    unmet = []
+    if coverage < float(minimum_coverage):
+        unmet.append("coverage")
+    if unique_reference_count < int(minimum_reference_complexes):
+        unmet.append("unique_reference_complexes")
+    if pass_rate < 0.80:
+        unmet.append("pass_rate")
+    gate_reason = "high_confidence_redocking" if gate_state == "validated" else "unmet_" + "+".join(unmet or ["confidence"])
     summary_payload.update(
         {
             "validation_gate_state": gate_state,
