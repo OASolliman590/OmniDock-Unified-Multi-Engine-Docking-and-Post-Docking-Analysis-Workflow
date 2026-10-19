@@ -265,9 +265,13 @@ class ArtifactGraph:
             return False
         if not self._outputs_exist(node):
             return False
-        # Output content is not fingerprinted here: the legacy run() path rewrites
-        # DAG-owned top-pose files with fresh timestamps (see port_log.md, O6).
-        return expected_key == self._compute_cache_key(node)
+        # A hit needs the same inputs and the same output bytes. An entry without a recorded output
+        # fingerprint (written before this check) is a miss, so it is recomputed once.
+        expected_output = str(node_cache.get("output_fingerprint") or "")
+        if not expected_output:
+            return False
+        return (expected_key == self._compute_cache_key(node)
+                and expected_output == self._paths_fingerprint(self._artifact_path_rows(node.outputs)))
 
     def _write_report(self, report: Dict[str, object]) -> None:
         self._atomic_json(self.report_file, report)
@@ -372,9 +376,10 @@ class ArtifactGraph:
                             raise RuntimeError("Node reported failure")
                         if not self._outputs_exist(node):
                             raise RuntimeError("Node did not produce all declared nonempty outputs")
-                        # main also fails a node whose inputs change while it runs. That check is
-                        # deferred (port_log.md, O6): concurrent DAG nodes in one tier currently
-                        # rewrite shared top-pose files, and the check would skip visualizations.
+                        if self._compute_cache_key(node) != input_key:
+                            # Another node changed an input while this one ran, so the result is not
+                            # reproducible from any single input snapshot.
+                            raise RuntimeError("Node inputs changed during computation; rerun from a stable input snapshot")
                     except Exception as exc:
                         cache_nodes.pop(node.name, None)
                         retirement_error = ""
@@ -402,6 +407,7 @@ class ArtifactGraph:
                             cache_nodes[node.name] = {
                                 "cache_key": input_key,
                                 "outputs": list(node.outputs),
+                                "output_fingerprint": self._paths_fingerprint(self._artifact_path_rows(node.outputs)),
                                 "updated_at": self._utc_now_iso(),
                             }
 

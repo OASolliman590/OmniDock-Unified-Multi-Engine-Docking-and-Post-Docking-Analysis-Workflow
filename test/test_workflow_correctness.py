@@ -1,8 +1,10 @@
 """Regression tests for scientific artifact and persistent-state contracts."""
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import json
 import multiprocessing
 import os
+import time
 import pytest
 
 from post_docking_analysis.artifact_graph import ArtifactGraph, ArtifactNode
@@ -117,7 +119,6 @@ def test_cache_detects_nested_directory_content_change(tmp_path):
     assert output.read_text() == "new"
 
 
-@pytest.mark.xfail(strict=True, reason='Spec 035 O6 deferred: output-content fingerprint is not enforced; the legacy run() path and the comparative writer rewrite DAG-owned top-pose files (S9 scope)')
 def test_cache_rejects_modified_output(tmp_path):
     source, output = tmp_path / "input.txt", tmp_path / "output.txt"
     source.write_text("expected")
@@ -129,7 +130,37 @@ def test_cache_rejects_modified_output(tmp_path):
     assert output.read_text() == "expected"
 
 
-@pytest.mark.xfail(strict=True, reason='Spec 035 O6 deferred: the inputs-changed-during-computation failure is not ported; concurrent DAG nodes in one tier write the same top-pose files (S9 scope)')
+def test_output_fingerprint_change_invalidates_directory_output(tmp_path):
+    source, out_dir = tmp_path / "input.txt", tmp_path / "out"
+    source.write_text("expected")
+    graph = ArtifactGraph(cache_file=tmp_path / "cache.json")
+
+    def compute():
+        out_dir.mkdir(exist_ok=True)
+        (out_dir / "table.csv").write_text(source.read_text())
+
+    graph.register(ArtifactNode("dir_writer", [str(source)], [str(out_dir)], compute))
+    assert graph.request(str(out_dir))["nodes"]["dir_writer"]["status"] == "completed"
+    assert graph.request(str(out_dir))["nodes"]["dir_writer"]["status"] == "cache_hit"
+    (out_dir / "table.csv").write_text("edited")
+    assert graph.request(str(out_dir))["nodes"]["dir_writer"]["status"] == "completed"
+    assert (out_dir / "table.csv").read_text() == "expected"
+
+
+def test_cache_entry_without_output_fingerprint_is_recomputed(tmp_path):
+    source, output = tmp_path / "input.txt", tmp_path / "output.txt"
+    source.write_text("expected")
+    cache_file = tmp_path / "cache.json"
+    graph = ArtifactGraph(cache_file=cache_file)
+    graph.register(ArtifactNode("copy", [str(source)], [str(output)], lambda: output.write_text(source.read_text())))
+    graph.request(str(output))
+    payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    del payload["nodes"]["copy"]["output_fingerprint"]
+    cache_file.write_text(json.dumps(payload), encoding="utf-8")
+    assert graph.request(str(output))["nodes"]["copy"]["status"] == "completed"
+    assert "output_fingerprint" in json.loads(cache_file.read_text(encoding="utf-8"))["nodes"]["copy"]
+
+
 def test_input_mutation_during_computation_is_not_cached_as_success(tmp_path):
     source, output = tmp_path / "source.txt", tmp_path / "output.txt"
     source.write_text("initial")
@@ -143,6 +174,35 @@ def test_input_mutation_during_computation_is_not_cached_as_success(tmp_path):
     result = graph.request(str(output))
     assert result["nodes"]["unstable"]["status"] == "failed"
     assert "changed during" in result["nodes"]["unstable"]["details"]
+    assert not output.exists()
+
+
+def test_concurrent_writer_of_an_input_is_detected(tmp_path):
+    shared, result, other = tmp_path / "shared.txt", tmp_path / "reader.txt", tmp_path / "other.txt"
+    shared.write_text("snapshot A")
+
+    def reader():
+        # Reads the snapshot at once, then finishes after the sibling node has rewritten it.
+        content = shared.read_text()
+        time.sleep(0.6)
+        result.write_text(content)
+
+    def sibling_writer():
+        # Same tier as the reader (no dependency between them). Rewrites the reader's input mid-run.
+        time.sleep(0.2)
+        shared.write_text("snapshot B")
+        other.write_text("done")
+
+    graph = ArtifactGraph(cache_file=tmp_path / "cache.json")
+    graph.register(ArtifactNode("reader", [str(shared)], [str(result)], reader))
+    graph.register(ArtifactNode("sibling", [], [str(other)], sibling_writer))
+    graph.register(ArtifactNode("final", [str(result), str(other)], [str(tmp_path / "final.txt")],
+                                lambda: (tmp_path / "final.txt").write_text("ok")))
+    report = graph.request(str(tmp_path / "final.txt"))
+    assert report["nodes"]["reader"]["status"] == "failed"
+    assert "changed during" in report["nodes"]["reader"]["details"]
+    assert report["nodes"]["final"]["status"] == "blocked_by_failure"
+    assert not result.exists()
 
 
 def test_optional_missing_input_is_explicit_and_does_not_block_report(tmp_path):

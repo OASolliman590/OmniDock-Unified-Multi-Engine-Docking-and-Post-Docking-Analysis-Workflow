@@ -563,6 +563,9 @@ class MultiEngineAnalysisPipeline:
             "best_poses": session_root / "top_pose_ligand_performance" / "top_pose_per_ligand_global.csv",
             "best_poses_by_engine": numbered["post_scores_unified"] / "best_pose_per_tag_by_engine.csv",
             "ligand_performance_summary": session_root / "top_pose_ligand_performance" / "ligand_performance_summary.csv",
+            "best_poses_per_protein": session_root / "top_pose_ligand_performance" / "top_pose_per_ligand_per_protein.csv",
+            "top_pose_confidence": session_root / "top_pose_ligand_performance" / "top_pose_confidence_metrics.csv",
+            "top_pose_manifest": session_root / "top_pose_ligand_performance" / "top_pose_selection_manifest.json",
             "complexes": session_root / "complexes",
             "prolif": interactions_root / "prolif",
             "pandamap": interactions_root / "pandamap",
@@ -888,13 +891,20 @@ class MultiEngineAnalysisPipeline:
                 "analysis_mode": self.analysis_mode,
                 "consensus_mode": self.consensus_mode,
                 "normalization_method": self.normalization_method,
+                "top_pose_selection_policy": self.top_pose_selection_policy,
+                "top_pose_global_aggregation": self.top_pose_global_aggregation,
+                "engines_in_scope": list(self.engines_in_scope),
+                "scoped_engine_count": int(len(self.engines_in_scope)),
+                "detected_engine_count": int(self.detected_engine_count or len(self.manifest.get("engines", []))),
             },
         )
         redocking_status_df = self._load_redocking_status(paths["validation_gate"].parent)
         per_protein = top_pose_payload.get("top_pose_per_ligand_per_protein")
         if isinstance(per_protein, pd.DataFrame) and "protein" in per_protein.columns:
             top_pose_payload["top_pose_per_ligand_per_protein"] = attach_redocking_status(per_protein, redocking_status_df)
+        # This node is the single writer of the top-pose atlas. The report nodes read these files (Spec 035 follow-up 1).
         outputs = write_top_pose_atlas(top_pose_payload, paths["best_poses"].parent)
+        write_top_pose_atlas(top_pose_payload, self._canonical_top_pose_root())
         details = f"top_pose_global={outputs.get('top_pose_per_ligand_global_file', '')}"
         return {"details": details}
 
@@ -1271,7 +1281,7 @@ class MultiEngineAnalysisPipeline:
         except Exception:
             pass
         scores = self._load_or_build_scores()
-        self._write_comparative_reports(scores, analysis_scope=self.analysis_scope)
+        self._write_comparative_reports(scores, analysis_scope=self.analysis_scope, preserve_dag_atlas=True)
         destination = paths["comparative"]
         destination.mkdir(parents=True, exist_ok=True)
         reports_dir = self.output_dir / "reports"
@@ -1301,7 +1311,7 @@ class MultiEngineAnalysisPipeline:
         source = self.output_dir / "reports" / "polypharmacology"
         if not source.exists():
             scores = self._load_or_build_scores()
-            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope)
+            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope, preserve_dag_atlas=True)
         copied = self._copy_matching_files(source, paths["polypharmacology"])
         return {"details": f"polypharmacology_files_copied={copied}"}
 
@@ -1311,7 +1321,7 @@ class MultiEngineAnalysisPipeline:
         reports_dir = self.output_dir / "reports"
         if not (reports_dir / "biology_mapping_report.json").exists():
             scores = self._load_or_build_scores()
-            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope)
+            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope, preserve_dag_atlas=True)
         copied = 0
         for candidate in (
             "biology_correlation_global.csv",
@@ -1561,10 +1571,19 @@ class MultiEngineAnalysisPipeline:
             [paths["classified_hits"]],
             lambda: self._dag_compute_classified_hits_node(paths),
         )
+        # The atlas node is the single owner of the top-pose files (Spec 035 follow-up 1). Every file it
+        # writes is declared, so readers depend on all of them and the output fingerprint covers all of them.
+        atlas_outputs = [
+            paths["best_poses"],
+            paths["ligand_performance_summary"],
+            paths["best_poses_per_protein"],
+            paths["top_pose_confidence"],
+            paths["top_pose_manifest"],
+        ]
         _register(
             "top_pose_atlas",
             [paths["classified_hits"], paths["normalized_scores"], paths["analysis_parameters"]],
-            [paths["best_poses"], paths["ligand_performance_summary"]],
+            atlas_outputs,
             lambda: self._dag_compute_top_pose_atlas_node(paths),
         )
         if self.md_inputs_request:
@@ -1623,9 +1642,10 @@ class MultiEngineAnalysisPipeline:
             ("comparative", "comparative"),
             ("biology_correlation", "biology_correlation"),
         ):
+            # These nodes read the atlas that top_pose_atlas owns; they never write it.
             _register(
                 node_name,
-                [paths["classified_hits"]] if node_name == "comparative" else [paths["comparative"]],
+                ([paths["classified_hits"]] if node_name == "comparative" else [paths["comparative"]]) + atlas_outputs,
                 [paths[path_key]],
                 (
                     lambda node_name=node_name: self._dag_compute_polypharmacology_node(paths)
@@ -2871,7 +2891,37 @@ class MultiEngineAnalysisPipeline:
         ordered = [column for column in columns if column in frame.columns]
         return frame[ordered + [column for column in frame.columns if column not in ordered]]
 
-    def _write_comparative_reports(self, scores: pd.DataFrame, analysis_scope: str = "full") -> None:
+    _TOP_POSE_ATLAS_FILE_KEYS = {
+        "top_pose_per_ligand_per_protein_file": "top_pose_per_ligand_per_protein.csv",
+        "top_pose_per_ligand_global_file": "top_pose_per_ligand_global.csv",
+        "ligand_performance_summary_file": "ligand_performance_summary.csv",
+        "top_pose_confidence_metrics_file": "top_pose_confidence_metrics.csv",
+        "top_pose_selection_manifest_file": "top_pose_selection_manifest.json",
+    }
+
+    def _existing_top_pose_outputs(self, root: Path) -> Dict[str, str]:
+        """Paths of an atlas written by the DAG atlas node. A missing file is an error, never a pass."""
+        outputs: Dict[str, str] = {}
+        for key, name in self._TOP_POSE_ATLAS_FILE_KEYS.items():
+            path = Path(root) / name
+            if not path.is_file():
+                raise FileNotFoundError(f"Top-pose atlas file not produced by the DAG atlas node: {path}")
+            outputs[key] = str(path)
+        return outputs
+
+    def _write_comparative_reports(
+        self,
+        scores: pd.DataFrame,
+        analysis_scope: str = "full",
+        *,
+        preserve_dag_atlas: bool = False,
+    ) -> None:
+        """Write the comparative report bundle.
+
+        The top-pose atlas is owned by the analysis DAG (``top_pose_atlas`` node, Spec 035 follow-up 1).
+        With ``preserve_dag_atlas=True`` (the DAG report nodes) the atlas files are read, never rewritten.
+        The default path still writes them, for the legacy ``run()`` path.
+        """
         scope = str(analysis_scope or "full").strip().lower()
         if scope not in _SUPPORTED_ANALYSIS_SCOPES:
             scope = "full"
@@ -3246,35 +3296,40 @@ class MultiEngineAnalysisPipeline:
                 ]
             ).to_csv(parity_file, index=False)
 
-        top_pose_payload = build_top_pose_atlas(
-            best_by_engine=best_by_engine,
-            consensus_df=consensus_df,
-            selection_policy=self.top_pose_selection_policy,
-            consensus_mode=self.consensus_mode,
-            global_aggregation=self.top_pose_global_aggregation,
-            run_id=self.run_id,
-            generated_at=self._utc_now_iso(),
-            context={
-                "analysis_scope": scope,
-                "analysis_mode": self.analysis_mode,
-                "consensus_mode": self.consensus_mode,
-                "normalization_method": self.normalization_method,
-                "top_pose_selection_policy": self.top_pose_selection_policy,
-                "top_pose_global_aggregation": self.top_pose_global_aggregation,
-                "engines_in_scope": list(self.engines_in_scope),
-                "scoped_engine_count": int(len(self.engines_in_scope)),
-                "detected_engine_count": int(self.detected_engine_count or len(self.manifest.get("engines", []))),
-            },
-        )
-        per_protein_atlas = top_pose_payload.get("top_pose_per_ligand_per_protein")
-        if isinstance(per_protein_atlas, pd.DataFrame) and "protein" in per_protein_atlas.columns:
-            top_pose_payload["top_pose_per_ligand_per_protein"] = attach_redocking_status(
-                per_protein_atlas, redocking_status_df
-            )
         top_pose_session_root = self.output_dir / "top_pose_ligand_performance"
         top_pose_canonical_root = self._canonical_top_pose_root()
-        session_top_pose_outputs = write_top_pose_atlas(top_pose_payload, top_pose_session_root)
-        canonical_top_pose_outputs = write_top_pose_atlas(top_pose_payload, top_pose_canonical_root)
+        if preserve_dag_atlas:
+            # The DAG atlas node is the only writer of these files (Spec 035 follow-up 1).
+            session_top_pose_outputs = self._existing_top_pose_outputs(top_pose_session_root)
+            canonical_top_pose_outputs = self._existing_top_pose_outputs(top_pose_canonical_root)
+        else:
+            top_pose_payload = build_top_pose_atlas(
+                best_by_engine=best_by_engine,
+                consensus_df=consensus_df,
+                selection_policy=self.top_pose_selection_policy,
+                consensus_mode=self.consensus_mode,
+                global_aggregation=self.top_pose_global_aggregation,
+                run_id=self.run_id,
+                generated_at=self._utc_now_iso(),
+                context={
+                    "analysis_scope": scope,
+                    "analysis_mode": self.analysis_mode,
+                    "consensus_mode": self.consensus_mode,
+                    "normalization_method": self.normalization_method,
+                    "top_pose_selection_policy": self.top_pose_selection_policy,
+                    "top_pose_global_aggregation": self.top_pose_global_aggregation,
+                    "engines_in_scope": list(self.engines_in_scope),
+                    "scoped_engine_count": int(len(self.engines_in_scope)),
+                    "detected_engine_count": int(self.detected_engine_count or len(self.manifest.get("engines", []))),
+                },
+            )
+            per_protein_atlas = top_pose_payload.get("top_pose_per_ligand_per_protein")
+            if isinstance(per_protein_atlas, pd.DataFrame) and "protein" in per_protein_atlas.columns:
+                top_pose_payload["top_pose_per_ligand_per_protein"] = attach_redocking_status(
+                    per_protein_atlas, redocking_status_df
+                )
+            session_top_pose_outputs = write_top_pose_atlas(top_pose_payload, top_pose_session_root)
+            canonical_top_pose_outputs = write_top_pose_atlas(top_pose_payload, top_pose_canonical_root)
         self.top_pose_outputs = {
             **session_top_pose_outputs,
             "top_pose_session_root": str(top_pose_session_root),
