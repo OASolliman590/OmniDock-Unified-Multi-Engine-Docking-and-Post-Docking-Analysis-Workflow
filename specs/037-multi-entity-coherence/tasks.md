@@ -6,3 +6,4 @@
 - [x] **T004** (R3) Basic-mode exhaustiveness refusal, v2 rank for top-overall summaries, GNINA summary label.
 - [x] **T005** Tests: full suite 437 passed / 2 skipped; contract and full dry-run smoke exit 0.
 - [ ] **T006** Scientific Lead review.
+- [ ] **T007** (R4) Prepare-once skip, remaining raw cross-engine uses moved to v2, deploy parameter schema.

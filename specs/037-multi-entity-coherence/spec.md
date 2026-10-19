@@ -26,3 +26,8 @@
 - R3 items are tested.
 - Full suite and both smoke tests pass.
 - Scientific Lead review.
+
+## R4 — Finishing items (Scientific Lead direction 2026-10-19: continue; agent recommendations from 2026-10-10)
+- R4a: **Prepare once.** Receptor and ligand preparation skip an entity whose existing prepared output and provenance match the current resolved policy hash and input SHA-256, recording `reused_unchanged`. `--force` re-prepares.
+- R4b: **No raw cross-engine comparison.** Move the remaining raw-affinity uses to the v2 consensus rank, or `single_engine_native_v1` for one engine: the top-pose selector default (`best_affinity`), rerun promotion (`_build_pair_competition`) and the rescoring-candidate tie-break. Cross-engine summary statistics and plots stay, labelled `descriptive_not_comparable_across_engines`.
+- R4c: **`dock deploy`** (the HPC export) applies the same parameter schema as `dock run`: required seed, replicates, explicit `energy_range`, basic-mode refusal of explicit `--num-modes` and `--exhaustiveness`, and recorded sources.
