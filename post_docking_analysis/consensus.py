@@ -251,16 +251,15 @@ def _safe_rank_score(series: pd.Series, *, lower_is_better: bool = True) -> pd.S
 
 def _safe_minmax_scale(series: pd.Series) -> pd.Series:
     # D16 (Lead decision, Spec 035): a missing score stays NaN; it is never imputed as a neutral 0.0.
+    # A group with one finite value, or zero span, has no defined min-max scale: NaN (not 0.0, not 0.5).
     values = pd.to_numeric(series, errors="coerce")
     finite_mask = np.isfinite(values.to_numpy(dtype=float))
     out = pd.Series(np.nan, index=series.index, dtype=float)
     if finite_mask.sum() <= 1:
-        out.loc[finite_mask] = 0.0
         return out
     valid = values[finite_mask]
     span = float(valid.max() - valid.min())
     if span <= 0:
-        out.loc[finite_mask] = 0.0
         return out
     # Docking convention: lower affinity is better, so invert min-max.
     scaled = (float(valid.max()) - values) / span
@@ -269,17 +268,16 @@ def _safe_minmax_scale(series: pd.Series) -> pd.Series:
 
 def _safe_zscore(series: pd.Series) -> pd.Series:
     # D16 (Lead decision, Spec 035): a missing score stays NaN; it is never imputed as a neutral 0.0.
+    # A group with one finite value, or zero spread, has no defined z-score: NaN.
     values = pd.to_numeric(series, errors="coerce")
     finite_mask = np.isfinite(values.to_numpy(dtype=float))
     out = pd.Series(np.nan, index=series.index, dtype=float)
     if finite_mask.sum() <= 1:
-        out.loc[finite_mask] = 0.0
         return out
     valid = values[finite_mask]
     mean_value = float(valid.mean())
     std_value = float(valid.std(ddof=0))
     if std_value <= 0:
-        out.loc[finite_mask] = 0.0
         return out
     zscores = (values - mean_value) / std_value
     return zscores.where(finite_mask)
