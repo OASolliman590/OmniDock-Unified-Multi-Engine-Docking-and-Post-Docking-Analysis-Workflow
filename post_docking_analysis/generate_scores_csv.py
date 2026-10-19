@@ -98,7 +98,10 @@ def parse_gnina_log(log_file: Path, pairlist_mapping: Optional[Dict[str, str]] =
     
     # Use pairlist mapping if available
     tag_name, matched_pairlist = _resolve_tag_from_pairlist(filename, pairlist_mapping or {})
-    
+    # Scheduler/runner wrapper logs are not engine output and never enter the score table (main@7fc130a).
+    if log_file.name.lower().endswith(".runner.log"):
+        return [], False
+
     try:
         with open(log_file, 'r') as f:
             content = f.read()
@@ -182,6 +185,8 @@ def _find_log_files(*search_dirs):
         if not d.exists():
             continue
         for f in d.glob("*.log"):
+            if f.name.lower().endswith(".runner.log"):
+                continue
             found.setdefault(f.name, f)
     if not found:
         for d in search_dirs:
