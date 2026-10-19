@@ -203,6 +203,15 @@ def _load_rdkit_molecule(input_path: Path) -> Any:
     raise ValueError(f"Unsupported ligand format for RDKit normalization: {input_path.suffix}")
 
 
+def _input_has_3d(input_path: Path) -> bool:
+    """D4 (Lead, Spec 035): input that already has 3D coordinates keeps them; it is not regenerated or re-minimised."""
+    try:
+        molecule = _load_rdkit_molecule(input_path)
+    except (ImportError, ValueError):
+        return False
+    return _has_3d_coordinates(molecule)
+
+
 def _has_3d_coordinates(mol: Any) -> bool:
     if mol is None or mol.GetNumConformers() == 0:
         return False
@@ -233,41 +242,6 @@ def _embed_and_optimize_3d(mol: Any, all_chem: Any) -> str:
         return "UFF"
     except Exception:
         return ""
-
-
-def _normalize_with_rdkit(input_path: Path, output_sdf: Path) -> Dict[str, object]:
-    Chem, all_chem = _load_rdkit()
-    if Chem is None or all_chem is None:
-        raise ImportError("RDKit is not available")
-
-    molecule = _load_rdkit_molecule(input_path)
-    if molecule is None:
-        raise ValueError(f"RDKit could not parse ligand file: {input_path}")
-
-    Chem.SanitizeMol(molecule)
-    had_3d = _has_3d_coordinates(molecule)
-    molecule = Chem.AddHs(molecule, addCoords=had_3d)
-
-    optimized_forcefield = ""
-    if not had_3d:
-        optimized_forcefield = _embed_and_optimize_3d(molecule, all_chem)
-
-    molecule.SetProp("_Name", molecule.GetProp("_Name") if molecule.HasProp("_Name") else input_path.stem)
-    output_sdf.parent.mkdir(parents=True, exist_ok=True)
-    writer = Chem.SDWriter(str(output_sdf))
-    try:
-        writer.write(molecule)
-    finally:
-        writer.close()
-
-    return {
-        "normalization_backend": "rdkit",
-        "source_file": str(input_path),
-        "normalized_sdf": str(output_sdf),
-        "had_3d_input": had_3d,
-        "generated_3d": not had_3d,
-        "optimized_forcefield": optimized_forcefield,
-    }
 
 
 class ProtonationStateError(RuntimeError):
@@ -794,6 +768,7 @@ def _normalize_with_openbabel(
         source_result = _run_command(["obabel", str(input_path), "-O", str(temp_source)])
         if _is_zero_molecule_obabel_result(source_result) or not _file_has_meaningful_content(temp_source):
             raise ValueError(f"OpenBabel could not parse ligand source into SDF: {input_path}")
+        had_3d = _input_has_3d(input_path)
 
         # Spec 034 R2a: the pH model runs on the hydrogen-free molecule. Open Babel does not
         # re-protonate a molecule that already has explicit hydrogens, so -d must come first.
@@ -803,9 +778,12 @@ def _normalize_with_openbabel(
         if _is_zero_molecule_obabel_result(ph_result) or not _file_has_meaningful_content(temp_ph):
             raise ValueError(f"OpenBabel pH model failed for: {input_path}")
 
-        gen3d_result = _run_command(["obabel", str(temp_ph), "-O", str(temp_3d), "--gen3d"])
-        if _is_zero_molecule_obabel_result(gen3d_result) or not _file_has_meaningful_content(temp_3d):
-            raise ValueError(f"OpenBabel failed to generate 3D conformer for: {input_path}")
+        if had_3d:
+            shutil.copy2(temp_ph, temp_3d)
+        else:
+            gen3d_result = _run_command(["obabel", str(temp_ph), "-O", str(temp_3d), "--gen3d"])
+            if _is_zero_molecule_obabel_result(gen3d_result) or not _file_has_meaningful_content(temp_3d):
+                raise ValueError(f"OpenBabel failed to generate 3D conformer for: {input_path}")
 
         # Explicit hydrogens are added without -p: the pH-model charge state is not re-derived.
         hydrogens_added_after_ph = False
@@ -837,7 +815,7 @@ def _normalize_with_openbabel(
                 partial_charge_applied = False
 
         optimized_forcefield = ""
-        for forcefield in ("MMFF94", "UFF"):
+        for forcefield in (() if had_3d else ("MMFF94", "UFF")):
             try:
                 min_result = _run_command(
                     [
@@ -870,8 +848,8 @@ def _normalize_with_openbabel(
         "normalization_backend": "openbabel",
         "source_file": str(input_path),
         "normalized_sdf": str(output_sdf),
-        "had_3d_input": False,
-        "generated_3d": True,
+        "had_3d_input": had_3d,
+        "generated_3d": not had_3d,
         "state_source": PROTONATION_PH_MODEL,
         "protonation_ph": protonation_ph,
         "protonation_step_ran": True,
@@ -895,28 +873,18 @@ def normalize_ligand_to_sdf(
 ) -> Dict[str, object]:
     source = Path(input_path).expanduser().resolve()
     destination = Path(output_sdf).expanduser().resolve()
-    errors: list[str] = []
-
-    # Enforce a single OpenBabel-first 3D normalization path across engines.
+    if source.suffix.lower() == ".pdb":
+        # D4 (Lead, Spec 035): PDB coordinates do not establish bond orders, charges or stereochemistry.
+        raise ValueError("PDB coordinates do not establish ligand chemistry; provide an authoritative SDF with bond orders, charges and stereochemistry")
+    # D3 (Lead, Spec 035): a failed pH step refuses the ligand. The RDKit fallback applied no pH
+    # model and is removed; there is no neutral substitute. ``require_ph_model`` is kept for callers.
     try:
         return _normalize_with_openbabel(source, destination, protonation_ph=protonation_ph)
     except Exception as exc:
-        errors.append(f"openbabel:{exc}")
-
-    if require_ph_model:
-        # The RDKit fallback applies no pH model. Under ph_model the ligand is refused, not left neutral.
         raise ProtonationStateError(
             "ph_model_unavailable",
-            "; ".join(errors) + ". The pH model did not run, so the ligand was not prepared.",
-        )
-    payload = _normalize_with_rdkit(source, destination)
-    payload["fallback_reasons"] = errors
-    payload["protonation_ph"] = protonation_ph
-    payload["state_source"] = "rdkit_fallback_no_ph_model"
-    payload["protonation_step_ran"] = False
-    payload["protonation_applied"] = False
-    payload["output_state"], payload["output_state_error"] = _try_measure_ligand(destination)
-    return payload
+            f"openbabel:{exc}. The pH model did not run, so the ligand was not prepared.",
+        ) from exc
 
 
 def _prepare_with_meeko(input_sdf: Path, output_pdbqt: Path) -> None:
@@ -966,6 +934,9 @@ def prepare_ligand_for_vina_family(input_path: Path, output_pdbqt: Path, force: 
     source = Path(input_path).expanduser().resolve()
     destination = Path(output_pdbqt).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.suffix.lower() == ".pdb":
+        # D4 (Lead, Spec 035): prepare ligands from authoritative SDF chemistry, never inferred PDB connectivity.
+        raise ValueError("Prepare ligands from authoritative SDF chemistry, not inferred PDB connectivity")
 
     selected_profile = _selected_profile()
     selected_engines = _selected_engines()
@@ -1321,7 +1292,8 @@ def validate_ligand_preparation_output_contract(summary: Dict[str, object]) -> D
             if backend not in {"openbabel", "rdkit", "rdkit_as_input", "rdkit_explicit_state"}:
                 errors.append(f"unexpected normalization backend: {backend or 'missing'}")
             if backend == "rdkit":
-                warnings.append("normalization used RDKit fallback instead of Open Babel")
+                # D3 (Lead, Spec 035): the RDKit fallback is removed, so its label is a contract failure.
+                errors.append("normalization used the RDKit fallback, which is refused (D3); use Open Babel with the pH model")
 
     # Spec 034 R2b: protonation_applied must come with a pH step and a measured state.
     protonation = summary.get("protonation") if isinstance(summary.get("protonation"), dict) else {}
