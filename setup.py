@@ -54,14 +54,18 @@ setup(
     },
     entry_points={
         "console_scripts": [
+            # Supported: the workflow CLI (python main.py ...).
             "pdb-prepare-wizard=workflow.cli:main",
             "pdb-wizard-workflow=workflow.cli:main",
             "pdb-wizard-interactive=workflow.interactive:run_interactive_workflow",
-            "pdb-wizard-legacy-interactive=interactive_pipeline:run_interactive_pipeline",
+            # Deprecated shims (Spec 038 R1): print a notice naming the main.py command and forward to it,
+            # or refuse clearly. Kept for one release. See workflow/legacy_entrypoints.py and USAGE.md.
+            "pdb-wizard-legacy-interactive=interactive_pipeline:main",
             "pdb-wizard-cli=cli_pipeline:main",
             "pdb-wizard-batch=batch_pdb_preparation:main",
-            "pdb-wizard-prepare-docking=docking.cli:prepare_docking_main",
-            "pdb-wizard-dock=docking.cli:dock_main",
+            "pdb-wizard-prepare-docking=workflow.legacy_entrypoints:prepare_docking",
+            "pdb-wizard-dock=workflow.legacy_entrypoints:dock",
+            # Not converted yet: second post-docking path, Spec 038 R3 / T004 (owned by post_docking_analysis).
             "post-docking-analysis=post_docking_analysis.cli:main",
         ],
     },

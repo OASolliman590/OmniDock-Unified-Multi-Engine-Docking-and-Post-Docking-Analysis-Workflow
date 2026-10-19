@@ -601,52 +601,12 @@ class BatchPDBPreparationPipeline:
             print(f"⚠️  Failed to generate batch report: {e}")
 
 
-def main():
-    """
-    Main function for command-line usage
-    """
-    parser = argparse.ArgumentParser(
-        description="Batch PDB Preparation Pipeline",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process PDBs using YAML configuration
-  python batch_pdb_preparation.py -c pdb_batch_config.yaml
-  
-  # Process PDBs using TXT configuration
-  python batch_pdb_preparation.py -c pdb_batch_config.txt
-  
-  # Specify output directory
-  python batch_pdb_preparation.py -c pdb_batch_config.yaml -o batch_results
-        """
-    )
-    
-    parser.add_argument('-c', '--config', type=str, required=True,
-                       help='Configuration file (YAML or TXT format)')
-    parser.add_argument('-o', '--output', type=str, default='batch_docking_preparation',
-                       help='Output directory (default: batch_docking_preparation)')
-    parser.add_argument('-v', '--verbose', action='store_true',
-                       help='Enable verbose output')
-    
-    args = parser.parse_args()
-    
-    try:
-        # Initialize batch pipeline
-        batch_pipeline = BatchPDBPreparationPipeline(args.config, args.output)
-        
-        # Run batch processing
-        results = batch_pipeline.run_batch_processing()
-        
-        # Exit with appropriate code
-        sys.exit(0 if results.get("successful", 0) > 0 else 1)
-        
-    except KeyboardInterrupt:
-        print("\n\n⚠️  Batch processing interrupted by user")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
-        sys.exit(1)
+def main(argv=None):
+    """Deprecated (Spec 038 R1): forwards to `python main.py pdb batch`; see workflow/legacy_entrypoints.py."""
+    from workflow.legacy_entrypoints import legacy_batch
+
+    return legacy_batch(argv)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

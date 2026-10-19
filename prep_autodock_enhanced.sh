@@ -7,6 +7,11 @@ set -euo pipefail
 # This script prepares ligands and receptors for AutoDock Vina with advanced
 # features including comprehensive error handling,
 # and flexible input/output configurations.
+#
+# NOT A USER ENTRY POINT (Spec 038 R1). It is the internal backend that
+# autodock_preparation.AutoDockPreparationPipeline runs with a configuration file it
+# writes itself. Users run `python main.py pdb prepare-protein|prepare-ligand|prepare-both`.
+# Do not run it by hand and do not add it to the console scripts.
 # =============================================================================
 
 # ── Configuration and Setup ────────────────────────────────────────────────

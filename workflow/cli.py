@@ -192,15 +192,19 @@ def build_parser() -> argparse.ArgumentParser:
         description="Omni-DockForge unified workflow CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  python main.py workflow init --project-dir docking_project
-  python main.py workflow interactive
-  python main.py pdb run -p 7CMD -o results/
-  python main.py prep project --prepared-proteins receptors_prep --prepared-ligands ligands_prep --excel multi_pdb_analysis.xlsx --pair-mode protein-based --output docking_project/
-  python main.py dock run --project-dir docking_project --engines gnina,vina,smina,autodock4 --dry-run
+Single path (one target, one ligand; see USAGE.md):
+  python main.py workflow init --project-dir docking_project --layout-profile canonical --engines vina
+  python main.py workflow protonation-policy --project-dir docking_project --receptor-ph 7.4 --receptor-force-field AMBER --ligand-policy ph_model --ligand-ph 7.4
+  python main.py pdb prepare-protein --receptors-input raw/receptors --receptors-output docking_project/prepared_proteins --force-field AMBER --ph 7.4
+  python main.py pdb prepare-ligand --ligands-input raw/ligands --ligands-output docking_project/prepared_ligands --force-field AMBER --ph 7.4
+  python main.py prep pairlist --project-dir docking_project --mode cocrystal_only --prepared-proteins docking_project/prepared_proteins --prepared-ligands docking_project/prepared_ligands --excel docking_project/proteins_raw/multi_pdb_analysis.xlsx
+  python main.py prep project --project-dir docking_project --pairlist-file docking_project/pairlist.csv --prepared-proteins docking_project/prepared_proteins --prepared-ligands docking_project/prepared_ligands --excel docking_project/proteins_raw/multi_pdb_analysis.xlsx --engines vina --asset-mode symlink
+  python main.py dock run --project-dir docking_project --engines vina --seed 42 --dry-run
   python main.py analyze comparative --project-dir docking_project
-  python main.py analyze clean
-  python main.py analyze stage rmsd --project-dir docking_project --engine vina
+  python main.py analyze md-inputs --project-dir docking_project --engine vina
+
+Many proteins and ligands: the same sequence, with per-entity protonation overrides
+(workflow protonation-policy --receptor NAME / --ligand NAME). See USAGE.md.
         """,
     )
     subparsers = parser.add_subparsers(dest="group")
@@ -297,6 +301,14 @@ Examples:
     )
     workflow_protonation.add_argument(
         "--replace", action="store_true", help="Replace a stored value that differs (otherwise a difference is refused)",
+    )
+    workflow_protonation.add_argument(
+        "--clear-receptor", metavar="NAME",
+        help="Remove the stored override for this receptor; it then inherits the project default. A prepared receptor whose policy hash changed is prepared again",
+    )
+    workflow_protonation.add_argument(
+        "--clear-ligand", metavar="NAME",
+        help="Remove the stored override for this ligand; it then inherits the project default. A prepared ligand whose policy hash changed is prepared again",
     )
     workflow_jump.add_argument("--pair-allowlist", help="Optional TXT/CSV file restricting promotion to explicit pair tags or receptor/site_id/ligand rows")
     workflow_jump.add_argument(
@@ -1292,11 +1304,45 @@ def _run_protonation_policy_command(args: argparse.Namespace) -> int:
     from docking.project_layout import (
         ProtonationPolicyConflict,
         ProtonationPolicyError,
+        clear_protonation_override,
         set_protonation_override,
         set_protonation_policy,
     )
 
     project = Path(args.project_dir).expanduser().resolve()
+    if args.clear_receptor or args.clear_ligand:
+        if args.clear_receptor and args.clear_ligand:
+            print("protonation_policy_not_stored: give --clear-receptor or --clear-ligand per call, not both", file=sys.stderr)
+            return 2
+        set_flags = [
+            flag
+            for flag, value in (
+                ("--receptor", args.receptor),
+                ("--ligand", args.ligand),
+                ("--receptor-ph", args.receptor_ph),
+                ("--receptor-force-field", args.receptor_force_field),
+                ("--ligand-policy", args.ligand_policy),
+                ("--ligand-ph", args.ligand_ph),
+                ("--ligand-state-map", args.ligand_state_map),
+                ("--ligand-smiles", args.ligand_smiles),
+                ("--ligand-net-charge", args.ligand_net_charge),
+            )
+            if value is not None
+        ]
+        if set_flags:
+            print(
+                f"protonation_policy_not_stored: --clear-receptor/--clear-ligand cannot be combined with {', '.join(set_flags)}",
+                file=sys.stderr,
+            )
+            return 2
+        kind, name = ("receptor", args.clear_receptor) if args.clear_receptor else ("ligand", args.clear_ligand)
+        try:
+            cleared = clear_protonation_override(project, kind=kind, name=name)
+        except (ProtonationPolicyError, ValueError, OSError) as exc:
+            print(f"protonation_policy_not_stored: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps({"cleared": cleared, "manifest_project": str(project)}, indent=2))
+        return 0
     if args.receptor and args.ligand:
         print("protonation_policy_not_stored: give --receptor or --ligand per call, not both", file=sys.stderr)
         return 2

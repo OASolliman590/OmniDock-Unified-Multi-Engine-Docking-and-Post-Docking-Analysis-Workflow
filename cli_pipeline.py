@@ -24,6 +24,7 @@ from core_pipeline import (
     excel_cell_value,
     extract_residue_level_coordinates,
 )
+from docking.preparation.excel_export import add_to_excel_workbook  # Spec 038 R2: shared writer
 
 if EXCEL_AVAILABLE:
     from openpyxl import Workbook
@@ -360,42 +361,6 @@ def run_single_pdb_cli(pipeline: MolecularDockingPipeline, pdb_id: str,
         print(f"❌ Analysis failed for {pdb_id}: {e}")
         return False
 
-def add_to_excel_workbook(workbook, pdb_id, results):
-    """Upsert results into the Summary sheet by PDB ID."""
-    try:
-        # Create or get worksheet
-        if "Summary" not in workbook.sheetnames:
-            ws = workbook.create_sheet("Summary")
-            # Add headers
-            headers = ["PDB_ID", "Property", "Value"]
-            ws.append(headers)
-            
-            # Style headers
-            for cell in ws[1]:
-                    cell.font = Font(bold=True)
-                    cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
-                    cell.alignment = Alignment(horizontal="center")
-        else:
-            ws = workbook["Summary"]
-
-        normalized_pdb = str(pdb_id).strip().upper()
-
-        # Replace prior entries for this PDB so reruns overwrite stale values.
-        for row_idx in range(ws.max_row, 1, -1):
-            cell_value = ws.cell(row=row_idx, column=1).value
-            existing_pdb = str(cell_value).strip().upper() if cell_value is not None else ""
-            if existing_pdb == normalized_pdb:
-                ws.delete_rows(row_idx, 1)
-        
-        # Add results. Dict values are written as JSON text (Spec 036 R6).
-        for key, value in results.items():
-            ws.append([normalized_pdb, key, excel_cell_value(value)])
-        centre_method = centre_method_from_provenance(results.get("binding_site_center_provenance"))
-        if centre_method:
-            ws.append([normalized_pdb, "binding_site_center_method", centre_method])
-        
-    except Exception as e:
-        print(f"⚠️  Failed to add results to Excel: {e}")
 
 def create_sample_config():
     """Create a sample configuration file."""
@@ -424,99 +389,15 @@ def create_sample_config():
     print(f"✓ Sample configuration created: {config_path}")
     return config_path
 
-def main():
-    """Main CLI function."""
-    parser = argparse.ArgumentParser(
-        description="Omni-DockForge - Legacy PDB CLI compatibility mode",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Analyze single PDB
-  python cli_pipeline.py -p 7CMD
-  
-  # Analyze multiple PDBs
-  python cli_pipeline.py -p "7CMD,6WX4,1ABC"
-  
-  # Use configuration file
-  python cli_pipeline.py -p 7CMD -c config.json
-  
-  # Read PDB list from file
-  python cli_pipeline.py -p pdb_list.txt
-  
-  # Generate sample config
-  python cli_pipeline.py --create-config
-        """
-    )
-    
-    parser.add_argument('-p', '--pdbs', type=str,
-                       help='PDB ID(s) - single ID, comma-separated list, or file path')
-    parser.add_argument('-o', '--output', type=str, default='pipeline_output',
-                       help='Output directory (default: pipeline_output)')
-    parser.add_argument('-c', '--config', type=str,
-                       help='Configuration file (JSON format)')
-    parser.add_argument('--create-config', action='store_true',
-                       help='Create a sample configuration file')
-    parser.add_argument('-v', '--verbose', action='store_true',
-                       help='Enable verbose output')
-    
-    args = parser.parse_args()
-    
-    # Create sample config if requested
-    if args.create_config:
-        create_sample_config()
-        return
-    
-    # Validate arguments
-    if not args.pdbs:
-        parser.error("PDB ID(s) are required. Use -p/--pdbs or --create-config")
-    
-    # Load configuration
-    config = {}
-    if args.config:
-        config = load_config(args.config)
-    
-    # Parse PDB list
-    pdb_list = parse_pdb_list(args.pdbs)
-    if not pdb_list:
-        print("❌ No valid PDB IDs provided")
-        sys.exit(1)
-    
-    print(f"✓ Found {len(pdb_list)} PDB(s) to process: {', '.join(pdb_list)}")
-    
-    # Initialize pipeline
-    pipeline = MolecularDockingPipeline(args.output)
-    output_dir = Path(args.output)
-    
-    # Run analysis
-    print(f"\n🚀 Starting Omni-DockForge legacy PDB CLI")
-    print(f"Output directory: {output_dir.absolute()}")
-    print(f"PDBs to process: {len(pdb_list)}")
-    
-    results = run_batch_analysis(pipeline, pdb_list, config, output_dir)
-    
-    # Summary
-    successful = sum(1 for success in results.values() if success)
-    failed = len(results) - successful
-    
-    print(f"\n📊 Analysis Summary:")
-    print(f"   Total PDBs: {len(results)}")
-    print(f"   Successful: {successful}")
-    print(f"   Failed: {failed}")
-    
-    if failed > 0:
-        print(f"\n❌ Failed PDBs:")
-        for pdb_id, success in results.items():
-            if not success:
-                print(f"   - {pdb_id}")
-    
-    print(f"\n✓ CLI analysis completed!")
-    
-    # Exit with appropriate code
-    sys.exit(0 if failed == 0 else 1)
+def main(argv=None):
+    """Deprecated (Spec 038 R1): forwards to `python main.py pdb run`; see workflow/legacy_entrypoints.py."""
+    from workflow.legacy_entrypoints import legacy_cli
+
+    return legacy_cli(argv)
 
 if __name__ == "__main__":
     try:
-        main()
+        raise SystemExit(main())
     except KeyboardInterrupt:
         print("\n\n⚠️  Analysis interrupted by user")
         sys.exit(1)

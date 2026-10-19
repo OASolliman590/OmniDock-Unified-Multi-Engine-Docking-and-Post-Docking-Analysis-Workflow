@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test for the unified docking pipeline CLI."""
+"""End-to-end smoke test for the unified docking pipeline CLI.
+
+Run: python test/test_pipeline.py  (also imported by test/test_dockforge_smoke.py).
+"""
 
 from __future__ import annotations
 
@@ -14,7 +17,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 ENGINES: List[str] = ["gnina", "vina", "smina", "autodock4"]
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parents[1]  # moved under test/ (Spec 038 R1)
 
 RECEPTOR_PDBQT = """\
 ATOM      1  N   ALA A   1      -0.500   0.000   0.000  1.00  0.00           N

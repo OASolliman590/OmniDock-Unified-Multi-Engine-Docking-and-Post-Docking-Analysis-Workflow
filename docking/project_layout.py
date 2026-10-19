@@ -1101,6 +1101,47 @@ def set_protonation_override(
     return record
 
 
+def clear_protonation_override(project_root: Path, *, kind: str, name: object) -> Dict[str, object]:
+    """Remove a stored receptor or ligand override so the entity inherits the project default.
+
+    The effective policy and its hash change when the override differed from the project default. The
+    prepared-reuse guard compares the stored hash with the current one, so such an entity is reported stale
+    and prepared again. Clearing a name with no stored override is refused.
+    """
+    import json
+
+    if kind not in {"receptor", "ligand"}:
+        raise ValueError(f"unknown protonation entity kind: {kind!r}")
+    root = Path(project_root).expanduser().resolve()
+    key = entity_policy_key(name)
+    if not key:
+        raise ValueError("protonation_override_name_required")
+    section = PROTONATION_RECEPTOR_OVERRIDES if kind == "receptor" else PROTONATION_LIGAND_OVERRIDES
+    block = load_protonation_policy(root) or {}
+    overrides = dict(block.get(section) or {})
+    if key not in overrides:
+        raise ProtonationPolicyError("protonation_override_missing", f"{kind} {key} has no stored override to clear")
+    policy_hash_before = resolve_entity_protonation(root, kind, key)["policy_hash"]
+    removed = overrides.pop(key)
+    file_path = _manifest_file_for_update(root)
+    if file_path is None:
+        raise FileNotFoundError(f"No project manifest found under {root}; run workflow init first.")
+    payload = json.loads(file_path.read_text(encoding="utf-8"))
+    saved = dict(payload.get(PROTONATION_POLICY_KEY) or {})
+    saved[section] = overrides
+    payload[PROTONATION_POLICY_KEY] = saved
+    file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    after = resolve_entity_protonation(root, kind, key)
+    return {
+        "entity_kind": kind,
+        "entity": key,
+        "removed": removed,
+        "policy_level_after": after["policy_level"],
+        "policy_hash_before": policy_hash_before,
+        "policy_hash_after": after["policy_hash"],
+    }
+
+
 def ensure_pairlist_stub(project_root: Path, layout_profile: Optional[str] = None) -> Path:
     path = pairlist_path(project_root, layout_profile)
     if path.exists():

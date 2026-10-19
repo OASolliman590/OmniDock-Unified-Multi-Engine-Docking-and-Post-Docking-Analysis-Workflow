@@ -20,49 +20,15 @@ from docking.models import (
     resolve_effective_ligand_preparation_profile,
     validate_ligand_preparation_profile,
 )
+from docking.preparation.preparation_config import (  # noqa: F401  (re-exported, Spec 038 R2)
+    PreparationConfig,
+    profile_requires_autodocktools,
+)
 from docking.preparation.ligand_quality import validate_prepared_ligand_pdbqt
 from docking.preparation.ligand_preparation import prepare_ligand_for_vina_family
 
 
-def profile_requires_autodocktools(profile: str, selected_engines: Optional[List[str]] = None) -> bool:
-    effective = resolve_effective_ligand_preparation_profile(profile, selected_engines)
-    if effective in {"autodocktools_only", "openbabel_autodocktools", "openbabel_meeko_autodock"}:
-        return True
-    return False
 
-@dataclass
-class PreparationConfig:
-    """Configuration for AutoDock preparation"""
-    ligands_input: str
-    receptors_input: str
-    ligands_output: str
-    receptors_output: str
-    # Spec 034 R3: no silent pH or force field. Each is an explicit value with its source
-    # ("user_entered" from CLI/prompt, "config_file" from an explicit configuration value).
-    force_field: Optional[str] = None
-    force_field_source: Optional[str] = None
-    ph: Optional[float] = None
-    ph_source: Optional[str] = None
-    # Spec 034 R2c: per-ligand protonation policy and the explicit state map (CSV) when required.
-    protonation_policy: str = "ph_model"
-    protonation_state_map: str = ""
-    # Strict receptor preparation refuses permissive bad-residue deletion (Spec 033).
-    allow_bad_res: bool = False
-    default_altloc: str = "A"
-    # Spec 033 R2c (Scientific Lead, option A): PDB2PQR protonation at pH/force field.
-    receptor_use_pdb2pqr: bool = True
-    validate_outputs: bool = True
-    min_file_size_kb: int = 1
-    ligand_preparation_backend: str = "engine_aware_full"  # backward-compatible field
-    ligand_preparation_profile: str = "engine_aware_full"
-    selected_engines: List[str] = None
-    autodocktools_prepare_ligand4: str = ""
-    autodocktools_prepare_receptor4: str = ""
-    autodocktools_python: str = ""
-    # Spec 037 R1: the project whose layered protonation policy (receptor and ligand overrides) applies.
-    project_dir: str = ""
-    # Spec 037 R4a: prepare every entity again, even when its existing output is reusable.
-    force: bool = False
 
 class AutoDockPreparationPipeline:
     """
@@ -625,101 +591,11 @@ class AutoDockPreparationPipeline:
         
         return recommendations
 
-def main():
-    """Main function for command-line usage"""
-    import argparse
-    import tempfile
-    
-    parser = argparse.ArgumentParser(description="Enhanced AutoDock Preparation Pipeline")
-    parser.add_argument("--config", help="Configuration file path")
-    parser.add_argument("--ligands-input", help="Input directory or file for ligands")
-    parser.add_argument("--receptors-input", help="Input directory or file for receptors")
-    parser.add_argument("--ligands-output", help="Output directory for prepared ligands")
-    parser.add_argument("--receptors-output", help="Output directory for prepared receptors")
-    parser.add_argument("--force-field", choices=["AMBER", "CHARMM", "PARSE", "TYL06", "PEOEPB", "SWANSON"], default=None,
-                        help="PDB2PQR force field (required to run; suggested: AMBER)")
-    parser.add_argument("--ph", type=float, default=None, help="PDB2PQR pH (required to run; suggested: 7.4)")
-    parser.add_argument("--protonation-policy", choices=["ph_model", "explicit_state", "as_input"], default="ph_model",
-                        help="Per-ligand protonation policy (Spec 034)")
-    parser.add_argument("--protonation-state-map", default="", help="CSV: ligand,smiles,net_charge (explicit_state)")
-    parser.add_argument(
-        "--ligand-profile",
-        default="engine_aware_full",
-        help=(
-            "Ligand preparation profile: "
-            "openbabel_only, meeko_only, autodocktools_only, openbabel_meeko, "
-            "openbabel_meeko_autodock, openbabel_autodocktools, engine_aware_full"
-        ),
-    )
-    parser.add_argument("--selected-engines", default="", help="Comma-separated engines for engine-aware profile")
-    parser.add_argument("--force", action="store_true", help="Prepare every entity again; do not reuse existing outputs (Spec 037 R4a)")
-    parser.add_argument("--create-config", action="store_true", help="Create configuration file and exit")
-    
-    args = parser.parse_args()
+def main(argv=None):
+    """Deprecated (Spec 038 R1): forwards to `python main.py pdb prepare-both`; see workflow/legacy_entrypoints.py."""
+    from workflow.legacy_entrypoints import legacy_autodock_prepare
 
-    def handle_input_path(input_path):
-        if input_path and Path(input_path).is_file():
-            temp_dir = tempfile.mkdtemp()
-            shutil.copy(input_path, temp_dir)
-            return temp_dir
-        return input_path
-
-    ligands_input = handle_input_path(args.ligands_input)
-    receptors_input = handle_input_path(args.receptors_input)
-
-    # Create configuration
-    if not args.create_config and (args.ph is None or args.force_field is None):
-        parser.error("--ph and --force-field are required; no default pH or force field is applied")
-    config = PreparationConfig(
-        ligands_input=ligands_input or "./ligands_raw",
-        receptors_input=receptors_input or "./receptors_raw",
-        ligands_output=args.ligands_output or "./ligands_prep", 
-        receptors_output=args.receptors_output or "./receptors_prep",
-        force_field=args.force_field,
-        force_field_source="user_entered" if args.force_field else None,
-        ph=args.ph,
-        ph_source="user_entered" if args.ph is not None else None,
-        protonation_policy=args.protonation_policy,
-        protonation_state_map=str(Path(args.protonation_state_map).expanduser().resolve()) if args.protonation_state_map else "",
-        ligand_preparation_profile=normalize_ligand_preparation_profile(args.ligand_profile),
-        ligand_preparation_backend=normalize_ligand_preparation_profile(args.ligand_profile),
-        selected_engines=[token.strip().lower() for token in str(args.selected_engines or "").split(",") if token.strip()],
-        force=bool(args.force),
-    )
-    
-    # Initialize pipeline
-    pipeline = AutoDockPreparationPipeline(config)
-    
-    if args.create_config:
-        config_path = pipeline.create_config_file()
-        print(f"Configuration file created: {config_path}")
-        return
-    
-    # Check dependencies
-    deps_ok, missing = pipeline.check_dependencies()
-    if not deps_ok:
-        print(f"Missing dependencies: {missing}")
-        return 1
-    
-    # Run preparation
-    success = pipeline.run_enhanced_preparation(args.config)
-    
-    if success:
-        # Analyze results
-        results = pipeline.analyze_preparation_results(
-            ligands_output_dir=config.ligands_output,
-            receptors_output_dir=config.receptors_output,
-        )
-        pipeline.generate_preparation_report(results)
-        
-        print("Preparation completed successfully!")
-        print(f"Ligands prepared: {results['ligands']['count']}")
-        print(f"Receptors prepared: {results['receptors']['count']}")
-        
-        return 0
-    else:
-        print("Preparation failed. Check logs for details.")
-        return 1
+    return legacy_autodock_prepare(argv)
 
 if __name__ == "__main__":
-    exit(main())
+    raise SystemExit(main())

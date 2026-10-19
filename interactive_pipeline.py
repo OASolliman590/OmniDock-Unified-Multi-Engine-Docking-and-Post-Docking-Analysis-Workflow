@@ -23,6 +23,7 @@ from core_pipeline import (
     centre_method_from_provenance,
     excel_cell_value,
 )
+from docking.preparation.excel_export import add_to_excel_workbook  # Spec 038 R2: shared writer
 
 if EXCEL_AVAILABLE:
     from openpyxl import Workbook
@@ -477,42 +478,6 @@ def run_single_pdb_analysis(pipeline, pdb_id, excel_workbook=None):
         print(f"\n❌ Analysis failed for PDB {pdb_id}: {e}")
         return False
 
-def add_to_excel_workbook(workbook, pdb_id, results):
-    """Upsert results into the Summary sheet by PDB ID."""
-    try:
-        # Create or get worksheet
-        if f"Summary" not in workbook.sheetnames:
-            ws = workbook.create_sheet("Summary")
-            # Add headers
-            headers = ["PDB_ID", "Property", "Value"]
-            ws.append(headers)
-            
-            # Style headers
-            for cell in ws[1]:
-                    cell.font = Font(bold=True)
-                    cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
-                    cell.alignment = Alignment(horizontal="center")
-        else:
-            ws = workbook["Summary"]
-
-        normalized_pdb = str(pdb_id).strip().upper()
-
-        # Replace prior entries for this PDB so reruns overwrite stale values.
-        for row_idx in range(ws.max_row, 1, -1):
-            cell_value = ws.cell(row=row_idx, column=1).value
-            existing_pdb = str(cell_value).strip().upper() if cell_value is not None else ""
-            if existing_pdb == normalized_pdb:
-                ws.delete_rows(row_idx, 1)
-        
-        # Add results
-        for key, value in results.items():
-            ws.append([normalized_pdb, key, excel_cell_value(value)])
-        centre_method = centre_method_from_provenance(results.get("binding_site_center_provenance"))
-        if centre_method:
-            ws.append([normalized_pdb, "binding_site_center_method", centre_method])
-        
-    except Exception as e:
-        print(f"⚠️  Failed to add results to Excel: {e}")
 
 def run_interactive_pipeline(output_dir: Optional[str] = None):
     """Run the interactive pipeline.
@@ -595,9 +560,16 @@ def run_interactive_pipeline(output_dir: Optional[str] = None):
     
     print("\n✓ Pipeline execution completed!")
 
+def main(argv=None):
+    """Deprecated (Spec 038 R1): forwards to `python main.py pdb legacy-interactive`; see workflow/legacy_entrypoints.py."""
+    from workflow.legacy_entrypoints import legacy_interactive
+
+    return legacy_interactive(argv)
+
+
 if __name__ == "__main__":
     try:
-        run_interactive_pipeline()
+        raise SystemExit(main())
     except KeyboardInterrupt:
         print("\n\n⚠️  Analysis interrupted by user")
     except Exception as e:

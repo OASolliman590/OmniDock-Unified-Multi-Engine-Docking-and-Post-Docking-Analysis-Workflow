@@ -220,69 +220,29 @@ It binds to localhost and has **no authentication** — see
 security posture. The web layer never runs pipeline stages itself; every action
 is the CLI below, launched as a tracked job.
 
-### Unified Workflow CLI
+### Unified Workflow CLI (single entry point)
 
-`main.py` now has one grouped command surface plus backward-compatible legacy aliases.
+`python main.py <group> <command>` is the only supported entry point. The console script `pdb-prepare-wizard` runs the same CLI. Run `python main.py <group> --help` for every flag. The full step-by-step path is in [USAGE.md](USAGE.md).
+
+One target and one ligand:
 
 ```bash
-# Guided workflow shell (default)
-python main.py
-python main.py interactive
-python main.py workflow interactive
-python main.py workflow init --project-dir docking_project/ --layout-profile docking_legacy
-python main.py workflow status --project-dir docking_project/
-python main.py workflow jump --project-dir docking_project/ --target analyze.stage.rmsd --engine vina
-
-# PDB functionality
-python main.py pdb collect --project-dir docking_project/ -p 7CMD
-python main.py pdb fetch -p 7CMD -o results/
-python main.py pdb run -p "7CMD,6WX4" -o results/
-python main.py pdb batch -c pdb_batch_config.yaml -o batch_results/
-# --ph and --force-field have no default (Spec 034): pass the PDB2PQR pH and force field explicitly
-python main.py pdb prepare-both \
-  --receptors-input receptors_raw/ \
-  --ligands-input ligands_raw/ \
-  --receptors-output receptors_prep/ \
-  --ligands-output ligands_prep/ \
-  --ph 7.4 --force-field AMBER \
-  --protonation-policy ph_model
-
-# Legacy aliases still work
-python main.py cli -p 7CMD
-python main.py batch -c pdb_batch_config.yaml
-python main.py prepare-docking \
-  --prepared-proteins receptors_prep/ \
-  --prepared-ligands ligands_prep/ \
-  --excel multi_pdb_analysis.xlsx \
-  --output docking_project/
-
-# Build pairlists explicitly before materialization
-python main.py prep pairlist \
-  --project-dir docking_project/ \
-  --mode cocrystal_plus_all
-
-# Materialize the staged docking project
-python main.py prep project \
-  --project-dir docking_project/
-
-# Docking
-python main.py dock run \
-  --project-dir docking_project/ \
-  --engines gnina,vina,smina \
-  --favorite-engine gnina
-
-# Post-docking analysis
-python main.py analyze comparative --project-dir docking_project/
-python main.py analyze favorite-engine --project-dir docking_project/ --favorite-engine vina
-python main.py analyze stage rmsd --project-dir docking_project/ --engine vina
-python main.py analyze interactions pandamap --project-dir docking_project/ --engine smina
-python main.py analyze visuals pymol --project-dir docking_project/ --engine gnina
-
-# Installed commands (after pip install -e .)
-pdb-prepare-wizard
-pdb-wizard-workflow workflow interactive
-pdb-wizard-interactive
+python main.py workflow init --project-dir docking_project --layout-profile canonical --engines vina
+python main.py workflow protonation-policy --project-dir docking_project --receptor-ph 7.4 --receptor-force-field AMBER --ligand-policy ph_model --ligand-ph 7.4
+python main.py pdb prepare-protein --receptors-input raw/receptors --receptors-output docking_project/prepared_proteins --force-field AMBER --ph 7.4
+python main.py pdb prepare-ligand --ligands-input raw/ligands --ligands-output docking_project/prepared_ligands --force-field AMBER --ph 7.4
+python main.py prep pairlist --project-dir docking_project --mode cocrystal_only --prepared-proteins docking_project/prepared_proteins --prepared-ligands docking_project/prepared_ligands --excel docking_project/proteins_raw/multi_pdb_analysis.xlsx
+python main.py prep project --project-dir docking_project --pairlist-file docking_project/pairlist.csv --prepared-proteins docking_project/prepared_proteins --prepared-ligands docking_project/prepared_ligands --excel docking_project/proteins_raw/multi_pdb_analysis.xlsx --engines vina --asset-mode symlink
+python main.py dock run --project-dir docking_project --engines vina --seed 42 --dry-run
+python main.py analyze comparative --project-dir docking_project
+python main.py analyze md-inputs --project-dir docking_project --engine vina
 ```
+
+Many proteins and many ligands use the same sequence, with per-entity protonation overrides: `workflow protonation-policy --receptor NAME ...` and `--ligand NAME ...`. See [USAGE.md](USAGE.md#many-proteins-and-many-ligands).
+
+The `pdb`, `prep`, `dock` and `analyze` groups each have `--help`. The `interactive` shell is `python main.py workflow interactive`, and the web UI is `python main.py webui`.
+
+Legacy names still run for one release. `pdb-wizard-cli`, `pdb-wizard-batch`, `pdb-wizard-legacy-interactive`, `pdb-wizard-prepare-docking` and `pdb-wizard-dock` print a deprecation notice with the `main.py` command, then forward to it (or refuse clearly when no equivalent exists). `prep_autodock_enhanced.sh` is the internal shell backend, not a user entry point. The table is in [USAGE.md](USAGE.md#deprecated-commands-kept-for-one-release).
 
 The new workflow shell can resume or inspect state from `.workflow/state.json`, jump directly to specific functions, and continue from docking preparation into docking execution and post-docking analysis without switching entrypoints.
 
@@ -394,13 +354,12 @@ Create a TXT configuration file (e.g., `pdb_batch_config.txt`):
 
 ```bash
 # Process PDBs using YAML configuration
-python main.py batch -c pdb_batch_config.yaml
+python main.py pdb batch -c pdb_batch_config.yaml
 
 # Process PDBs using TXT configuration
-python main.py batch -c pdb_batch_config.txt -o batch_results/
+python main.py pdb batch -c pdb_batch_config.txt -o batch_results/
 
-# Direct module usage
-python batch_pdb_preparation.py -c config.yaml -o output_dir
+# `python batch_pdb_preparation.py` and `python main.py batch` still run for one release (see USAGE.md).
 ```
 
 ### Python API Usage
@@ -433,11 +392,10 @@ if residue_analysis:
 Create a configuration file for automated processing:
 
 ```bash
-# Generate sample config
-python cli_pipeline.py --create-config
+# Run with a JSON configuration file
+python main.py pdb run -p "7CMD,6WX4" -o results/ -c config.json
 
-# Use configuration file
-python main.py cli -p "7CMD,6WX4" -c config.json
+# `--create-config` is retired: write the JSON by hand, as in the example below.
 ```
 
 Example configuration:
@@ -501,27 +459,20 @@ Preparation generates docking-ready assets and does not run PLIP.
 
 #### Command Line Usage
 
-# Create configuration file. It is written to
-# <receptors-output>/.meta/autodock_preparation/autodock_config.json (Spec 033 R3),
-# never into the current working directory.
-python autodock_preparation.py --create-config
-
-# Edit configuration file (path printed by --create-config)
-nano receptors_prep/.meta/autodock_preparation/autodock_config.json
-
-# Run preparation with custom settings
-python autodock_preparation.py \
-    --ligands-input ./ligands_raw \
+# Receptors and ligands in one call; settings are flags (no JSON file to edit)
+python main.py pdb prepare-both \
     --receptors-input ./receptors_raw \
-    --ligands-output ./ligands_prep \
+    --ligands-input ./ligands_raw \
     --receptors-output ./receptors_prep \
+    --ligands-output ./ligands_prep \
     --force-field AMBER \
     --ph 7.4 \
-    --ligand-profile engine_aware_full \
+    --ligand-backend engine_aware_full \
     --selected-engines gnina,vina,smina,autodock4
 
-# Run with bash script (the configuration path is required; logs go beside it)
-./prep_autodock_enhanced.sh receptors_prep/.meta/autodock_preparation/autodock_config.json
+# prep_autodock_enhanced.sh is the internal shell backend that the Python code calls with a
+# configuration it writes under <receptors-output>/.meta/autodock_preparation/. It is not a user
+# entry point. `python autodock_preparation.py` is a deprecated shim (see USAGE.md).
 
 #### Python API Usage
 
@@ -796,7 +747,7 @@ conda activate pdb-prepare-wizard
 pip install -e .
 
 # Run tests
-python test_pipeline.py
+python test/test_pipeline.py
 ```
 
 ## 📝 License
@@ -829,12 +780,14 @@ For issues and questions:
 
 ```
 pdb-prepare-wizard/
-├── core_pipeline.py              # Core PDB processing pipeline
-├── main.py                       # Main entry point (interactive/CLI/batch modes)
-├── interactive_pipeline.py       # Interactive user interface
-├── cli_pipeline.py              # Command-line interface
-├── batch_pdb_preparation.py     # Batch processing module
-├── autodock_preparation.py      # AutoDock Vina preparation
+├── main.py                       # The only supported entry point (python main.py <group> <command>)
+├── core_pipeline.py              # PDB processing library (binding-site and Excel helpers live in docking/preparation/)
+├── interactive_pipeline.py       # Deprecated shim: pdb legacy-interactive; legacy engine code
+├── cli_pipeline.py              # Deprecated shim: pdb run; legacy engine code
+├── batch_pdb_preparation.py     # Deprecated shim: pdb batch; batch engine code
+├── autodock_preparation.py      # Deprecated shim: pdb prepare-both; AutoDock preparation pipeline
+├── prep_autodock_enhanced.sh    # Internal shell backend (not a user entry point)
+├── docking/preparation/         # Preparation code: binding site, Excel export, preparation config
 ├── post_docking_analysis/        # Post-docking analysis module
 │   ├── pipeline.py              # Main analysis pipeline
 │   ├── affinity_analyzer.py    # Binding affinity analysis
