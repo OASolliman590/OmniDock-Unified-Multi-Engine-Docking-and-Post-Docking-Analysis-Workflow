@@ -83,7 +83,9 @@ class GninaRunner(DockingEngineRunner):
             command.extend(["--seed", str(seed)])
         if use_gpu and device not in (None, ""):
             command.extend(["--device", str(device)])
-        elif cpu not in (None, ""):
+        if not use_gpu:
+            command.append("--no_gpu")
+        if cpu not in (None, ""):
             command.extend(["--cpu", str(cpu)])
         return command
 
