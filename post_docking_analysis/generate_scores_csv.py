@@ -101,9 +101,6 @@ def parse_gnina_log(log_file: Path, pairlist_mapping: Optional[Dict[str, str]] =
     # Scheduler/runner wrapper logs are not engine output and never enter the score table (main@7fc130a).
     if log_file.name.lower().endswith(".runner.log"):
         return [], False
-    # A log that the pairlist does not list never enters the score table (O18, main@7fc130a).
-    if pairlist_mapping is not None and not matched_pairlist:
-        return [], False
 
     try:
         with open(log_file, 'r') as f:
@@ -274,10 +271,9 @@ def generate_all_scores_csv(
     empty_logs: List[str] = []
     for log_file in log_files:
         print(f"🔍 Parsing {log_file.name}...")
-        scores, matched_pairlist = parse_gnina_log(log_file, pairlist_mapping if pairlist_file else None)
+        scores, matched_pairlist = parse_gnina_log(log_file, pairlist_mapping)
         if pairlist_mapping and not matched_pairlist:
             unmatched_logs.append(log_file.name)
-            continue
         if not scores:
             empty_logs.append(log_file.name)
         all_scores.extend(scores)
