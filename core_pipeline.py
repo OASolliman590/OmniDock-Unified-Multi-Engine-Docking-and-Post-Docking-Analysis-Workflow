@@ -772,14 +772,10 @@ class MolecularDockingPipeline:
             structure = self._load_structure('protein', cleaned_pdb)
             
             # Pocket Size and Shape Analysis
-            print("📊 Analyzing pocket size and shape...")
-            results['pocket_volume_method'] = 'fixed_sphere_radius_5A_heuristic'
-            try:
-                # Geometric estimation based on interaction sphere
-                results['pocket_volume_A3'] = 4/3 * np.pi * (5.0**3)  # Assume 5Å interaction sphere
-            except Exception as e:
-                print(f"⚠️  Pocket volume analysis failed: {e}")
-                results['pocket_volume_A3'] = 'N/A'
+            # D7 (Lead decision, Spec 035): pocket volume is not evaluated; no validated physical model exists.
+            print("📊 Pocket volume: not evaluated")
+            results['pocket_volume_method'] = 'not_evaluated_no_validated_physical_model'
+            results['pocket_volume_A3'] = None
             
             # Electrostatic Potential Analysis
             print("⚡ Analyzing electrostatic potential...")
@@ -844,57 +840,14 @@ class MolecularDockingPipeline:
                 results['hydrophobic_score'] = 'N/A'
                 results['nearby_hydrophobic_residues'] = 0
             
-            # Druggability Scoring
-            print("💊 Calculating uncalibrated heuristic descriptor score...")
-            results['druggability_score_method'] = 'uncalibrated_descriptor_mean_v1'
+            # Druggability (D7, Lead decision, Spec 035): not evaluated; the descriptors above are not
+            # a calibrated druggability model.
+            print("💊 Druggability: not evaluated")
+            results['druggability_score_method'] = 'not_evaluated_no_validated_model'
             results['druggability_score_calibrated'] = False
-            try:
-                # Simple druggability scoring based on multiple factors
-                druggability_factors = []
-                
-                # Factor 1: Pocket volume (normalized)
-                if isinstance(results['pocket_volume_A3'], (int, float)):
-                    vol_score = min(1.0, results['pocket_volume_A3'] / 1000.0)
-                    druggability_factors.append(vol_score)
-                
-                # Factor 2: Hydrophobic character (normalized)
-                if isinstance(results['hydrophobic_score'], (int, float)):
-                    hydro_score = min(1.0, results['hydrophobic_score'] / 10.0)
-                    druggability_factors.append(hydro_score)
-                
-                # Factor 3: Electrostatic balance (absolute value, inverted and normalized)
-                if isinstance(results['electrostatic_score'], (int, float)):
-                    elec_score = max(0.0, 1.0 - abs(results['electrostatic_score']) / 5.0)
-                    druggability_factors.append(elec_score)
-                
-                if druggability_factors:
-                    druggability_score = np.mean(druggability_factors)
-                    results['druggability_score'] = round(druggability_score, 3)
-                    
-                    # Interpretation
-                    if druggability_score >= 0.7:
-                        interpretation = "Excellent"
-                    elif druggability_score >= 0.5:
-                        interpretation = "Good" 
-                    elif druggability_score >= 0.3:
-                        interpretation = "Moderate"
-                    else:
-                        interpretation = "Poor"
-                    
-                    results['druggability_legacy_interpretation'] = interpretation
-                    results['druggability_interpretation'] = f"Heuristic {interpretation.lower()}"
-                    print(
-                        f"✓ Heuristic descriptor score: {druggability_score:.3f} "
-                        f"({interpretation.lower()}; not calibrated druggability)"
-                    )
-                else:
-                    results['druggability_score'] = 'N/A'
-                    results['druggability_interpretation'] = 'Unknown'
-            except Exception as e:
-                print(f"⚠️  Druggability scoring failed: {e}")
-                results['druggability_score'] = 'N/A'
-                results['druggability_interpretation'] = 'Unknown'
-            
+            results['druggability_score'] = None
+            results['druggability_interpretation'] = 'Not evaluated'
+
             print("✓ Pocket analysis completed successfully")
             return results
             

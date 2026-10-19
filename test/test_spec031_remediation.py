@@ -133,14 +133,18 @@ def test_boolean_normalization_rejects_false_like_values() -> None:
 
 
 def test_pocket_outputs_disclose_heuristic_contract() -> None:
+    # Spec 035 D7 (Lead decision): pocket volume and druggability are "Not evaluated", not heuristic values.
+    # The labelled descriptor contract and its limitation statement are kept for the remaining descriptors.
     pipeline = object.__new__(MolecularDockingPipeline)
     pipeline._load_structure = lambda *_args, **_kwargs: []
     result = pipeline.analyze_pocket_properties("unused.pdb", np.array([1.0, 2.0, 3.0]))
     assert result["descriptor_contract"] == "uncalibrated_pocket_heuristics_v1"
-    assert result["pocket_volume_method"] == "fixed_sphere_radius_5A_heuristic"
-    assert result["druggability_score_method"] == "uncalibrated_descriptor_mean_v1"
+    assert result["pocket_volume_method"] == "not_evaluated_no_validated_physical_model"
+    assert result["pocket_volume_A3"] is None
+    assert result["druggability_score_method"] == "not_evaluated_no_validated_model"
     assert result["druggability_score_calibrated"] is False
-    assert result["druggability_interpretation"].startswith("Heuristic ")
+    assert result["druggability_score"] is None
+    assert result["druggability_interpretation"] == "Not evaluated"
     assert "not calibrated" in result["scientific_limitation"]
 
 
