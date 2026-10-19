@@ -89,6 +89,23 @@ def classify_reference_row(
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                     digest.update(chunk)
             source_checksums[field] = digest.hexdigest()
+    reference_frame = _cell_text(row.get("reference_frame_id"))
+    receptor_frame = _cell_text(row.get("receptor_frame_id"))
+    if flag and reference_frame and receptor_frame and reference_frame != receptor_frame:
+        # D17 (Lead decision, Spec 035): a reference from another frame is not a native reference for this
+        # receptor. Its identity and lineage are cleared, so it cannot anchor a validation.
+        return ReferenceClassification(
+            classification="unclassified",
+            is_reference=False,
+            validation_anchor_eligible=False,
+            method=REFERENCE_METHOD,
+            reason="reference_frame_differs_from_receptor",
+            normalized_flag=True,
+            identity_fields={},
+            lineage_fields={},
+            source_checksums={},
+            warning="reference_frame_differs_from_receptor",
+        )
     if flag and (identity or lineage):
         source_correspondence = bool(lineage and receptor_lineage)
         return ReferenceClassification(
