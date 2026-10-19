@@ -28,6 +28,7 @@ from .parameter_schema import (
     apply_schema_to_runtime,
     resolve_parameter_schema,
     transform_pairlist_rows,
+    validate_pairlist_geometry,
     validate_parameter_schema,
 )
 from .preflight import run_docking_preflight
@@ -770,6 +771,11 @@ def dock_main(argv=None) -> int:
             print(f"   - {issue}")
         return 1
     print(f"✅ Docking preflight passed for {len(transformed_rows)} pair(s)")
+    geometry_errors = validate_pairlist_geometry(transformed_rows)
+    if geometry_errors:
+        for issue in geometry_errors:
+            print(f"❌ {issue}")
+        return 1
 
     results = {}
     for engine in engines:
@@ -825,7 +831,8 @@ def dock_main(argv=None) -> int:
     }
     manifest["latest_pair_round"] = round_id
     save_manifest(project_dir, manifest)
-    return 0
+    # A failed engine job is a failed run, not a successful one (main@7fc130a).
+    return 1 if any(job["status"] == "failed" for result in results.values() for job in result["jobs"]) else 0
 
 
 def deploy_main(argv=None) -> int:
@@ -1045,6 +1052,11 @@ def deploy_main(argv=None) -> int:
             print(f"   - {issue}")
         return 1
     rows = transform_pairlist_rows(rows, parameter_schema)
+    geometry_errors = validate_pairlist_geometry(rows)
+    if geometry_errors:
+        for issue in geometry_errors:
+            print(f"❌ {issue}")
+        return 1
     slurm_options = {
         "time": args.slurm_time,
         "mem": args.slurm_mem,

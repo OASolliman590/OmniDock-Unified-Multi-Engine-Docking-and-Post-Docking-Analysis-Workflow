@@ -11,6 +11,7 @@ import pandas as pd
 
 from ..models import EnsembleReceptorConfig, EngineJobResult, PairlistRow, normalize_ensemble_aggregation_strategy
 from ..project_layout import ensure_engine_layout, pairlist_path, shared_ligands_dir, shared_receptors_dir
+from ..parameter_schema import validate_pairlist_geometry
 from .job_contract import completion_valid, execute_job, file_hash, validate_pose_file, write_json
 
 # Spec 036 R5b naming helpers live in post_docking_analysis.replicate_names (shared with post-docking analysis).
@@ -249,6 +250,9 @@ class DockingEngineRunner(ABC):
         pairlist_rows: List[PairlistRow],
         skip_completed: bool = False,
     ) -> List[EngineJobResult]:
+        errors = validate_pairlist_geometry(pairlist_rows)
+        if errors:
+            raise ValueError("\n".join(errors))
         jobs: List[EngineJobResult] = []
         seeds = self.replicate_seeds()
         replicate_count = len(seeds)
