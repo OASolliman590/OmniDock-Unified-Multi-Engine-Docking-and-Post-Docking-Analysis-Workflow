@@ -39,6 +39,9 @@
 | O18 | 5b12017 | revert the unlisted-log rule; keep the Spec 031 directional matching |
 | tests | a66ca7c | main's correctness test files, adapted to accepted behaviour |
 | D10, S26 | b2d70fc | cross-engine polypharmacology is not_evaluable |
+| follow-up 1 (O6, S9) | 223d270 | the DAG atlas node owns the top-pose files; output fingerprint; inputs-changed failure |
+| follow-up 2 (S18) | 4fa75b0 | pair reference fields, reference frame guard, asset_identity, sidecar copy |
+| follow-up 3 (D16) | cbec9cb | min-max and z-score groups with one finite value or zero span give NaN |
 
 Commits 74cdf82 and 5b12017 are kept on purpose: the first was a port that broke an accepted smoke contract, and the revert records why.
 
@@ -53,20 +56,20 @@ Status key: **ported**, **ported (partial)**, **present** (the branch already ha
 - **O3 `.gitignore`: ported**, plus `test/fixtures/**/.workflow/*.lock` (commit 81e5480). Without it, the lock sidecar created by fixture writes appears as untracked, because the fixture `.workflow` is re-included by a negation.
 - **O4, O5 locking and state: ported (partial).** `workflow/locking.py` verbatim. **Adaptation:** only the writers are locked (`save_state`, `update_*`, `record_step`, `update_background_task`, `record_checkpoint_metadata`). Reads are unlocked because the state file is replaced atomically. A locked read would create `.workflow/state.lock` on read-only browsing, which the accepted FR-035 test forbids (`test_webui.py::test_readonly_browsing_never_writes_into_a_project`). `list_checkpoint_metadata` is kept: the branch already sorts newest-first with an index tie-breaker.
 - **O6 artifact cache: ported (partial).** Ported: the file lock around `request`, atomic JSON writes, the content-cache-v2 key (node version, package code fingerprint, Python and dependency versions, content-hashed inputs), `optional_inputs`, missing required input fails, `False` or `status: failed` is a failure, outputs must exist and be non-empty, and output retirement to `.artifact_history`. `content_hash_inputs` is kept as a no-op for call-site compatibility.
-  - **Deferred, not ported:** the output-content fingerprint, and the "inputs changed during computation" failure. Both are blocked by one pre-existing branch defect: `_write_comparative_reports` (called by the comparative, polypharmacology and biology-correlation nodes, which run concurrently in one tier) rewrites the top-pose atlas files that `top_pose_atlas` owns. The legacy `run()` path does the same. Main's fix (`preserve_dag_atlas`) changes which atlas is final and sits in S9, which is keep_branch. **Decision needed from the Lead.**
+  - **Ported in follow-up 1 (`223d270`):** the output-content fingerprint (a cache hit needs the same inputs and the same output bytes; an entry without a fingerprint is recomputed once) and the "inputs changed during computation" failure. The `top_pose_atlas` node is the only writer of the top-pose atlas in the DAG path. It declares all five session files as outputs and writes the session and canonical roots. The comparative, polypharmacology and biology-correlation nodes depend on those files and call the writer with `preserve_dag_atlas=True`, which reads them and refuses a missing file. **Open:** the legacy `run()` path still writes the atlas through the default writer (section 5).
   - **Wiring:** `interactions` and `reports` declare their optional producers as `optional_inputs`, so the Spec 026 decoupling holds.
   - **Test adaptations:** `test/test_dockforge_smoke.py` report node declares `optional_inputs` (main's change). The parameter-invalidation check expects `validation_gate` to be a content-addressed cache hit, because `normalized_scores.csv` is byte-identical across the two methods in that fixture (verified by SHA-256).
-  - **Test status:** main's `test_cache_rejects_modified_output` and `test_input_mutation_during_computation_is_not_cached_as_success` are strict xfail (deferred, reason above).
+  - **Test status:** main's `test_cache_rejects_modified_output` and `test_input_mutation_during_computation_is_not_cached_as_success` pass (un-xfailed in `223d270`). New tests: `test/test_spec035_dag_atlas_ownership.py` (one owner, reader order, no rewrite) and `test/test_workflow_correctness.py` (directory fingerprint, entry without fingerprint, concurrent input writer).
 - **O7 latest-session shortcuts: ported.** Symlinks as directory links, no deletion of a real directory at the shortcut path, and a `LATEST_*.txt` pointer when symlinks fail. The branch's `rmtree` is removed.
 - **O8 job contract: ported.** `docking/runners/job_contract.py` verbatim (stdlib only). Planning records a protocol fingerprint, completion file, hashed inputs and executables. `run()` executes through `execute_job`. `--skip-completed` reuses a job only with a valid completion record, not merely an existing pose.
 - **O9 deployment: ported.** Executor bundling, POSIX path mapping, `_apply_allocated_resources`, job wrapper commands, and `skip_completed` only for local deployments. Spec 036 and 037 parameter records are kept.
-- **O10 runner base and Vina collector: ported (partial).** Spec 036 replicate tags, seeds and R5d warnings are kept. `accepted_pose_files` is replicate-aware. Main's `PairlistRow` reference fields (S18) are not ported.
+- **O10 runner base and Vina collector: ported (partial).** Spec 036 replicate tags, seeds and R5d warnings are kept. `accepted_pose_files` is replicate-aware. Main's `PairlistRow` reference fields (S18) are ported in `4fa75b0` (follow-up 2).
 - **O11 gnina flags: ported.** `--no_gpu` and independent `--cpu`. **Not ported:** main's pose-based collector (it replaces the accepted Spec 031 log-based `all_scores` ingestion; S-keep).
 - **O12 AutoDock4 staging: ported.** Fixed staged names in the pair directory, relative GPF/DPF names, `.12g` spacing, `parameter_file` staging, accepted-pose collection, and input hashes that include the staged copies.
 - **O13 geometry and exit codes: ported (partial).** `validate_pairlist_geometry`, finite box checks, refusal before planning, `dock` returns 1 on any failed job, and the preflight geometry and fail-closed QC errors. **Not ported:** main's `_restore_saved_protocol` (S27; D18 keeps the branch's basic-mode refusal).
 - **O14 symlink fallback: ported (partial).** The README is added. The branch's accepted status name `fallback_dir_created` is kept.
 - **O15 spreadsheet guards: ported (partial).** Duplicate PDB/property rows are refused; infinite centres become missing; site sizes, when present, are checked positive. The size columns are not added to the branch's catalogue (`center_method` is accepted, Spec 036 R6).
-- **O16 asset aliases: ported (partial).** The `_index_assets` and `_resolve_asset` ambiguity refusal, and the preference for `X_cleaned.pdbqt` over raw `X.pdbqt`. Main's `asset_identity.py` module is not ported (parallel implementation; S18).
+- **O16 asset aliases: ported (partial).** The `_index_assets` and `_resolve_asset` ambiguity refusal, and the preference for `X_cleaned.pdbqt` over raw `X.pdbqt`. `asset_identity.py` is ported in `4fa75b0` (follow-up 2). The builders keep the branch's O16 index.
 - **O17 `applymap`: present.** The branch's `_map_frame_elements` already uses `DataFrame.map` with a fallback.
 - **O18 score tables: ported (partial).** Runner-wrapper `*.runner.log` files are excluded. **Reverted (5b12017):** the unlisted-log rule, which contradicts the accepted Spec 031 directional-matching contract (an unmatched extended-name log keeps its own tag). **Not ported:** the pose-completion checks (they depend on S4) and the logging change.
 - **O19 engine detection: deferred.** Main's gnina detection depends on `pose_geometry` (S4) and `score_import` (D13). Its pairlist filter by stem would drop every replicate pose, because branch names carry Spec 036 `__repNN` suffixes. A replicate-aware version needs a Spec 022 review.
@@ -95,8 +98,8 @@ Status key: **ported**, **ported (partial)**, **present** (the branch already ha
 - **D13 score import: deferred.** Main's `score_import.py` is not ported. Its tests are xfail or absent.
 - **D14 RCSB retrieval: not ported.** `test/test_reference_chemistry.py` is skipped at module level, because all four tests need `workflow.reference_chemistry`.
 - **D15 QC group: ported (four items).** Missing AutoDock RMSD is NaN (`docking_parser`). No Vina collapse warning (smina's is kept). Receptor lines keep their record name and chain. Biology keys must be non-missing and unique, and the merge is many-to-one. **Test adapted (smoke):** the Vina solo summary assertion now requires the warning's absence.
-- **D16 legacy normalisers: ported (partial).** A missing score stays NaN. Degenerate groups keep the branch's 0.0 for finite rows. Not ported: main's 0.5 midpoint and main's grouping and winner rules (no decision covers them).
-- **D17 reference frame guard: ported, inert.** `classify_reference_row` clears a reference whose `reference_frame_id` and `receptor_frame_id` are both present and differ. The branch's pair rows do not yet carry those fields (S18), so the guard does nothing until they are produced. Checked by unit calls, not by a fixture run.
+- **D16 legacy normalisers: ported (partial).** A missing score stays NaN. Follow-up 3 (`cbec9cb`): a degenerate min-max or z-score group (one finite value, or zero span or spread) gives NaN, not 0.0 and not 0.5. `per_engine_rank` is unchanged (open question, section 5). Not ported: main's grouping and winner rules (no decision covers them).
+- **D17 reference frame guard: ported, active end to end (`4fa75b0`).** `classify_reference_row` clears a reference whose `reference_frame_id` and `receptor_frame_id` are both present and differ. Pair rows now carry those fields (S18, follow-up 2). Checked by unit calls and by `test/test_spec035_reference_frame.py`, which runs the preparation builder and then the DAG reports.
 - **D19 audit: no import.** The `audit/` directory is absent; main's findings are not imported.
 
 ### Silent-merge scientific files (inventory section 0)
@@ -126,14 +129,14 @@ Status key: **ported**, **ported (partial)**, **present** (the branch already ha
 | `test_docking_correctness.py` | `test_symlink_privilege_failure_has_usable_fallback` | status `fallback_dir_created`; README asserted | Spec 033 status name kept; O14 README |
 | `test_preparation_correctness.py` | pH-failure and missing-OpenBabel tests | expect the accepted `ProtonationStateError` (`ph_model_unavailable`, `RuntimeError`) | D3; Spec 034 |
 | `test_preparation_correctness.py` | two receptor tests | pH, `ph_source`, force field and its source supplied | Spec 033/034 accepted inputs |
-| `test_preparation_correctness.py` | `asset_identity` import | removed (S18) | parallel module not ported |
+| `test_preparation_correctness.py` | `asset_identity` import | restored (`4fa75b0`) | S18 ported |
 | `test_postdocking_correctness.py` | imports of `pose_geometry`, `compute_geometric_consensus`, `_is_better_pose` | guarded | S4, S3, S11 kept |
 
 ### Strict or non-strict xfail (contradictions kept on purpose, with reason)
 
-- **Workflow:** O6 integrity (2 tests).
-- **Docking:** S18 `PairlistRow` reference fields (1); S-keep gnina log ingestion (1).
-- **Preparation:** S21 core_pipeline (4); deferred altloc and engine-aware validation (4); deferred stale-copy refusal (1); S18 pair reference (2); S16 receptor backend (2).
+- **Workflow:** none. The two O6 tests are un-xfailed (`223d270`).
+- **Docking:** S-keep gnina log ingestion (1).
+- **Preparation:** S21 core_pipeline (4); deferred altloc and engine-aware validation (4); deferred stale-copy refusal (1); S16 receptor backend (2).
 - **Post-docking, strict:** S4 pose geometry (8); S3 geometric consensus (3); D13 score import (2); D12 legacy modes (1 test, 4 parameters); S6 redocking helpers (1 test with 2 parameters plus 1); S9 DAG and per-engine winner (7); O19 source fingerprint (1); O18 unlisted-log rule (1).
 - **Post-docking, non-strict** (mixed outcomes; some parameters pass on the branch): S2 normaliser direction (1 test, 3 parameters) and S6 invalid pose index (1 test, 2 parameters).
 - **Skipped:** `test_reference_chemistry.py` (D14).
@@ -144,13 +147,21 @@ Status key: **ported**, **ported (partial)**, **present** (the branch already ha
 - Final, measured on the code tree at a66ca7c (later commits change only this log): `pytest test/ -q -p no:cacheprovider`: **648 passed, 3 skipped, 54 xfailed, 5 xpassed, 0 failed**. The increase comes from `pytest.ini` collecting the 98 smoke contracts and from the ported test files.
 - `python test/test_dockforge_smoke.py --skip-all-engines --skip-prep-matrix`: exit **0**.
 - `python test/test_dockforge_smoke.py` (no flags): exit **0**.
+- Follow-up (after `cbec9cb`), `pytest test/ -q -p no:cacheprovider`: **674 passed, 3 skipped, 49 xfailed, 5 xpassed, 0 failed**. Contract smoke: exit **0**. Full smoke (no flags): exit **0**.
 
 ## 5. Awaiting Lead
 
-These three items are not ported. Each needs a Lead decision first.
+The three follow-up decisions in `decisions/lead-decisions-20261019.md` are ported:
 
-1. **DAG write ownership (O6, S9).** Three report nodes rewrite `top_pose_atlas` outputs. This blocks the output-content fingerprint, the changed-input failure, and main's `preserve_dag_atlas`. Two main tests stay strict xfail until it is decided.
-2. **S18 pair reference fields.** The PairlistRow `reference_frame_id` and `receptor_frame_id` fields, and main's `asset_identity` module, are not ported. Until they are, D17's guard is inert and four deferred tests stay xfail.
-3. **D16 degenerate-group midpoint.** D16 covers only missing scores (NaN). Main's 0.5 midpoint for degenerate minmax groups is not ported; the branch keeps 0.0 for finite rows in those groups.
+1. **DAG write ownership (O6, S9): done, `223d270`.** The atlas node is the only writer of the top-pose atlas in the DAG path. The report nodes read it. The output fingerprint and the inputs-changed failure are ported. Two main tests are un-xfailed.
+2. **S18 pair reference fields: done, `4fa75b0`.** `reference_frame_id`, `receptor_frame_id` and `asset_identity` are ported. The D17 guard runs end to end. Three deferred tests are enabled (one docking, two preparation).
+3. **D16 degenerate groups: done, `cbec9cb`.** A min-max or z-score group with one finite value, or zero span or spread, gives NaN. Not 0.0, not 0.5. The rank method is not named by the decision and is unchanged (item b).
+
+Open for the Lead. These were found while porting and are not decided here:
+
+a. **Legacy `MultiEngineAnalysisPipeline.run()` still writes the atlas** through the default writer path. The decision asks it to read the atlas. The DAG owner is not on that path. Legacy `run()` drops problematic ligands (`_apply_problematic_ligand_filters`, which only `run()` calls) and filters score rows by complex query after loading. The DAG applies the complex query to the pairlist at construction and never drops problematic ligands. Having the DAG produce the atlas for `run()` would therefore change its output. Choose how `run()` obtains the atlas (A: call the owner with the same filters; B: retire `run()`'s comparative step) before this changes.
+b. **D16 for `per_engine_rank` (the default method) is not changed.** A single finite value gives 1.0, and a tied group gives 0.5. The Lead's decision names the min-max case (the item was about degenerate minmax groups), so the rank method is left as it is. Decide whether the rule covers it. If it does, the change is confined to `_safe_rank_score`. It would change the default `normalized_affinity_score` for single-ligand and tied groups. That column feeds the combined score and best-pose CSVs and the atlas copy, not the v2 consensus.
+c. **`per_engine_zscore` reverses the direction.** The best binder gets 0.0 and the weakest gets 1.0 on a three-value group. The negation is applied before a min-max scale that already inverts. This is pre-existing and sits in the S2 direction item. Not changed here.
+d. **Residual concurrent writes under `reports/`.** The comparative, polypharmacology and biology-correlation nodes still call the comparative writer, which rewrites shared files under `reports/` (for example `combined_engine_scores.csv`). The polypharmacology and biology nodes run in one tier, so these writes can overlap. Only the top-pose atlas is owned by this change. No node owns the other files yet.
 
 Candidate follow-ups that no D-decision covers: O20 (ProLIF interaction chemistry) and O19 (engine detection).
