@@ -301,7 +301,7 @@ def generate_analysis_root_index(
 
     key_paths = [
         ("latest_session", latest_session, "Most recent analysis session."),
-        ("session_complexes", latest_session / "complexes", "MD-ready receptor-pose complex PDB files."),
+        ("session_complexes", latest_session / "complexes", "Receptor-pose complexes; force-field parameters and simulation topology are not generated."),
         ("session_scores", latest_session / "scores", "Per-session score tables and normalized outputs."),
         ("session_best_poses", latest_session / "best_poses", "Best-pose exports and selection tables."),
         ("session_interactions", latest_session / "interactions", "Interaction analyses (ProLIF, PandaMap, PoseView, PyMOL)."),
@@ -322,7 +322,7 @@ def generate_analysis_root_index(
         "",
         "## Open This First",
         f"- Latest session folder: `{_safe_relative(latest_session, project_dir)}`",
-        f"- MD-ready complexes: `{_safe_relative(latest_session / 'complexes', project_dir)}`",
+        f"- Receptor-pose complexes (no simulation topology): `{_safe_relative(latest_session / 'complexes', project_dir)}`",
         f"- Top-pose atlas: `{_safe_relative(analysis_dir / 'top_pose_ligand_performance', project_dir)}`",
         f"- Consolidated reports: `{_safe_relative(reports_dir, project_dir)}`",
         "",
