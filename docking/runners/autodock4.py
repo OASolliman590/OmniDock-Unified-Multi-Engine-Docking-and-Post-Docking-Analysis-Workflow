@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import shlex
 from pathlib import Path
@@ -70,8 +71,11 @@ class AutoDock4Runner(DockingEngineRunner):
 
     @staticmethod
     def _grid_points(size: float, spacing: float) -> int:
-        points = int(round(float(size) / float(spacing)))
-        return max(2, points)
+        # D2 (Lead decision, Spec 035): AutoGrid needs an even npts. Round the point count up to the
+        # next even number, so the grid covers at least the requested box; the box in Å is unchanged.
+        if not math.isfinite(float(size)) or not math.isfinite(float(spacing)) or size <= 0 or spacing <= 0:
+            raise ValueError("AutoGrid size and spacing must be finite and positive")
+        return max(2, 2 * math.ceil(float(size) / (2 * float(spacing))))
 
     @staticmethod
     def _extract_torsdof(pdbqt_file: Path) -> Optional[int]:
