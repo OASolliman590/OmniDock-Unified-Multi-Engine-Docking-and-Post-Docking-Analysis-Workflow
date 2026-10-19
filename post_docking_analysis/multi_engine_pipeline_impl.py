@@ -4671,10 +4671,7 @@ class MultiEngineAnalysisPipeline:
         summary = self._annotate_scope_columns(summary)
         summary.to_csv(output_dir / "protein_summary.csv", index=False)
         collapse_warning = ""
-        if engine == "vina":
-            rmsd = pd.to_numeric(best.get("rmsd_lb"), errors="coerce").dropna()
-            if not rmsd.empty and (rmsd == 0.0).all():
-                collapse_warning = "Potential docking collapse detected: best-pose rmsd_lb == 0.0 across all reported poses."
+        # Vina reports distance from its best mode: mode 1 is zero by definition, so no collapse warning (D15).
         if engine == "smina":
             smina_meta = (
                 (self.engine_detection_report.get("engines") or {}).get("smina", {})
@@ -4983,10 +4980,11 @@ class MultiEngineAnalysisPipeline:
             return receptor_lines
         with open(receptor_file, "r", encoding="utf-8", errors="ignore") as handle:
             for line in handle:
+                # Keep the record name and chain of each receptor line (D15, Spec 035 multi-entity).
                 if receptor_file.suffix.lower() == ".pdbqt":
-                    converted = self._pdbqt_atom_to_pdb_record(line, "ATOM  ", "A")
+                    converted = self._pdbqt_atom_to_pdb_record(line, line[:6], line[21:22] or " ")
                 else:
-                    converted = self._normalize_pdb_record(line, "ATOM  ", "A")
+                    converted = self._normalize_pdb_record(line, line[:6], line[21:22] or " ")
                 if converted:
                     receptor_lines.append(converted)
         return receptor_lines

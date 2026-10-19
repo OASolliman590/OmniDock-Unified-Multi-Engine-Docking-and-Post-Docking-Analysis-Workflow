@@ -6015,7 +6015,9 @@ def _smoke_no_valid_engine_abort_and_solo_semantics() -> None:
         best_df = pd.read_csv(output_dir / "vina" / "best_poses.csv")
         _assert("pose_diversity_metric" in best_df.columns, "Vina solo should expose pose_diversity_metric")
         summary_text = (output_dir / "vina" / "summary.txt").read_text(encoding="utf-8")
-        _assert("docking collapse" in summary_text.lower(), "Vina solo summary should warn on collapse")
+        # D15 (Lead decision, Spec 035): Vina reports distance from its best mode, so mode 1 is zero by
+        # definition. A zero best-pose rmsd_lb is not a collapse signal and must not raise a warning.
+        _assert("docking collapse" not in summary_text.lower(), "Vina solo summary must not warn on collapse for mode 1 (D15)")
     finally:
         shutil.rmtree(vina_root, ignore_errors=True)
 
