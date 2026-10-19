@@ -953,7 +953,13 @@ def run_pdb_batch(config_file: str, output_dir: str) -> WorkflowStepResult:
     root = _safe_root(output_dir=output_dir)
     pipeline = BatchPDBPreparationPipeline(config_file, output_dir)
     results = pipeline.run_batch_processing()
-    status = "completed" if results.get("successful", 0) == results.get("total", 0) else "partial"
+    successful, total = int(results.get("successful", 0) or 0), int(results.get("total", 0) or 0)
+    if total > 0 and successful == total:
+        status = "completed"
+    elif successful == 0:
+        status = "failed"  # nothing was prepared; never report this as success
+    else:
+        status = "partial"
     update_artifacts(root, batch_output_dir=str(Path(output_dir).expanduser().resolve()))
     return _result(
         "pdb.batch",

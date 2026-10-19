@@ -1749,7 +1749,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             from .execution import run_pdb_batch
 
             result = run_pdb_batch(args.config, args.output)
-            return 0 if result.status in {"completed", "partial"} else 1
+            # Any failed entry is a non-zero exit, as for failed docking jobs.
+            return 0 if result.status == "completed" else 1
         if args.pdb_command == "legacy-interactive":
             if not _has_tty():
                 return _tty_required("pdb legacy-interactive")
