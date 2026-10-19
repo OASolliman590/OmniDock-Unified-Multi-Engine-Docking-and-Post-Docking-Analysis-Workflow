@@ -390,6 +390,11 @@ def ensure_post_docking_compat_shim(project_root: Path) -> Dict[str, object]:
         except (OSError, NotImplementedError) as exc:
             try:
                 legacy.mkdir(parents=True, exist_ok=True)
+                # Without symlinks (Windows, no Developer Mode) say where outputs live (main@7fc130a).
+                (legacy / "README.txt").write_text(
+                    "Analysis outputs are in ../5-Analysis. This compatibility directory is not an output location.\n",
+                    encoding="utf-8",
+                )
                 status = "fallback_dir_created"
             except Exception:
                 status = "symlink_skipped_unsupported"
