@@ -8,6 +8,7 @@ seaborn>=0.11.0
 scikit-learn>=1.0.0
 scipy>=1.8.0
 pyyaml>=6.0
+requests>=2.31.0
 
 # Optional dependencies
 openbabel==3.2.1  # Optional strict pose extraction and md_inputs protonation/export backend; pin for provenance
