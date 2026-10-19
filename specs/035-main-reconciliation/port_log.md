@@ -38,6 +38,7 @@
 | O18 | 74cdf82 | gnina logs the pairlist does not list never enter scores (reverted next) |
 | O18 | 5b12017 | revert the unlisted-log rule; keep the Spec 031 directional matching |
 | tests | a66ca7c | main's correctness test files, adapted to accepted behaviour |
+| D10, S26 | b2d70fc | cross-engine polypharmacology is not_evaluable |
 
 Commits 74cdf82 and 5b12017 are kept on purpose: the first was a port that broke an accepted smoke contract, and the revert records why.
 
@@ -89,7 +90,7 @@ Status key: **ported**, **ported (partial)**, **present** (the branch already ha
   - **Test adapted (accepted Spec 031):** `test/test_spec031_remediation.py::test_pocket_outputs_disclose_heuristic_contract` now asserts the D7 contract.
 - **D8 redocking gate: ported.** HIGH, the only route to `validated`, now also needs coverage 1.0, at least 3 unique experimental reference complexes (keyed by PDB id, frame and reference-pose SHA-256), and pass rate at least 0.80. Unmet criteria are named in `validation_gate_reason`. The labels HIGH/MEDIUM/LOW are kept. The gate marks and does not block (Spec 036 R2 is unchanged).
 - **D9 top-pose default: already present.** Spec 037 R4b on this branch (7c3f34c) moves cross-engine raw-affinity uses to the v2 consensus rank. The default `best_affinity` is checked to be single-engine.
-- **D10 cross-engine raw comparisons: partly present, partly open.** The positive advantage gate already raises (Spec 037 R4b). The simplified pipeline's polypharmacology `not_evaluable` status (S26) is **not** present. Not in the M2 list. **STOP: needs a decision before porting.**
+- **D10 cross-engine raw comparisons: ported (S26, b2d70fc).** `_analyze_polypharmacology` in `simplified_pipeline_impl.py` writes `analysis/polypharmacology/status.json` (`not_evaluable`, reason `cross_engine_raw_score_comparison_requires_calibration`) when the best poses span more than one engine, and writes no polypharmacology table. Single-engine behaviour is unchanged. The positive advantage gate was already present (Spec 037 R4b). Test: `test/test_spec035_polypharmacology.py`. The single-engine path is not covered by a new test.
 - **D11, D12, D18 confirmations: branch kept.** Kabsch inter-engine agreement (D11). Legacy consensus modes removed (D12). Basic mode refuses explicit `--exhaustiveness` (D18). Main's atlas tests that use legacy modes are xfail (D12).
 - **D13 score import: deferred.** Main's `score_import.py` is not ported. Its tests are xfail or absent.
 - **D14 RCSB retrieval: not ported.** `test/test_reference_chemistry.py` is skipped at module level, because all four tests need `workflow.reference_chemistry`.
@@ -108,7 +109,7 @@ Status key: **ported**, **ported (partial)**, **present** (the branch already ha
 | `post_docking_analysis/docking_parser.py` (S24) | D15 ported |
 | `post_docking_analysis/enhanced_rmsd_analyzer.py` (S5) | kept (accepted Spec 036 R3d; Kabsch diagnostic) |
 | `workflow/execution.py` (S15) | D5 ported |
-| `post_docking_analysis/simplified_pipeline_impl.py` (S26) | **not ported: D10 open (see STOP)** |
+| `post_docking_analysis/simplified_pipeline_impl.py` (S26) | D10 cross-engine guard ported (b2d70fc); labelling and RMSD hunks not ported |
 
 ## 3. Test adaptations (every change to an existing accepted test)
 
@@ -144,9 +145,12 @@ Status key: **ported**, **ported (partial)**, **present** (the branch already ha
 - `python test/test_dockforge_smoke.py --skip-all-engines --skip-prep-matrix`: exit **0**.
 - `python test/test_dockforge_smoke.py` (no flags): exit **0**.
 
-## 5. Open points for the Lead (STOP)
+## 5. Awaiting Lead
 
-1. **D10 polypharmacology (S26).** Not in the M2 list, and the branch lacks the `not_evaluable` cross-engine status. Decide before porting.
-2. **DAG write ownership (O6).** Three report nodes rewrite `top_pose_atlas` outputs. Blocks the output fingerprint, the changed-input failure, and main's `preserve_dag_atlas`. Needs an S9 decision.
-3. **S18 pair reference fields.** Blocks D17 from taking effect and four deferred tests. Needs the PairlistRow reference-field decision.
-4. **O20 ProLIF chemistry and O19 detection.** Candidate follow-ups; neither is covered by a D-decision.
+These three items are not ported. Each needs a Lead decision first.
+
+1. **DAG write ownership (O6, S9).** Three report nodes rewrite `top_pose_atlas` outputs. This blocks the output-content fingerprint, the changed-input failure, and main's `preserve_dag_atlas`. Two main tests stay strict xfail until it is decided.
+2. **S18 pair reference fields.** The PairlistRow `reference_frame_id` and `receptor_frame_id` fields, and main's `asset_identity` module, are not ported. Until they are, D17's guard is inert and four deferred tests stay xfail.
+3. **D16 degenerate-group midpoint.** D16 covers only missing scores (NaN). Main's 0.5 midpoint for degenerate minmax groups is not ported; the branch keeps 0.0 for finite rows in those groups.
+
+Candidate follow-ups that no D-decision covers: O20 (ProLIF interaction chemistry) and O19 (engine detection).
