@@ -139,8 +139,10 @@ Status key: **ported**, **ported (partial)**, **present** (the branch already ha
 
 ## 4. Full suite and smokes
 
-Baseline at 7c3f34c: 475 passed, 2 skipped (before `pytest.ini` collected the smoke contracts).
-Final at a66ca7c and after: see section 5.
+- Baseline at 7c3f34c: `pytest test/` gave 475 passed, 2 skipped.
+- Final (after 644ffb6... see `git log`, at the commit that adds this line): `pytest test/ -q -p no:cacheprovider`: **648 passed, 3 skipped, 54 xfailed, 5 xpassed, 0 failed**. The increase comes from `pytest.ini` collecting the 98 smoke contracts and from the ported test files.
+- `python test/test_dockforge_smoke.py --skip-all-engines --skip-prep-matrix`: exit **0**.
+- `python test/test_dockforge_smoke.py` (no flags): exit **0**.
 
 ## 5. Open points for the Lead (STOP)
 
