@@ -110,3 +110,5 @@ docs/appraisal_20260819/
 !test/fixtures/webui_project/**/*.csv
 !test/fixtures/webui_project/.workflow/
 !test/fixtures/webui_project/.workflow/**
+# Workflow lock sidecars are created by tests that write fixture state (Spec 035 O4).
+test/fixtures/**/.workflow/*.lock
