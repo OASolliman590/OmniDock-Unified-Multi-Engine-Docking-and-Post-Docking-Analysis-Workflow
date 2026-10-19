@@ -24,13 +24,23 @@ from docking.models import (
 from docking.preparation.ligand_quality import audit_project_ligands
 from docking.preparation.receptor_preparation import PDB2PQR_FORCE_FIELDS, SUGGESTED_FORCE_FIELD, SUGGESTED_PH
 from docking.project_layout import (
+    PROTONATION_LIGAND_OVERRIDES,
+    PROTONATION_RECEPTOR_OVERRIDES,
+    STALE_PREPARATION_REASON,
+    ProtonationPolicyConflict,
+    ProtonationPolicyError,
     build_protonation_policy_block,
+    check_preparation_policy_current,
+    entity_policy_key,
     load_protonation_policy,
+    project_layout_paths,
     protonation_state_map_path,
+    resolve_entity_protonation,
+    set_protonation_override,
     set_protonation_policy,
 )
 from docking.preparation.receptor_quality import audit_project_receptors
-from docking.preparation.pairlist_builder import list_prepared_asset_names
+from docking.preparation.pairlist_builder import _preparation_record_for, list_prepared_asset_names
 from docking.project_layout import (
     deployment_root,
     detect_layout_profile,
@@ -1146,6 +1156,323 @@ def _ask_protonation_policy(questionary, project_root: Path) -> Optional[Dict[st
     except ValueError as exc:
         print(f"The protonation policy was not stored: {exc}")
         return None
+
+
+# ---------------------------------------------------------------- Spec 038 R4: protonation overrides, view and set
+
+PROTONATION_STALE_WARNING = (
+    "Changing a policy makes the affected prepared entities stale (stale_preparation_policy_changed). "
+    "A stale entity is refused until it is re-prepared, and the next preparation run re-prepares it under "
+    "the new policy."
+)
+PROTONATION_CLEAR_NOTE = (
+    "Clearing an override is not available yet: the resolver has no clear operation, so an override "
+    "can only be changed by storing new values."
+)
+
+
+def build_protonation_view(project_root: Path) -> Dict[str, object]:
+    """Spec 038 R4: the layered protonation policy as it resolves now, for display. Writes nothing.
+
+    Every value comes from ``docking.project_layout``, the resolver that ``workflow protonation-policy``
+    and the preparation steps use. This only arranges those results: the level each value came from,
+    the prepared state of each entity against its current policy hash (Spec 037 R1d), and the pair
+    status counts the pairlist step recorded in the manifest (Spec 037 R1c). The web UI calls it too.
+    """
+    root = Path(project_root).expanduser().resolve()
+    view: Dict[str, object] = {
+        "project_root": str(root),
+        "has_manifest": False,
+        "project_default": None,
+        "pair": None,
+        "receptors": [],
+        "ligands": [],
+        "stale": [],
+        "error": None,
+    }
+    try:
+        manifest = load_manifest(root)
+    except FileNotFoundError:
+        view["error"] = "no_manifest"
+        return view
+    except (OSError, ValueError) as exc:
+        view["error"] = f"manifest_unreadable: {exc}"
+        return view
+    view["has_manifest"] = True
+    block = load_protonation_policy(root) or {}
+    view["project_default"] = dict(block) or None
+    pair = manifest.get("pair_protonation")
+    if isinstance(pair, dict):
+        view["pair"] = {
+            "pairlist_file": pair.get("pairlist_file"),
+            "pair_count": pair.get("pair_count"),
+            "status_counts": dict(pair.get("status_counts") or {}),
+        }
+    layout = project_layout_paths(root)
+    view["receptors"] = _protonation_entity_rows(
+        root, "receptor", Path(layout["prepared_proteins"]), block, PROTONATION_RECEPTOR_OVERRIDES
+    )
+    view["ligands"] = _protonation_entity_rows(
+        root, "ligand", Path(layout["prepared_ligands"]), block, PROTONATION_LIGAND_OVERRIDES
+    )
+    view["stale"] = [
+        {
+            "kind": kind,
+            "name": row["name"],
+            "state": row["prepared"]["state"],
+            "reason": row["prepared"].get("reason", ""),
+            "details": row["prepared"].get("details", ""),
+        }
+        for kind, rows in (("receptor", view["receptors"]), ("ligand", view["ligands"]))
+        for row in rows
+        if row["prepared"]["state"] in {"stale", "refused"}
+    ]
+    return view
+
+
+def _protonation_entity_rows(
+    root: Path, kind: str, prepared_dir: Path, block: Dict[str, object], section: str
+) -> List[Dict[str, object]]:
+    """One row per prepared or overridden entity, resolved by the Spec 037 resolver (no write)."""
+    overrides = dict(block.get(section) or {})
+    files: Dict[str, str] = {}
+    if prepared_dir.is_dir():
+        for name in list_prepared_asset_names(prepared_dir, kind):
+            files.setdefault(entity_policy_key(name), name)
+    for key in overrides:
+        files.setdefault(str(key), str(key))
+    rows: List[Dict[str, object]] = []
+    for key in sorted(files):
+        prepared_file = prepared_dir / files[key]
+        override = dict(overrides.get(key) or {})
+        try:
+            resolution = resolve_entity_protonation(root, kind, key)
+        except ProtonationPolicyError as exc:
+            rows.append({
+                "name": key, "override": override, "policy_level": None, "field_levels": {},
+                "error": exc.reason, "error_details": exc.details,
+                "prepared": {"state": "unresolved", "reason": exc.reason, "details": exc.details},
+            })
+            continue
+        row: Dict[str, object] = {
+            "name": key,
+            "override": override,
+            "policy_level": resolution.get("policy_level"),
+            "field_levels": dict(resolution.get("field_levels") or {}),
+            "policy_hash": resolution.get("policy_hash"),
+            "error": None,
+            "error_details": "",
+            "prepared": _protonation_prepared_state(kind, prepared_file, resolution),
+        }
+        if kind == "receptor":
+            row["receptor_ph"] = resolution.get("receptor_ph")
+            row["receptor_force_field"] = resolution.get("receptor_force_field")
+        else:
+            row["ligand_policy"] = resolution.get("ligand_policy")
+            row["ligand_ph"] = resolution.get("ligand_ph")
+            row["explicit_state"] = resolution.get("explicit_state")
+        rows.append(row)
+    return rows
+
+
+def _protonation_prepared_state(kind: str, prepared_file: Path, resolution: Dict[str, object]) -> Dict[str, object]:
+    """Prepared state of one entity against its current policy hash (Spec 037 R1d). Reads only."""
+    if not prepared_file.is_file():
+        return {"state": "not_prepared", "reason": ""}
+    if resolution.get("policy_hash") is None:
+        return {"state": "no_policy", "reason": ""}
+    try:
+        record = _preparation_record_for(kind, prepared_file)
+    except ProtonationPolicyError as exc:
+        return {"state": "refused", "reason": exc.reason, "details": exc.details}
+    if record is None:
+        return {"state": "no_record", "reason": ""}
+    try:
+        check_preparation_policy_current(record, resolution)
+    except ProtonationPolicyError as exc:
+        state = "stale" if exc.reason == STALE_PREPARATION_REASON else "refused"
+        return {"state": state, "reason": exc.reason, "details": exc.details}
+    return {"state": "current", "reason": ""}
+
+
+def _print_protonation_view(view: Dict[str, object]) -> None:
+    if view.get("error") == "no_manifest":
+        print("This project has no manifest yet. Run workflow init to store a protonation policy.")
+        return
+    if view.get("error"):
+        print(f"The protonation policy could not be read: {view['error']}")
+        return
+    default = view.get("project_default")
+    print("Project default (level: project):")
+    if default:
+        ligand_ph = default.get("ligand_ph")
+        print(
+            f"  receptor pH {default.get('receptor_ph')}, force field {default.get('receptor_force_field')}; "
+            f"ligand policy {default.get('ligand_policy')}, ligand pH {ligand_ph if ligand_ph is not None else '-'}"
+        )
+    else:
+        print("  none stored (level: none)")
+    pair = view.get("pair")
+    if pair and pair.get("status_counts"):
+        counts = ", ".join(f"{status}={count}" for status, count in sorted(dict(pair["status_counts"]).items()))
+        print(f"Pair protonation status (manifest, {pair.get('pair_count')} pairs): {counts}")
+    else:
+        print("Pair protonation status: no pairlist recorded yet.")
+    _print_protonation_entities("Receptors", view.get("receptors") or [], "receptor")
+    _print_protonation_entities("Ligands", view.get("ligands") or [], "ligand")
+    for item in view.get("stale") or []:
+        print(f"  ! {item['kind']} {item['name']}: {item['reason'] or item['state']} (re-preparation required)")
+
+
+def _print_protonation_entities(title: str, rows: List[Dict[str, object]], kind: str) -> None:
+    print(f"{title}:")
+    if not rows:
+        print("  none prepared and no override stored")
+        return
+    for row in rows:
+        if row.get("error"):
+            print(f"  {row['name']}: unresolved ({row['error']}: {row.get('error_details')})")
+            continue
+        levels = dict(row.get("field_levels") or {})
+        if kind == "receptor":
+            detail = (
+                f"pH {row.get('receptor_ph')} (from {levels.get('receptor_ph', 'none')}), "
+                f"force field {row.get('receptor_force_field')} (from {levels.get('receptor_force_field', 'none')})"
+            )
+        else:
+            detail = f"policy {row.get('ligand_policy') or 'none'} (from {levels.get('ligand_policy', 'none')})"
+            if row.get("ligand_policy") == "ph_model":
+                detail += f", pH {row.get('ligand_ph')} (from {levels.get('ligand_ph', 'none')})"
+            if row.get("explicit_state"):
+                detail += f", explicit state (from {levels.get('explicit_state', 'none')})"
+        override = " [override stored]" if row.get("override") else ""
+        print(
+            f"  {row['name']}: {detail}; entity level {row.get('policy_level')}; "
+            f"prepared: {dict(row['prepared']).get('state')}{override}"
+        )
+
+
+def _protonation_stage(questionary, project_root: Path) -> None:
+    """Spec 038 R4: view the resolved protonation policy and set per-receptor or per-ligand overrides."""
+    _header("Protonation policy (project default, receptor and ligand overrides)")
+    print(PROTONATION_CLEAR_NOTE + "\n")
+    while True:
+        view = build_protonation_view(project_root)
+        _print_protonation_view(view)
+        if not view.get("has_manifest"):
+            return
+        choice = _select(
+            questionary,
+            "Protonation overrides",
+            [
+                ("set_receptor", "Set a receptor override (pH and/or force field)"),
+                ("set_ligand", "Set a ligand override (policy, pH, explicit state)"),
+            ],
+        )
+        if choice == "set_receptor":
+            _set_protonation_override_flow(questionary, project_root, "receptor")
+        elif choice == "set_ligand":
+            _set_protonation_override_flow(questionary, project_root, "ligand")
+
+
+def _parse_protonation_number(raw: str, label: str, cast):
+    try:
+        return cast(raw)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a number: {raw!r}") from exc
+
+
+def _receptor_override_fields(questionary) -> Dict[str, object]:
+    raw_ph = _optional_text(questionary, "Receptor pH override (blank keeps the project pH)")
+    force_field = _select(
+        questionary,
+        "Receptor force field override",
+        [("", "Keep the project force field")] + [(name, name) for name in PDB2PQR_FORCE_FIELDS],
+        default="",
+    )
+    fields: Dict[str, object] = {}
+    if raw_ph:
+        fields["receptor_ph"] = _parse_protonation_number(raw_ph, "Receptor pH", float)
+    if force_field:
+        fields["receptor_force_field"] = force_field
+    return fields
+
+
+def _ligand_override_fields(questionary, project_policy: Dict[str, object]) -> Dict[str, object]:
+    policy = _select(
+        questionary,
+        "Ligand policy override",
+        [
+            ("", "Keep the project policy"),
+            ("ph_model", "Open Babel pH model"),
+            ("explicit_state", "Explicit state (SMILES, net charge or a state map row)"),
+            ("as_input", "Keep the input hydrogens and charges"),
+        ],
+        default="",
+    )
+    effective = policy or str(project_policy.get("ligand_policy") or "")
+    fields: Dict[str, object] = {}
+    if policy:
+        fields["ligand_policy"] = policy
+    raw_ph = _optional_text(questionary, "Ligand pH override (blank keeps the project pH)")
+    if raw_ph:
+        fields["ligand_ph"] = _parse_protonation_number(raw_ph, "Ligand pH", float)
+    if effective == "explicit_state":
+        smiles = _optional_text(questionary, "Explicit state SMILES (blank to use a net charge or a state map)")
+        raw_charge = _optional_text(questionary, "Approved net charge (blank when SMILES is given)")
+        state_map = _optional_text(questionary, "Ligand state map CSV (blank to use SMILES or a net charge)")
+        if smiles:
+            fields["smiles"] = smiles
+        if raw_charge:
+            fields["net_charge"] = _parse_protonation_number(raw_charge, "Net charge", int)
+        if state_map:
+            fields["ligand_state_map"] = Path(state_map).expanduser()
+    return fields
+
+
+def _set_protonation_override_flow(questionary, project_root: Path, kind: str) -> None:
+    """Store one override through ``set_protonation_override``, the setter ``workflow protonation-policy`` uses."""
+    example = "1IEP" if kind == "receptor" else "STI"
+    name = _text(questionary, f"{kind.capitalize()} name (file stem, e.g. {example})", required=True)
+    project_policy = load_protonation_policy(project_root) or {}
+    try:
+        if kind == "receptor":
+            fields = _receptor_override_fields(questionary)
+        else:
+            fields = _ligand_override_fields(questionary, project_policy)
+    except ValueError as exc:
+        print(f"The override was not stored: {exc}")
+        return
+    if not fields:
+        print("Nothing to store: enter at least one value.")
+        return
+    print(PROTONATION_STALE_WARNING)
+    if not _confirm(questionary, f"Store this {kind} override for {name}?", default=True):
+        print("The override was not stored.")
+        return
+    replace = False
+    while True:
+        try:
+            record = set_protonation_override(project_root, kind=kind, name=name, replace=replace, **fields)
+        except ProtonationPolicyConflict as exc:
+            print(str(exc))
+            if replace or not _confirm(questionary, "Replace the stored value with the one you entered?", default=False):
+                print("The override was not changed.")
+                return
+            replace = True
+            continue
+        except (ProtonationPolicyError, ValueError, OSError) as exc:
+            print(f"The override was not stored: {exc}")
+            return
+        break
+    print(f"Stored the {kind} override for {name}: {json.dumps(record, sort_keys=True, default=str)}")
+    stale = build_protonation_view(project_root).get("stale") or []
+    if stale:
+        print("Now stale (re-preparation required):")
+        for item in stale:
+            print(f"  ! {item['kind']} {item['name']}: {item['reason'] or item['state']}")
+    else:
+        print("No prepared entity is stale under the new policy.")
 
 
 def _prepare_assets(questionary, project_root: Path) -> None:
@@ -3278,6 +3605,7 @@ def run_interactive_workflow(initial_root: Optional[str] = None) -> int:
                     ("dock", "Run docking"),
                     ("hpc", "Deploy, sync, and submit on HPC"),
                     ("tasks", "Show background task progress"),
+                    ("protonation", "Protonation policy: view and set receptor/ligand overrides"),
                     ("edit_names", "Edit protein/ligand display names"),
                     ("analyze", "Post-docking analysis"),
                     ("status", "Show workflow status"),
@@ -3324,6 +3652,9 @@ def run_interactive_workflow(initial_root: Optional[str] = None) -> int:
                 continue
             if stage == "tasks":
                 _show_background_tasks(active_root)
+                continue
+            if stage == "protonation":
+                _protonation_stage(questionary, active_root)
                 continue
             if stage == "edit_names":
                 _edit_display_names(questionary, active_root)

@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+{% block title %}Protonation · {{ project.name }}{% endblock %}
+{% block nav_protonation %}active{% endblock %}
+
+{% block content %}
+<h1>Protonation policy</h1>
+<p class="muted">
+  The policy as it resolves now, for each receptor and ligand, with the level each value came from:
+  project default, receptor override or ligand override. This page writes nothing. Setting a value
+  runs <span class="mono">main.py workflow protonation-policy</span> as a job, the same command the
+  interactive shell runs.
+</p>
+
+{% if view is none %}
+  <div class="alert alert-error">This project directory is no longer available.</div>
+{% elif view.error == "no_manifest" %}
+  <div class="alert alert-warn">This project has no manifest yet. Run workflow init to store a protonation policy.</div>
+{% elif view.error %}
+  <div class="alert alert-error">{{ view.error }}</div>
+{% else %}
+
+{% if view.stale %}
+<div class="alert alert-warn" id="stale-warning">
+  <strong>Stale prepared entities</strong>
+  <ul style="margin:6px 0 0 18px">
+    {% for item in view.stale %}
+    <li><span class="mono">{{ item.kind }} {{ item.name }}</span>: {{ item.reason or item.state }}</li>
+    {% endfor %}
+  </ul>
+  <div class="field-help">Re-prepare these entities under the current policy before they are paired again.</div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2 style="margin-top:0">Project default <span class="muted">(level: project)</span></h2>
+  {% if view.project_default %}
+  <table>
+    <tbody>
+      <tr><th style="width:30%">Receptor pH</th><td>{{ view.project_default.receptor_ph }}</td></tr>
+      <tr><th>Receptor force field</th><td>{{ view.project_default.receptor_force_field }}</td></tr>
+      <tr><th>Ligand policy</th><td>{{ view.project_default.ligand_policy }}</td></tr>
+      <tr><th>Ligand pH</th><td>{{ view.project_default.ligand_ph if view.project_default.ligand_ph is not none else "-" }}</td></tr>
+      <tr><th>Ligand state map</th><td class="mono">{{ view.project_default.ligand_state_map.path if view.project_default.ligand_state_map else "-" }}</td></tr>
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No project default stored (level: none).</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">Pair protonation status</h2>
+  {% if view.pair and view.pair.status_counts %}
+  <div class="field-help">From the project manifest, {{ view.pair.pair_count }} pairs.</div>
+  <table id="pair-counts">
+    <thead><tr><th>Status</th><th>Pairs</th></tr></thead>
+    <tbody>
+      {% for status, count in view.pair.status_counts.items() | sort %}
+      <tr><td class="mono">{{ status }}</td><td>{{ count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No pairlist recorded yet. The pairlist step writes these counts to the manifest.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">Receptors</h2>
+  {% if view.receptors %}
+  <table id="receptor-table">
+    <thead>
+      <tr><th>Receptor</th><th>pH</th><th>Force field</th><th>Entity level</th><th>Prepared</th></tr>
+    </thead>
+    <tbody>
+      {% for r in view.receptors %}
+      <tr>
+        <td class="mono">{{ r.name }}</td>
+        {% if r.error %}
+        <td colspan="4" class="alert-error">unresolved: {{ r.error }} {{ r.error_details }}</td>
+        {% else %}
+        <td>{{ r.receptor_ph if r.receptor_ph is not none else "-" }} <span class="muted">from {{ r.field_levels.get('receptor_ph', 'none') }}</span></td>
+        <td>{{ r.receptor_force_field or "-" }} <span class="muted">from {{ r.field_levels.get('receptor_force_field', 'none') }}</span></td>
+        <td>{{ r.policy_level }}{% if r.override %} <span class="muted">(override stored)</span>{% endif %}</td>
+        <td class="mono">{{ r.prepared.state }}{% if r.prepared.reason %}<br><span class="muted">{{ r.prepared.reason }}</span>{% endif %}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No prepared receptors and no receptor override stored.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">Ligands</h2>
+  {% if view.ligands %}
+  <table id="ligand-table">
+    <thead>
+      <tr><th>Ligand</th><th>Policy</th><th>pH</th><th>Explicit state</th><th>Entity level</th><th>Prepared</th></tr>
+    </thead>
+    <tbody>
+      {% for l in view.ligands %}
+      <tr>
+        <td class="mono">{{ l.name }}</td>
+        {% if l.error %}
+        <td colspan="5" class="alert-error">unresolved: {{ l.error }} {{ l.error_details }}</td>
+        {% else %}
+        <td>{{ l.ligand_policy or "none" }} <span class="muted">from {{ l.field_levels.get('ligand_policy', 'none') }}</span></td>
+        <td>{% if l.ligand_policy == "ph_model" %}{{ l.ligand_ph }} <span class="muted">from {{ l.field_levels.get('ligand_ph', 'none') }}</span>{% else %}-{% endif %}</td>
+        <td>{% if l.explicit_state %}<span class="mono">{{ l.explicit_state.smiles or ("net charge " ~ l.explicit_state.net_charge) }}</span> <span class="muted">from {{ l.field_levels.get('explicit_state', 'none') }}</span>{% else %}-{% endif %}</td>
+        <td>{{ l.policy_level }}{% if l.override %} <span class="muted">(override stored)</span>{% endif %}</td>
+        <td class="mono">{{ l.prepared.state }}{% if l.prepared.reason %}<br><span class="muted">{{ l.prepared.reason }}</span>{% endif %}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No prepared ligands and no ligand override stored.</div>
+  {% endif %}
+</div>
+
+<div class="card" id="override-card">
+  <h2 style="margin-top:0">Set an override</h2>
+  <div class="alert alert-warn">{{ stale_warning }}</div>
+  <div class="field-help" style="margin-bottom:12px">{{ clear_note }}</div>
+
+  {% if has_running %}
+  <div class="alert alert-warn">This project already has a job running. You will be asked to confirm.</div>
+  {% endif %}
+
+  <div class="field">
+    <label for="override-scope">Override for</label>
+    <select id="override-scope">
+      <option value="receptor">Receptor</option>
+      <option value="ligand">Ligand</option>
+    </select>
+  </div>
+
+  <form id="override-form">
+    <div id="override-fields"></div>
+
+    <div class="field">
+      <label>Command</label>
+      <pre class="mono" id="command-preview"
+           style="background:#f1efe8; border:1px solid #d9d7cf; border-radius:6px;
+                  padding:10px; white-space:pre-wrap; margin:0">—</pre>
+      <div class="field-help">This exact command runs as a job. A conflicting stored value is refused by the CLI.</div>
+    </div>
+
+    <div class="alert alert-error" id="override-errors" hidden></div>
+    <button type="submit" class="btn" id="override-run">Run this command</button>
+    <span id="override-status" class="muted" style="margin-left:10px"></span>
+  </form>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if view and not view.error %}
+<script>
+// The form is generated from the target's own schema, and the command comes from the
+// preview endpoint, so the page never builds a second version of the CLI call.
+const PID = {{ project.id | tojson }};
+const TARGET = {{ target_key | tojson }};
+const scopeEl = document.getElementById("override-scope");
+const fieldsEl = document.getElementById("override-fields");
+const previewEl = document.getElementById("command-preview");
+const errorsEl = document.getElementById("override-errors");
+const statusEl = document.getElementById("override-status");
+const form = document.getElementById("override-form");
+let schema = null;
+
+function fieldsFor(scope) {
+  return schema.fields.filter((f) => f.name.startsWith(scope) || f.name === "replace");
+}
+
+function renderScope() {
+  fieldsEl.innerHTML = "";
+  for (const f of fieldsFor(scopeEl.value)) {
+    const wrap = document.createElement("div");
+    wrap.className = "field";
+    const label = document.createElement("label");
+    label.textContent = f.label;
+    label.setAttribute("for", "f_" + f.name);
+    wrap.appendChild(label);
+
+    let input;
+    if (f.type === "select") {
+      input = document.createElement("select");
+      input.appendChild(new Option("—", ""));
+      (f.choices || []).forEach((c) => input.appendChild(new Option(c.label, c.value)));
+    } else if (f.type === "bool") {
+      input = document.createElement("input");
+      input.type = "checkbox";
+      input.style.width = "auto";
+    } else {
+      input = document.createElement("input");
+      input.type = (f.type === "int" || f.type === "float") ? "number" : "text";
+      if (f.type === "path") input.className = "mono";
+      if (f.type === "float") input.step = "any";
+    }
+    input.id = "f_" + f.name;
+    input.dataset.field = f.name;
+    input.dataset.ftype = f.type;
+    input.addEventListener("input", updatePreview);
+    input.addEventListener("change", updatePreview);
+    wrap.appendChild(input);
+    if (f.help) {
+      const help = document.createElement("div");
+      help.className = "field-help";
+      help.textContent = f.help;
+      wrap.appendChild(help);
+    }
+    fieldsEl.appendChild(wrap);
+  }
+  updatePreview();
+}
+
+function collectValues() {
+  const values = {};
+  fieldsEl.querySelectorAll("[data-field]").forEach((el) => {
+    const type = el.dataset.ftype;
+    if (type === "bool") {
+      if (el.checked) values[el.dataset.field] = true;
+    } else if (el.value !== "") {
+      values[el.dataset.field] = el.value;
+    }
+  });
+  return values;
+}
+
+let previewTimer = null;
+function updatePreview() {
+  if (!schema) return;
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    const res = await fetch(`/api/projects/${PID}/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: TARGET, values: collectValues() }),
+    });
+    const body = await res.json();
+    previewEl.textContent = res.ok ? body.command : (body.error || "—");
+  }, 120);
+}
+
+scopeEl.addEventListener("change", renderScope);
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  errorsEl.hidden = true;
+  statusEl.textContent = "launching…";
+  const send = (confirmConcurrent) => fetch(`/api/projects/${PID}/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target: TARGET, values: collectValues(), confirm_concurrent: confirmConcurrent }),
+  });
+  let res = await send(false);
+  if (res.status === 409) {
+    const body = await res.json();
+    if (!confirm(body.error + "\n\nRun it anyway?")) {
+      statusEl.textContent = "";
+      return;
+    }
+    res = await send(true);
+  }
+  const body = await res.json();
+  if (res.ok) {
+    location.href = `/job/${body.job_id}`;
+    return;
+  }
+  statusEl.textContent = "";
+  errorsEl.textContent = body.fields
+    ? Object.values(body.fields).join(" ")
+    : (body.error || "The command was not started.");
+  errorsEl.hidden = false;
+});
+
+fetch(`/api/targets/${encodeURIComponent(TARGET)}/form?project_id=${PID}`)
+  .then((res) => res.json())
+  .then((body) => { schema = body; renderScope(); });
+</script>
+{% endif %}
+{% endblock %}

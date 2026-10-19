@@ -19,6 +19,7 @@ from pathlib import Path
 # constants are read at call time. A `from` import binds the value once at
 # import and the web UI would then keep serving a stale vocabulary after
 # the terminal UI's lists change (SC-002).
+from docking.project_layout import PROTONATION_LIGAND_POLICIES
 from workflow import interactive
 
 # Interaction aliases that the pipeline reroutes to the clean contract
@@ -29,6 +30,10 @@ CLEAN_ROUTED_TARGETS = {
     "analyze.interactions.ligplot",
 }
 CLEAN_TARGET = "analyze.interactions.clean"
+# Spec 038 R4: the protonation override target (one receptor or one ligand per job).
+PROTONATION_TARGET = "workflow.protonation-policy"
+_PROTONATION_RECEPTOR_FIELDS = ("receptor_ph", "receptor_force_field")
+_PROTONATION_LIGAND_FIELDS = ("ligand_policy", "ligand_ph", "ligand_smiles", "ligand_net_charge", "ligand_state_map")
 
 
 class TargetError(Exception):
@@ -244,6 +249,29 @@ def _build_pipeline_targets() -> dict[str, LaunchTarget]:
                 FormField("favorite_engine", "Favorite engine", "select", choices=engines),
             ],
         ),
+        # Spec 038 R4: the same setter as the interactive shell (`workflow protonation-policy --receptor/--ligand`).
+        PROTONATION_TARGET: LaunchTarget(
+            key=PROTONATION_TARGET, label="Set protonation override (receptor or ligand)", group="workflow",
+            cli_path=["workflow", "protonation-policy"],
+            fields=[
+                FormField("receptor", "Receptor (file stem)", "text",
+                          help="Receptor override: give a pH and/or a force field."),
+                FormField("receptor_ph", "Receptor pH", "float"),
+                FormField("receptor_force_field", "Receptor force field", "select",
+                          choices=[{"value": v, "label": v} for v in interactive.PDB2PQR_FORCE_FIELDS]),
+                FormField("ligand", "Ligand (file stem)", "text",
+                          help="Ligand override: give a policy, pH or explicit state."),
+                FormField("ligand_policy", "Ligand policy", "select",
+                          choices=[{"value": v, "label": v} for v in PROTONATION_LIGAND_POLICIES]),
+                FormField("ligand_ph", "Ligand pH", "float"),
+                FormField("ligand_smiles", "Explicit state SMILES", "text"),
+                FormField("ligand_net_charge", "Approved net charge", "int"),
+                FormField("ligand_state_map", "Ligand state map (CSV)", "path",
+                          help="Row for this ligand is stored with the CSV's SHA-256."),
+                FormField("replace", "Replace a differing stored value", "bool", default=False,
+                          help="Without this, a value that differs from the stored override is refused."),
+            ],
+        ),
     }
 
 
@@ -320,6 +348,35 @@ def validate(key: str, values: dict) -> dict[str, str]:
                 if unknown:
                     errors[f.name] = f"Unknown engine(s): {', '.join(map(str, unknown))}"
 
+    if key == PROTONATION_TARGET:
+        errors.update(_protonation_scope_errors(values))
+    return errors
+
+
+def _protonation_scope_errors(values: dict) -> dict[str, str]:
+    """Spec 038 R4: one override per job, a receptor or a ligand, with at least one value (as the CLI takes it)."""
+
+    def given(name: str) -> bool:
+        return values.get(name) not in (None, "", [], False)
+
+    receptor, ligand = given("receptor"), given("ligand")
+    if receptor and ligand:
+        return {"ligand": "Give a receptor or a ligand override per job, not both."}
+    if not receptor and not ligand:
+        return {"receptor": "Name a receptor or a ligand (file stem)."}
+    errors: dict[str, str] = {}
+    if receptor:
+        if not any(given(name) for name in _PROTONATION_RECEPTOR_FIELDS):
+            errors["receptor"] = "A receptor override needs a pH and/or a force field."
+        for name in _PROTONATION_LIGAND_FIELDS:
+            if given(name):
+                errors[name] = "Ligand fields need a ligand override (fill in Ligand instead of Receptor)."
+    else:
+        if not any(given(name) for name in _PROTONATION_LIGAND_FIELDS):
+            errors["ligand"] = "A ligand override needs a policy, a pH or an explicit state."
+        for name in _PROTONATION_RECEPTOR_FIELDS:
+            if given(name):
+                errors[name] = "Receptor fields need a receptor override (fill in Receptor instead of Ligand)."
     return errors
 
 

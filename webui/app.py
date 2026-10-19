@@ -23,6 +23,7 @@ from . import dag as dag_mod
 from . import hpc as hpc_mod
 from . import jobs as jobs_mod
 from . import logs as logs_mod
+from . import protonation as protonation_mod
 from . import registry
 from . import state_adapter
 from . import targets as targets_mod
@@ -378,6 +379,16 @@ def create_app() -> Flask:
         except dag_mod.DagError as exc:
             return _err(str(exc), "INVALID_INPUT", 500)
 
+    # ---------- protonation (Spec 038 R4) ----------
+
+    @app.get("/api/projects/<pid>/protonation")
+    def api_project_protonation(pid: str):
+        """Read-only: the resolved protonation policy (levels, prepared state, pair counts)."""
+        project = _project_or_404(pid)
+        if not project.available:
+            return _err("Project directory is unavailable.", "PROJECT_UNAVAILABLE", 409)
+        return jsonify(protonation_mod.read_view(project.root))
+
     # ---------- hpc ----------
 
     @app.get("/api/projects/<pid>/hpc/profiles")
@@ -550,6 +561,22 @@ def create_app() -> Flask:
             dag=model,
             error=error,
             runs=artifacts_mod.find_runs(project.root) if project.available else [],
+        )
+
+    @app.get("/project/<pid>/protonation")
+    def page_protonation(pid: str):
+        """Read-only page. Overrides are set by launching the CLI job from the form (POST /api/projects/<pid>/jobs)."""
+        project = _project_or_404(pid)
+        view = protonation_mod.read_view(project.root) if project.available else None
+        return render_template(
+            "protonation.html",
+            project=project,
+            all_projects=registry.list_projects(),
+            view=view,
+            target_key=protonation_mod.TARGET,
+            stale_warning=protonation_mod.STALE_WARNING,
+            clear_note=protonation_mod.CLEAR_NOTE,
+            has_running=jobs_mod.has_running_job(pid),
         )
 
     return app
