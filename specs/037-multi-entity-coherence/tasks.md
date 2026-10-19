@@ -5,5 +5,5 @@
 - [x] **T003** (R2) Rg computed at ligand preparation and read by the box step.
 - [x] **T004** (R3) Basic-mode exhaustiveness refusal, v2 rank for top-overall summaries, GNINA summary label.
 - [x] **T005** Tests: full suite 437 passed / 2 skipped; contract and full dry-run smoke exit 0.
-- [ ] **T006** Scientific Lead review.
+- [ ] **T006** Scientific Lead review. Lead decision 2026-10-19: accept after R4 (T007) is complete.
 - [ ] **T007** (R4) Prepare-once skip, remaining raw cross-engine uses moved to v2, deploy parameter schema.

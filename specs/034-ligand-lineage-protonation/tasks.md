@@ -10,4 +10,4 @@
 - [x] **T007** (R3) Explicit receptor pH and force field entry (CLI required, interactive prompt); `ph_source` in provenance.
 - [ ] **T008** Focused tests for acceptance items 1–4; full suite and smoke test; evidence with exact counts.
 - [ ] **T009** Re-run post-docking and MD export (no new docking) on the retained Phase 2 poses; record software and scientific evidence separately.
-- [ ] **T010** Scientific Lead review (agent does not mark done).
+- [x] **T010** Scientific Lead review (agent does not mark done). Accepted by the Scientific Lead on 2026-10-19.

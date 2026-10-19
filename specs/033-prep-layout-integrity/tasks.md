@@ -23,4 +23,4 @@
 
 ## Gate 11 — Human review
 
-- [ ] **T013** Scientific Lead reviews Spec 033 behavior and the Phase 2 evidence. The agent does not mark this done.
+- [x] **T013** Scientific Lead reviews Spec 033 behavior and the Phase 2 evidence. The agent does not mark this done. Accepted by the Scientific Lead on 2026-10-19.

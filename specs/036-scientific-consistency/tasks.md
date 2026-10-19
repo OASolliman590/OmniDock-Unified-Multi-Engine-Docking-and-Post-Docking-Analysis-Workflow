@@ -24,4 +24,4 @@
     - Not run: the 1IEP/STI re-dock (T009). No real docking was run. No vina/smina/gnina binaries are on this machine, so the engine paths were exercised in dry-run and synthetic fixtures only.
     - Nothing is committed or pushed yet. The test counts and smoke exit codes above are from the uncommitted working tree.
 - [x] **T009** Bounded 1IEP/STI re-dock on the new defaults; software and scientific evidence kept separate.
-- [ ] **T010** Scientific Lead review (agent does not mark done).
+- [x] **T010** Scientific Lead review (agent does not mark done). Accepted by the Scientific Lead on 2026-10-19.
