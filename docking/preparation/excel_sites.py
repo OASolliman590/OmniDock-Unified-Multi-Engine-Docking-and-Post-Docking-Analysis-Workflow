@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -46,6 +47,8 @@ def load_site_catalog_from_summary(
     frame["PDB_ID"] = frame["PDB_ID"].astype(str).str.upper().str.strip()
     frame["Property"] = frame["Property"].astype(str).str.strip()
 
+    if frame.duplicated(["PDB_ID", "Property"]).any():
+        raise ValueError("Duplicate PDB/property rows: multiple sites must have explicit separate identities (main@7fc130a)")
     catalog = (
         frame.pivot_table(index="PDB_ID", columns="Property", values="Value", aggfunc="first")
         .reset_index()
@@ -70,7 +73,7 @@ def load_site_catalog_from_summary(
         )
 
     for axis in ("center_x", "center_y", "center_z"):
-        catalog[axis] = pd.to_numeric(catalog[axis], errors="coerce")
+        catalog[axis] = pd.to_numeric(catalog[axis], errors="coerce").replace([np.inf, -np.inf], np.nan)
     missing_coordinate_ids: list[str] = []
     if catalog[["center_x", "center_y", "center_z"]].isna().any().any():
         missing_coordinate_ids = sorted(
@@ -93,6 +96,13 @@ def load_site_catalog_from_summary(
             f"for PDB(s): {refused_ids}. Re-run the PDB preparation step that records the centre method, "
             "or record `user_explicit` for a hand-entered centre."
         )
+
+    # Site box sizes are guarded when present; they are not part of the returned catalog.
+    for axis in ("active_site_size_x", "active_site_size_y", "active_site_size_z"):
+        if axis in catalog.columns:
+            sizes = pd.to_numeric(catalog[axis], errors="coerce").replace([np.inf, -np.inf], np.nan)
+            if (sizes.dropna() <= 0).any():
+                raise ValueError("Site box dimensions must be positive")
 
     if "selected_ligand" not in catalog.columns:
         catalog["selected_ligand"] = ""
