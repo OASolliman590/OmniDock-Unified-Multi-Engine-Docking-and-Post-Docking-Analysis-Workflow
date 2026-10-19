@@ -1,0 +1,1 @@
+- [ ] **T003** Post-merge follow-ups: DAG write ownership plus output fingerprint (S9/O6), S18 pair reference fields, D16 degenerate groups give NaN (Lead 2026-10-19).

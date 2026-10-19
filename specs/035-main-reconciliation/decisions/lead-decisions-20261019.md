@@ -22,3 +22,8 @@ The Scientific Lead accepted every agent recommendation in `inventory.md`, secti
 - **D19** Do not import `audit/` files. Import only sanitised findings.
 
 **Privacy (2026-10-19):** the audit logs that exposed a local path and host name were removed from `main` in `ec327f4`. Rewriting history to purge them from earlier commits was **not** authorised.
+
+## Follow-up decisions (2026-10-19, after the merge)
+1. **DAG write ownership (O6/S9): the analysis DAG is the single owner** of the shared report outputs (for example the top_pose_atlas files). Other report nodes and the legacy `run()` path read those outputs and do not rewrite them. With one owner, port main's output-content fingerprint and its "inputs changed during computation" failure.
+2. **Port S18:** the pair reference fields (`reference_frame_id`, `receptor_frame_id`, and `asset_identity`), so that the D17 cross-frame reference guard takes effect.
+3. **D16 degenerate groups:** a legacy-normaliser group with one finite value or zero span gives **NaN** (undefined), not 0.0 or 0.5.
