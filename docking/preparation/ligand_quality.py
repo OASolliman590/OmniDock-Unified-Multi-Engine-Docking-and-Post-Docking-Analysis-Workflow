@@ -171,99 +171,17 @@ def _has_invalid_autodock_type(atom_type: str) -> bool:
     return atom_type not in VALID_AUTODOCK_TYPES
 
 
-def _replace_atom_type(line: str, atom_type: str) -> str:
-    return re.sub(r"(\s+)(\S+)\s*$", lambda match: f"{match.group(1)}{atom_type}", line)
-
-
-def _infer_fixed_atom_type(atom_name: str, atom_type: str) -> Optional[str]:
-    raw = str(atom_type).strip()
-    if raw == "G0":
-        return None
-    if raw == "CG0":
-        return "C"
-
-    letters = "".join(ch for ch in raw if ch.isalpha())
-    if letters in VALID_AUTODOCK_TYPES:
-        return letters
-
-    atom_letters = "".join(ch for ch in str(atom_name).strip() if ch.isalpha()).upper()
-    if atom_letters.startswith("CL"):
-        return "Cl"
-    if atom_letters.startswith("BR"):
-        return "Br"
-    if atom_letters.startswith("ZN"):
-        return "Zn"
-    if atom_letters.startswith("FE"):
-        return "Fe"
-    if atom_letters.startswith("MG"):
-        return "Mg"
-    if atom_letters.startswith("MN"):
-        return "Mn"
-    if atom_letters.startswith("CA"):
-        return "Ca"
-    if atom_letters.startswith("CU"):
-        return "Cu"
-    if atom_letters.startswith("PD"):
-        return "Pd"
-    if atom_letters.startswith("OA"):
-        return "OA"
-    if atom_letters.startswith("OS"):
-        return "OS"
-    if atom_letters.startswith("NA"):
-        return "NA"
-    if atom_letters.startswith("NS"):
-        return "NS"
-    if atom_letters.startswith("SA"):
-        return "SA"
-    if atom_letters.startswith("SI"):
-        return "Si"
-    if atom_letters.startswith("HD"):
-        return "HD"
-    if atom_letters.startswith("HS"):
-        return "HS"
-    if atom_letters:
-        first = atom_letters[0]
-        if first in {"C", "N", "O", "S", "P", "H", "F", "I", "A"}:
-            return "OA" if first == "O" else first
-    return None
-
-
 def sanitize_prepared_ligand_pdbqt(source_file: Path, destination_file: Path) -> Dict[str, object]:
+    """Validate prepared chemistry without deleting or guessing atom types (D6, Lead decision, Spec 035)."""
     source = Path(source_file).expanduser().resolve()
     destination = Path(destination_file).expanduser()
-    lines = source.read_text(encoding="utf-8", errors="ignore").splitlines()
-    cleaned_lines: List[str] = []
-    dropped_atoms = 0
-    replaced_atoms = 0
-    invalid_before: List[str] = []
-
-    for line in lines:
-        if not line.startswith(("ATOM", "HETATM")):
-            cleaned_lines.append(line)
-            continue
-        atom_type = _extract_atom_type(line)
-        if not _has_invalid_autodock_type(atom_type):
-            cleaned_lines.append(line)
-            continue
-
-        invalid_before.append(atom_type)
-        atom_name = line[12:16].strip()
-        fixed_type = _infer_fixed_atom_type(atom_name, atom_type)
-        if fixed_type is None:
-            dropped_atoms += 1
-            continue
-        replaced_atoms += 1
-        cleaned_lines.append(_replace_atom_type(line, fixed_type))
-
+    issues = validate_prepared_ligand_pdbqt(source)
+    if issues:
+        raise ValueError("Prepared ligand requires regeneration from authoritative chemistry: " + "; ".join(issue.reason for issue in issues))
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text("\n".join(cleaned_lines) + "\n", encoding="utf-8")
-    return {
-        "source_file": str(source),
-        "destination_file": str(destination),
-        "replaced_atoms": replaced_atoms,
-        "dropped_atoms": dropped_atoms,
-        "invalid_atom_types_before": sorted(set(invalid_before)),
-    }
+    if source != destination.resolve():
+        shutil.copy2(source, destination)
+    return {"source_file": str(source), "destination_file": str(destination), "replaced_atoms": 0, "dropped_atoms": 0, "invalid_atom_types_before": []}
 
 
 def _parse_float(segment: str, default: float) -> float:
@@ -890,10 +808,8 @@ def repair_project_ligands(
             sanitized_sdf = temp_dir / f"{stem}.sdf"
             sanitized_pdbqt = temp_dir / f"{stem}.pdbqt"
             source_mode = "raw_pdb"
-            if raw_pdb.exists():
-                sanitize_summary = sanitize_ligand_pdb_file(raw_pdb, sanitized_pdb, preferred_altloc=preferred_altloc)
-                _run_command(["obabel", str(sanitized_pdb), "-O", str(sanitized_sdf)])
-            elif raw_sdf.exists():
+            if raw_sdf.exists():
+                # The authoritative SDF is the source whenever it exists (D4, Spec 035).
                 source_mode = "raw_sdf"
                 sanitize_summary = {
                     "source_file": str(raw_sdf),
@@ -903,6 +819,11 @@ def repair_project_ligands(
                 }
                 shutil.copy2(raw_sdf, sanitized_sdf)
                 _run_command(["obabel", str(sanitized_sdf), "-O", str(sanitized_pdb)])
+            elif raw_pdb.exists():
+                # D4 (Lead, Spec 035): a PDB has no authoritative bond orders; refuse rather than infer them.
+                raise ValueError(
+                    f"Cannot repair {ligand_name} from PDB coordinates: provide an authoritative SDF with bond orders (D4)"
+                )
             else:
                 smiles = _extract_smiles_from_prepared_ligand(prepared_pdbqt if prepared_pdbqt.exists() else docking_pdbqt)
                 if not smiles:
