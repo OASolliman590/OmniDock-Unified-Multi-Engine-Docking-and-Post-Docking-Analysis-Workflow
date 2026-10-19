@@ -689,16 +689,18 @@ def run_pdb_collect(
             except OSError as exc:
                 warnings.append(f"Failed to remove ligand artifact from raw proteins ({ligand_pdb.name}): {exc}")
             sdf_output = layout["raw_ligands_sdf"] / f"{ligand_pdb.stem}.sdf"
-            if shutil.which("obabel"):
-                completed = subprocess.run(
-                    ["obabel", str(ligand_copy), "-O", str(sdf_output)],
-                    capture_output=True,
-                    text=True,
-                )
-                if completed.returncode != 0:
-                    warnings.append(f"Open Babel conversion failed for {ligand_pdb.name}: {completed.stderr.strip()}")
-            else:
-                warnings.append("Open Babel not found; raw ligand SDF conversion skipped.")
+            # D5 (Lead, Spec 035): an inferred bond graph from PDB coordinates is not validated chemistry, so no
+            # SDF is generated here. An older SDF is kept as history, never as this collection's result (main@7fc130a).
+            if sdf_output.exists():
+                history = layout["metadata"] / "previous_ligand_references" / build_run_id("reference", suffix=uuid4().hex)
+                history.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(sdf_output), str(history / sdf_output.name))
+                sdf_meta = sdf_output.with_suffix(sdf_output.suffix + ".preparation.json")
+                if sdf_meta.exists():
+                    shutil.move(str(sdf_meta), str(history / sdf_meta.name))
+            warnings.append(
+                f"No authoritative SDF for {ligand_pdb.name}: supply a verified SDF with bond orders before ligand preparation."
+            )
 
     if not workbook.sheetnames:
         ws = workbook.create_sheet("Summary")
