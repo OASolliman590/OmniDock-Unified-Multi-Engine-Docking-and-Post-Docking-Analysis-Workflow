@@ -491,7 +491,8 @@ def _fake_vina(tmp_path: Path) -> Path:
         "out=\"\"\n"
         "while [ $# -gt 0 ]; do if [ \"$1\" = \"--out\" ]; then out=\"$2\"; fi; shift; done\n"
         "cat > \"$out\" <<'EOF'\n"
-        "MODEL 1\nREMARK VINA RESULT:     -7.5      0.000      0.000\nENDMDL\n"
+        "MODEL 1\nREMARK VINA RESULT:     -7.5      0.000      0.000\n"
+        "ATOM      1  C   LIG A   1       0.000   0.000   0.000  1.00  0.00    0.000 C\nENDMDL\n"
         "EOF\n",
         encoding="utf-8",
     )
@@ -505,6 +506,12 @@ def test_replicate_jobs_record_wall_time_and_duration(tmp_path):
         receptor=RECEPTOR, site_id="site_1", ligand=LIGAND,
         center_x=0.0, center_y=0.0, center_z=0.0, size_x=4.0, size_y=4.0, size_z=4.0,
     )
+    # The job contract hashes every input before running, so the staged inputs must exist.
+    from docking.project_layout import shared_ligands_dir, shared_receptors_dir
+    shared_receptors_dir(tmp_path / "proj").mkdir(parents=True, exist_ok=True)
+    (shared_receptors_dir(tmp_path / "proj") / RECEPTOR).write_text("ATOM      1  C   REC A   1       0.000   0.000   0.000  1.00  0.00    0.000 C\n", encoding="utf-8")
+    shared_ligands_dir(tmp_path / "proj").mkdir(parents=True, exist_ok=True)
+    (shared_ligands_dir(tmp_path / "proj") / LIGAND).write_text("ATOM      1  C   LIG A   1       0.000   0.000   0.000  1.00  0.00    0.000 C\n", encoding="utf-8")
     runner = VinaRunner(
         tmp_path / "proj",
         runtime={"binary": str(fake), "exhaustiveness": 8, "num_modes": 1, "seed": 9, "replicates": 2,

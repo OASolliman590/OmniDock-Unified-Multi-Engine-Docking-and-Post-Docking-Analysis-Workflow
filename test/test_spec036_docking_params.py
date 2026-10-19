@@ -483,8 +483,10 @@ def test_poses_returned_and_warning_when_fewer_than_num_modes(tmp_path: Path) ->
         "out=\"\"\n"
         "while [ $# -gt 0 ]; do if [ \"$1\" = \"--out\" ]; then out=\"$2\"; fi; shift; done\n"
         "cat > \"$out\" <<'EOF'\n"
-        "MODEL 1\nREMARK VINA RESULT:     -7.5      0.000      0.000\nENDMDL\n"
-        "MODEL 2\nREMARK VINA RESULT:     -7.1      1.000      2.000\nENDMDL\n"
+        "MODEL 1\nREMARK VINA RESULT:     -7.5      0.000      0.000\n"
+        "ATOM      1  C   LIG A   1       0.000   0.000   0.000  1.00  0.00    0.000 C\nENDMDL\n"
+        "MODEL 2\nREMARK VINA RESULT:     -7.1      1.000      2.000\n"
+        "ATOM      1  C   LIG A   1       1.000   0.000   0.000  1.00  0.00    0.000 C\nENDMDL\n"
         "EOF\n",
         encoding="utf-8",
     )
@@ -500,6 +502,12 @@ def test_poses_returned_and_warning_when_fewer_than_num_modes(tmp_path: Path) ->
         size_y=4.0,
         size_z=4.0,
     )
+    # The job contract hashes every input before running, so the staged inputs must exist.
+    from docking.project_layout import shared_ligands_dir, shared_receptors_dir
+    (shared_receptors_dir(tmp_path / "proj")).mkdir(parents=True, exist_ok=True)
+    (shared_receptors_dir(tmp_path / "proj") / RECEPTOR_NAME).write_text("ATOM      1  C   REC A   1       0.000   0.000   0.000  1.00  0.00    0.000 C\n", encoding="utf-8")
+    (shared_ligands_dir(tmp_path / "proj")).mkdir(parents=True, exist_ok=True)
+    (shared_ligands_dir(tmp_path / "proj") / LIGAND_NAME).write_text("ATOM      1  C   LIG A   1       0.000   0.000   0.000  1.00  0.00    0.000 C\n", encoding="utf-8")
     runner = VinaRunner(
         tmp_path / "proj",
         runtime={"binary": str(fake), "exhaustiveness": 32, "num_modes": 5, "seed": 9, "replicates": 1,

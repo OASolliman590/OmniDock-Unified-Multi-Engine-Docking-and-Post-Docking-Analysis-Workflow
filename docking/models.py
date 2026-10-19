@@ -159,6 +159,14 @@ class EngineJobResult:
     ligand_rg_angstrom: Optional[float] = None
     edge_angstrom: Optional[float] = None
     warnings: List[str] = field(default_factory=list)
+    # Job contract (main@7fc130a, docking/runners/job_contract.py): protocol fingerprint,
+    # completion record, hashed inputs, engine executables and the resume flag.
+    engine: str = ""
+    fingerprint: str = ""
+    completion_file: str = ""
+    input_files: List[Dict[str, str]] = field(default_factory=list)
+    executables: List[str] = field(default_factory=list)
+    skip_completed: bool = False
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
