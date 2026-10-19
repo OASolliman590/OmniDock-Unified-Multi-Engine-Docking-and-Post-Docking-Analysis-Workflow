@@ -63,6 +63,25 @@ def _copy_if_different(source: Path, destination: Path) -> None:
     shutil.copy2(src, destination)
 
 
+class AssetIndex(dict):
+    """Token -> prepared file. Tokens claimed by more than one file are listed in ``ambiguous`` (main@7fc130a)."""
+
+    def __init__(self):
+        super().__init__()
+        self.ambiguous: set = set()
+
+
+def _active_assets(directory: Path, allowed_suffixes: set) -> List[Path]:
+    """Prepared files in use: a raw ``X.pdbqt`` yields to ``X_cleaned.pdbqt``, and a non-pdbqt file yields to its pdbqt."""
+    paths = sorted(path for path in Path(directory).iterdir() if path.is_file() and path.suffix.lower() in allowed_suffixes)
+    by_name = {path.name.lower(): path for path in paths}
+    return [
+        path for path in paths
+        if f"{path.stem}_cleaned{path.suffix}".lower() not in by_name
+        and (path.suffix.lower() == ".pdbqt" or f"{path.stem}.pdbqt".lower() not in by_name)
+    ]
+
+
 @dataclass
 class DockingPreparationConfig:
     prepared_proteins: Path
@@ -355,20 +374,22 @@ class DockingProjectBuilder:
         if not directory.exists():
             raise FileNotFoundError(f"Asset directory not found: {directory}")
 
-        index: Dict[str, Path] = {}
-        for path in sorted(directory.iterdir()):
-            if not path.is_file() or path.suffix.lower() not in allowed_suffixes:
-                continue
-            for token in {path.name.lower(), path.stem.lower(), _normalize_key(path.name), _normalize_key(path.stem)}:
-                index.setdefault(token, path)
+        index = AssetIndex()
+        for path in _active_assets(directory, allowed_suffixes):
+            tokens = {path.name.lower(), path.stem.lower(), _normalize_key(path.name), _normalize_key(path.stem)}
             if "_ligand_" in path.stem.lower():
                 ligand_suffix = path.stem.lower().split("_ligand_", 1)[1]
-                index.setdefault(ligand_suffix, path)
-                index.setdefault(_normalize_key(ligand_suffix), path)
+                tokens.update({ligand_suffix, _normalize_key(ligand_suffix)})
             try:
-                index.setdefault(_extract_pdb_id(path.name).lower(), path)
+                tokens.add(_extract_pdb_id(path.name).lower())
             except ValueError:
                 pass
+            for token in tokens:
+                # Two files claiming one alias is refused at resolution time, never resolved silently.
+                if token in index and index[token] != path:
+                    index.ambiguous.add(token)
+                else:
+                    index[token] = path
         if not index:
             suffix_list = ", ".join(sorted(allowed_suffixes))
             raise ValueError(
@@ -395,7 +416,10 @@ class DockingProjectBuilder:
                 candidates.append(_extract_pdb_id(raw_name).lower())
             except ValueError:
                 pass
+        ambiguous = getattr(asset_index, "ambiguous", set())
         for candidate in candidates:
+            if candidate in ambiguous:
+                raise ValueError(f"Ambiguous {asset_type} '{raw_name}': several prepared files share this name")
             if candidate in asset_index:
                 return asset_index[candidate]
         raise ValueError(f"Could not match {asset_type} '{raw_name}' to a prepared file")
