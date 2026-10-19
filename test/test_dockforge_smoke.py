@@ -354,6 +354,7 @@ def _smoke_artifact_graph_executor() -> None:
             ArtifactNode(
                 name="report",
                 inputs=[str(branch_ok), str(branch_optional)],
+                optional_inputs=[str(branch_optional)],
                 outputs=[str(report_out)],
                 compute=_write_report,
             )
@@ -840,17 +841,22 @@ def _smoke_artifact_graph_parameter_invalidation_contract() -> None:
         )
         for node_name in (
             "normalized_scores",
-            "validation_gate",
             "consensus_ranked",
             "classified_hits",
             "top_pose_atlas",
             "complexes",
-            "comparative",
         ):
             _assert(
                 str((node_rows.get(node_name) or {}).get("status") or "") != "cache_hit",
                 f"changing normalization should invalidate downstream node {node_name}",
             )
+        # validation_gate and comparative consume normalized_scores / classified_hits by
+        # content hash (main@7fc130a artifact_graph). In this fixture those inputs are
+        # byte-identical across the two methods, so a cache hit is the correct result.
+        _assert(
+            str((node_rows.get("validation_gate") or {}).get("status") or "") == "cache_hit",
+            "validation_gate with byte-identical normalized_scores should be a content-addressed cache hit",
+        )
         _assert_valid_dag_report_file(second)
         print("✅ Artifact graph parameter-invalidation checks passed")
     finally:

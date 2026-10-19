@@ -1502,6 +1502,7 @@ class MultiEngineAnalysisPipeline:
             optional: bool = False,
             cacheable: bool = True,
             content_hash_inputs: bool = False,
+            optional_inputs: Optional[List[Path]] = None,
         ) -> None:
             graph.register(
                 ArtifactNode(
@@ -1512,6 +1513,7 @@ class MultiEngineAnalysisPipeline:
                     optional=optional,
                     cacheable=cacheable,
                     content_hash_inputs=content_hash_inputs,
+                    optional_inputs=[str(path) for path in (optional_inputs or [])],
                 )
             )
 
@@ -1642,6 +1644,8 @@ class MultiEngineAnalysisPipeline:
                 [paths["interactions"]],
                 "Registered for DAG migration; interaction branch aggregate node for scope resolution.",
             ),
+            # Optional interaction backends may be skipped; the aggregate still runs (Spec 026).
+            optional_inputs=[paths["prolif"], paths["pandamap"], paths["poseview"], paths["pymol"]],
         )
         _register(
             "reports",
@@ -1660,6 +1664,8 @@ class MultiEngineAnalysisPipeline:
             [paths["reports"]],
             lambda: self._dag_compute_reports_node(paths),
             cacheable=False,
+            # figures_manifest is produced by the optional visualizations node (Spec 026).
+            optional_inputs=[paths["figures_manifest"]],
         )
         return graph
 
