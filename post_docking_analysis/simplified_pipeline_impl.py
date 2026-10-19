@@ -1959,6 +1959,16 @@ class SimplifiedPostDockingPipeline:
                 self.logger.warning("⚠️  No finite affinity values available for polypharmacology analysis")
                 return True
 
+            # D10 (Lead decision, Spec 035; main@7fc130a S26): raw affinities from different engines are not
+            # comparable without calibration, so a cross-engine polypharmacology result is not evaluable.
+            if "engine" in df and df["engine"].nunique() > 1:
+                unavailable_dir = self.output_dir / "analysis" / "polypharmacology"
+                unavailable_dir.mkdir(parents=True, exist_ok=True)
+                status = {"status": "not_evaluable", "reason": "cross_engine_raw_score_comparison_requires_calibration"}
+                (unavailable_dir / "status.json").write_text(json.dumps(status, indent=2), encoding="utf-8")
+                self.results["polypharmacology_analysis"] = status
+                return True
+
             # Ensure one best row per ligand-protein pair.
             idx = df.groupby(["ligand", "protein_label"])["vina_affinity"].idxmin()
             pair_df = df.loc[idx].copy().sort_values(["ligand", "protein_label"])
