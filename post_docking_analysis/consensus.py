@@ -305,8 +305,9 @@ def normalize_engine_scores(
             return _safe_minmax_scale(series)
         if normalized_method == "per_engine_zscore":
             zscores = _safe_zscore(series)
-            # Docking z-score: lower is better; negate before [0,1] scaling.
-            return _safe_minmax_scale(-zscores)
+            # Docking z-score: lower is better. _safe_minmax_scale already inverts
+            # (lower -> higher), so the z-scores are passed through unnegated.
+            return _safe_minmax_scale(zscores)
         # Default: rank-based normalization with 1.0 = strongest.
         return _safe_rank_score(series, lower_is_better=True)
 
