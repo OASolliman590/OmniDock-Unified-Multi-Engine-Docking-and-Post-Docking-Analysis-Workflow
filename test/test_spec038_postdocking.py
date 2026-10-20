@@ -238,7 +238,6 @@ def test_top_pose_status_columns_present_on_dag(runs):
     assert legacy_cols - SCOPE_COLUMNS <= dag_cols
 
 
-@pytest.mark.xfail(strict=True, reason=STOP_FAVORITE)
 def test_favorite_engine_stage_present_on_dag(runs):
     assert (runs["dag_favorite"]["session"] / "favorite_engine" / "summary.txt").exists()
 

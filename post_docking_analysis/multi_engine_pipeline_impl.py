@@ -582,6 +582,7 @@ class MultiEngineAnalysisPipeline:
             "polypharmacology": reports_root / "polypharmacology",
             "comparative": reports_root / "comparative",
             "biology_correlation": reports_root / "biology_correlation",
+            "favorite_engine": self._favorite_engine_dir(),
             "visualizations": visualizations_root,
             "figures_manifest": visualizations_root / "figures_manifest.json",
             "reports": reports_root / "summary.txt",
@@ -1690,6 +1691,17 @@ class MultiEngineAnalysisPipeline:
             # Optional interaction backends may be skipped; the aggregate still runs (Spec 026).
             optional_inputs=[paths["prolif"], paths["pandamap"], paths["poseview"], paths["pymol"]],
         )
+        favorite_node_registered = self.analysis_mode == "favorite_engine_continue"
+        if favorite_node_registered:
+            # Spec 038 D-A3: the favorite-engine stage is a DAG node. It never retires its output: the output is a
+            # directory that may be the session root itself when the output_dir is named favorite_engine.
+            _register(
+                "favorite_engine",
+                [paths["raw_scores"], paths["engine_scope_config"], paths["analysis_parameters"]],
+                [paths["favorite_engine"]],
+                lambda: self._dag_compute_favorite_engine_node(paths),
+                retire_outputs=False,
+            )
         _register(
             "reports",
             [
@@ -1703,7 +1715,8 @@ class MultiEngineAnalysisPipeline:
                 # NOT listed here. They are optional slow nodes; the reports node reads
                 # whatever output files already exist rather than blocking on them.
                 paths["figures_manifest"],
-            ],
+            ]
+            + ([paths["favorite_engine"]] if favorite_node_registered else []),
             [paths["reports"]],
             lambda: self._dag_compute_reports_node(paths),
             cacheable=False,
@@ -2342,59 +2355,15 @@ class MultiEngineAnalysisPipeline:
 
             _set_step("single_engine_reports", "skipped", "analysis_mode=favorite_engine_continue")
             _start_step("favorite_engine_reports")
-            favorite_engine = str(
-                self.favorite_engine or self.manifest.get("favorite_engine") or self.engine or ""
-            ).strip().lower()
-            if not favorite_engine:
-                raise ValueError(
-                    "favorite_engine_continue requires --favorite-engine, --engine, or project_manifest.json.favorite_engine"
-                )
-            if self.engines_in_scope and favorite_engine not in self.engines_in_scope:
-                raise ValueError(
-                    f"favorite_engine '{favorite_engine}' is not in engines_in_scope "
-                    f"{self.engines_in_scope}. Use --engine to specify a valid engine."
-                )
-            if not self.engines_in_scope:
-                detection_report = (
-                    getattr(self, "engine_detection_report", {})
-                    if isinstance(getattr(self, "engine_detection_report", {}), dict)
-                    else {}
-                )
-                detection_valid_engines = [
-                    str(item).strip().lower()
-                    for item in (detection_report.get("valid_engines") or [])
-                    if str(item).strip()
-                ]
-                if detection_valid_engines and favorite_engine not in detection_valid_engines:
-                    raise ValueError(
-                        f"favorite_engine '{favorite_engine}' is not in detected valid engines "
-                        f"{detection_valid_engines}. Use --engine to specify a valid engine."
-                    )
-            # Avoid path doubling when output_dir was already rooted inside
-            # a "favorite_engine" directory (e.g. a re-run from an existing session).
-            if self.output_dir.name == "favorite_engine":
-                favorite_dir = self.output_dir
-            else:
-                favorite_dir = self.output_dir / "favorite_engine"
-            self._write_single_engine_reports(scores, favorite_engine, favorite_dir)
+            favorite_engine, favorite_dir = self._write_favorite_engine_reports(scores)
             _complete_step("favorite_engine_reports", f"engine={favorite_engine}")
 
             if self.analysis_scope in {"full", "rescoring_only"}:
                 _start_step("favorite_engine_downstream_bridge")
-                self._run_downstream_bridge(
-                    favorite_engine,
-                    scores[scores["engine"] == favorite_engine].copy(),
-                    favorite_dir,
-                )
+                self._write_favorite_engine_downstream(scores, favorite_engine, favorite_dir)
                 _complete_step("favorite_engine_downstream_bridge", f"analysis_scope={self.analysis_scope}")
             else:
-                (favorite_dir / "downstream_bridge.txt").write_text(
-                    (
-                        "Downstream bridge skipped by analysis scope.\n"
-                        f"analysis_scope={self.analysis_scope}\n"
-                    ),
-                    encoding="utf-8",
-                )
+                self._write_favorite_engine_downstream(scores, favorite_engine, favorite_dir)
                 _set_step(
                     "favorite_engine_downstream_bridge",
                     "skipped",
@@ -2429,6 +2398,74 @@ class MultiEngineAnalysisPipeline:
             except Exception as tracking_exc:
                 _set_step("finalize_run_tracking", "needs_review", str(tracking_exc))
                 logger.warning("Run tracking finalization failed: %s", tracking_exc)
+
+    def _resolve_favorite_engine(self) -> str:
+        favorite_engine = str(
+            self.favorite_engine or self.manifest.get("favorite_engine") or self.engine or ""
+        ).strip().lower()
+        if not favorite_engine:
+            raise ValueError(
+                "favorite_engine_continue requires --favorite-engine, --engine, or project_manifest.json.favorite_engine"
+            )
+        if self.engines_in_scope and favorite_engine not in self.engines_in_scope:
+            raise ValueError(
+                f"favorite_engine '{favorite_engine}' is not in engines_in_scope "
+                f"{self.engines_in_scope}. Use --engine to specify a valid engine."
+            )
+        if not self.engines_in_scope:
+            detection_report = (
+                getattr(self, "engine_detection_report", {})
+                if isinstance(getattr(self, "engine_detection_report", {}), dict)
+                else {}
+            )
+            detection_valid_engines = [
+                str(item).strip().lower()
+                for item in (detection_report.get("valid_engines") or [])
+                if str(item).strip()
+            ]
+            if detection_valid_engines and favorite_engine not in detection_valid_engines:
+                raise ValueError(
+                    f"favorite_engine '{favorite_engine}' is not in detected valid engines "
+                    f"{detection_valid_engines}. Use --engine to specify a valid engine."
+                )
+        return favorite_engine
+
+    def _favorite_engine_dir(self) -> Path:
+        """Avoid path doubling when output_dir was already rooted inside a "favorite_engine" directory."""
+        if self.output_dir.name == "favorite_engine":
+            return self.output_dir
+        return self.output_dir / "favorite_engine"
+
+    def _write_favorite_engine_reports(self, scores: pd.DataFrame) -> Tuple[str, Path]:
+        """Single-engine reports for the favorite engine. Shared by run() and the favorite_engine DAG node (D-A3)."""
+        favorite_engine = self._resolve_favorite_engine()
+        favorite_dir = self._favorite_engine_dir()
+        self._write_single_engine_reports(scores, favorite_engine, favorite_dir)
+        return favorite_engine, favorite_dir
+
+    def _write_favorite_engine_downstream(self, scores: pd.DataFrame, favorite_engine: str, favorite_dir: Path) -> None:
+        """Downstream bridge for the favorite engine, or a note that the analysis scope skipped it (D-A3)."""
+        if self.analysis_scope in {"full", "rescoring_only"}:
+            self._run_downstream_bridge(
+                favorite_engine,
+                scores[scores["engine"] == favorite_engine].copy(),
+                favorite_dir,
+            )
+            return
+        favorite_dir.mkdir(parents=True, exist_ok=True)
+        (favorite_dir / "downstream_bridge.txt").write_text(
+            (
+                "Downstream bridge skipped by analysis scope.\n"
+                f"analysis_scope={self.analysis_scope}\n"
+            ),
+            encoding="utf-8",
+        )
+
+    def _dag_compute_favorite_engine_node(self, paths: Dict[str, Path]) -> Dict[str, object]:
+        scores = self._load_or_build_scores()
+        favorite_engine, favorite_dir = self._write_favorite_engine_reports(scores)
+        self._write_favorite_engine_downstream(scores, favorite_engine, favorite_dir)
+        return {"details": f"favorite_engine={favorite_engine}"}
 
     @staticmethod
     def _engine_pose_suffix(engine: str) -> str:

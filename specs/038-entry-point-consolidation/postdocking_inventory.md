@@ -165,3 +165,12 @@ Golden differences against `baseline_ext`, all mapped to D-A2:
 - `ligand_performance_summary.csv` and `top_pose_confidence_metrics.csv`: unchanged.
 - `top_pose_selection_manifest.json` (DAG): the column lists in the manifest gain the added columns. No rank or selection field changed.
 - The mirror removals from step 3 still apply to `5-Analysis/comparative/*`.
+
+### Step 5: D-A3 (favorite-engine stage as a DAG node)
+
+Design: the favorite stage is split into shared methods (`_write_favorite_engine_reports`, `_write_favorite_engine_downstream`). Legacy `run()` and the new `favorite_engine` node both call them, so there is one implementation. The node is registered only in `favorite_engine_continue` mode and is a required input of the reports node in that mode. It never retires its output (the output directory can be the session root when the output_dir is named `favorite_engine`).
+
+Golden differences against `baseline_ext`, mapped to D-A3:
+- `session/favorite_engine/**` (DAG favorite runs only): new files, 15 for `synthetic__favorite_vina` and 113 for `synthetic__favorite_gnina`. Compared with the legacy favorite outputs of the same case: 113 of 113 identical for gnina; for vina 14 of 15 identical.
+- The one vina difference is `deep_analysis/simplified_pipeline.log`. It is a logging difference, not a result. The DAG run writes the simplified pipeline's messages into that file, while the legacy run leaves it empty. No scientific file differs.
+- The D-A1 and D-A2 changes listed above also appear in these runs (summary, top-pose files, dashboard index).
