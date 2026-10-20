@@ -293,3 +293,33 @@ def test_run_and_dag_produce_the_same_session_outputs(runs):
         if not other.exists() or _normalized_text(path, legacy_root) != _normalized_text(other, dag_root):
             mismatched.append(rel.as_posix())
     assert mismatched == []
+
+
+# ----------------------------------------------------------------- D-C: GNINA best pose via the shared selector
+
+def _simplified_with_scores(scores: pd.DataFrame):
+    pipeline = object.__new__(spi.SimplifiedPostDockingPipeline)
+    pipeline.scores_df = scores
+    return pipeline
+
+
+def test_simplified_gnina_best_pose_is_highest_cnn_score_not_lowest_vina():
+    scores = pd.DataFrame([
+        {"engine": "gnina", "tag": "R1_site_1_L2", "protein": "R1", "pose": 1, "vina_affinity": -7.5, "cnn_score": 0.55, "cnn_affinity": -7.1, "affinity_kcal_mol": -7.5},
+        {"engine": "gnina", "tag": "R1_site_1_L2", "protein": "R1", "pose": 2, "vina_affinity": -7.0, "cnn_score": 0.80, "cnn_affinity": -6.6, "affinity_kcal_mol": -7.0},
+        {"engine": "gnina", "tag": "R1_site_1_L1", "protein": "R1", "pose": 1, "vina_affinity": -8.6, "cnn_score": 0.91, "cnn_affinity": -8.2, "affinity_kcal_mol": -8.6},
+    ])
+    best = _simplified_with_scores(scores)._best_poses_from_scores()
+    chosen = {row["tag"]: int(row["pose"]) for _, row in best.iterrows()}
+    assert chosen == {"R1_site_1_L2": 2, "R1_site_1_L1": 1}
+    # The output keeps the input rows and columns unchanged.
+    assert list(best.columns) == list(scores.columns)
+
+
+def test_simplified_vina_best_pose_is_lowest_affinity():
+    scores = pd.DataFrame([
+        {"engine": "vina", "tag": "R1_site_1_L2", "protein": "R1", "pose": 1, "vina_affinity": -7.5, "affinity_kcal_mol": -7.5},
+        {"engine": "vina", "tag": "R1_site_1_L2", "protein": "R1", "pose": 2, "vina_affinity": -7.0, "affinity_kcal_mol": -7.0},
+    ])
+    best = _simplified_with_scores(scores)._best_poses_from_scores()
+    assert best["pose"].tolist() == [1]

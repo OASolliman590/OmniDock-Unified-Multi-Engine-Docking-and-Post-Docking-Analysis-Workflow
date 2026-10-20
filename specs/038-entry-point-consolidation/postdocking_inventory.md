@@ -132,3 +132,12 @@ Any difference not covered by a decision is a STOP.
 - `synthetic__single_smina__legacy` now completes (was `AttributeError`). Its outputs are new files under `session/smina/`, and `START_HERE.md` is written.
 - Intended, covered by E-1. Run-tracking status files change from `exception` to `completed`.
 - Provenance gap, intended and temporary: the base-class path does not run detection, so `engine_settings.smina.smina_scoring_function` is `{}` (the DAG records the weights) and `scope_source` is `detected_all`. Closed by step 7, where legacy `run()` executes the DAG, which runs detection.
+
+**Reference for steps 2 onward:** `spec038_golden/baseline_ext` (the baseline plus the new case `synthetic__favorite_gnina`, captured at 0f6ccd0). Step 1 smina differences are in that reference, because it was captured after the E-1 commit.
+
+### Step 2: D-C (GNINA single-engine best pose through the shared selector)
+
+- Change: `SimplifiedPostDockingPipeline._best_poses_from_scores` selects with `pose_selection.select_best_pose_rows` (the v2 rule, GNINA by highest `cnn_score`). The output is the original input rows, so columns and values are unchanged.
+- Intended, covered by D-C: `synthetic__favorite_gnina__legacy`, `favorite_engine/deep_analysis/reports/best_poses.csv`. For ligand L2 (both receptors) the chosen pose changes from pose 1 (`cnn_score` 0.55) to pose 2 (`cnn_score` 0.80). Vina rows are unchanged.
+- Ranks, consensus ranks and winner engines are unchanged. Visualisation PNGs differ only by the unseeded jitter.
+- Not changed, reviewed: the `idxmin` in `_analyze_polypharmacology` operates on one selected row per tag, so it chooses between tags, not poses. The RMSD representative pick (`_analyze_rmsd`, the `vina_affinity` idxmin for a cluster's best mode) is a separate choice, listed for the Lead.

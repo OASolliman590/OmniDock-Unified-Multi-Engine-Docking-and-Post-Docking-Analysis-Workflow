@@ -25,6 +25,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from .generate_scores_csv import generate_all_scores_csv
+from .pose_selection import select_best_pose_rows
 from .complex_query import (
     filter_frame_by_complex_query,
     filter_paths_by_tags,
@@ -3045,7 +3046,12 @@ class SimplifiedPostDockingPipeline:
         return False
 
     def _best_poses_from_scores(self) -> pd.DataFrame:
-        """Select the best (lowest affinity) pose per tag from scores."""
+        """Select one best pose per tag with the shared v2 selector (Spec 038 D-C).
+
+        GNINA rows choose the highest ``cnn_score`` pose; Vina, Smina and AutoDock4 rows choose the lowest affinity.
+        The rule lives in ``pose_selection.select_best_pose_rows``. It is not re-implemented here, because a
+        minimum ``vina_affinity`` pick selects the worst GNINA pose.
+        """
         if self.scores_df is None or self.scores_df.empty:
             return pd.DataFrame()
         if not {"tag", "vina_affinity"}.issubset(self.scores_df.columns):
@@ -3058,8 +3064,24 @@ class SimplifiedPostDockingPipeline:
         if scores_df.empty:
             return pd.DataFrame(columns=[col for col in self.scores_df.columns if col != "tag_norm"])
 
-        best_idx = scores_df.groupby("tag_norm")["vina_affinity"].idxmin()
-        return scores_df.loc[best_idx].drop(columns=["tag_norm"], errors="ignore").sort_values(
+        # The shared selector picks row identities; the output is the original input rows, unchanged.
+        selector = scores_df.copy()
+        selector["_row_id"] = np.arange(len(selector))
+        selector["tag"] = selector["tag_norm"]
+        if "engine" not in selector.columns:
+            has_cnn = "cnn_score" in selector.columns and pd.to_numeric(selector["cnn_score"], errors="coerce").notna().any()
+            selector["engine"] = "gnina" if has_cnn else "vina"
+        if "protein" not in selector.columns:
+            selector["protein"] = ""
+        if "affinity_kcal_mol" not in selector.columns:
+            selector["affinity_kcal_mol"] = selector["vina_affinity"]
+        else:
+            selector["affinity_kcal_mol"] = pd.to_numeric(selector["affinity_kcal_mol"], errors="coerce").fillna(
+                selector["vina_affinity"]
+            )
+        chosen = select_best_pose_rows(selector)["_row_id"].astype(int).tolist()
+        best = scores_df.iloc[chosen].drop(columns=["tag_norm"], errors="ignore")
+        return best.sort_values(
             ["vina_affinity", "tag"],
             na_position="last",
         )
