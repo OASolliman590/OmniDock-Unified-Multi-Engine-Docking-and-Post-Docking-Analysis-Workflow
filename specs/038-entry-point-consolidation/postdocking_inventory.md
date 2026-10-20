@@ -141,3 +141,16 @@ Any difference not covered by a decision is a STOP.
 - Intended, covered by D-C: `synthetic__favorite_gnina__legacy`, `favorite_engine/deep_analysis/reports/best_poses.csv`. For ligand L2 (both receptors) the chosen pose changes from pose 1 (`cnn_score` 0.55) to pose 2 (`cnn_score` 0.80). Vina rows are unchanged.
 - Ranks, consensus ranks and winner engines are unchanged. Visualisation PNGs differ only by the unseeded jitter.
 - Not changed, reviewed: the `idxmin` in `_analyze_polypharmacology` operates on one selected row per tag, so it chooses between tags, not poses. The RMSD representative pick (`_analyze_rmsd`, the `vina_affinity` idxmin for a cluster's best mode) is a separate choice, listed for the Lead.
+
+### Step 3: D-A1 (one writer for reports/summary.txt and the reports/ tree)
+
+Design: the comparative writer is the only writer of `reports/` (summary included). The `polypharmacology`, `biology_correlation` and `reports` nodes no longer call the writer. Their outputs are not retired (new `ArtifactNode.retire_outputs = False`), so the graph no longer moves the writer's files into `.artifact_history` (the cause of the placeholder). The reports node fails if the summary is missing, instead of writing a placeholder. The dashboard index is regenerated after the summary is written, so its summary `exists` flag is true.
+
+Golden differences against `baseline_ext`, all mapped to D-A1:
+- `session/reports/summary.txt` (DAG, five runs): placeholder "summary artifact was absent" -> the full multi-engine summary. It is byte-identical to the legacy summary of the same case.
+- `project/7-Reports/dashboard_export_index.json` (legacy, five runs): summary `exists` false -> true. The legacy writer wrote the summary after building the index, so the baseline flag was stale.
+- `project/5-Analysis/layout_manifest.json` (DAG, five runs): mirror counts drop (for example processed 48 -> 33, figures_2d 25 -> 5). These mirrors were produced only by the second writer call (the removed polypharmacology fallback) and are not unique outputs.
+- Missing mirror copies (DAG, five runs): `5-Analysis/comparative/comparative/*`, `5-Analysis/comparative/biology_correlation/*` (3 files), `5-Analysis/raw_data/comparative/*`, `session/visualizations/2d/*` and `7-Reports/figures/2d/*` (groups `2d/2d`, `engine_agreement`, `multi_target`, `overview`, `per_protein`, `ranking`). Checked by content: every missing file has an identical copy that survives in the same run, except 16 figure mirrors of two seaborn plots (jittered pixels, see section 1). Their surviving figure was byte-identical in the baseline run.
+- `session/favorite_engine/deep_analysis/reports/best_poses.csv` (legacy, `favorite_gnina`): the D-C change from step 2, unchanged by this step.
+- Run tracking and DAG execution report: status and timing fields only.
+- No new files. The legacy path writes the same reports as before.

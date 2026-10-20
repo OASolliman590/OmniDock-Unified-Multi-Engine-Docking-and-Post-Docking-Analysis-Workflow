@@ -1315,20 +1315,16 @@ class MultiEngineAnalysisPipeline:
         return {"details": f"comparative_reports_copied={copied}"}
 
     def _dag_compute_polypharmacology_node(self, paths: Dict[str, Path]) -> Dict[str, object]:
+        # Spec 038 D-A1: read-only. The comparative node has already written reports/polypharmacology.
         source = self.output_dir / "reports" / "polypharmacology"
-        if not source.exists():
-            scores = self._load_or_build_scores()
-            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope, preserve_dag_atlas=True)
-        copied = self._copy_matching_files(source, paths["polypharmacology"])
+        copied = self._copy_matching_files(source, paths["polypharmacology"]) if source.exists() else 0
         return {"details": f"polypharmacology_files_copied={copied}"}
 
     def _dag_compute_biology_correlation_node(self, paths: Dict[str, Path]) -> Dict[str, object]:
+        # Spec 038 D-A1: read-only. The comparative node has already written the biology files.
         destination = paths["biology_correlation"]
         destination.mkdir(parents=True, exist_ok=True)
         reports_dir = self.output_dir / "reports"
-        if not (reports_dir / "biology_mapping_report.json").exists():
-            scores = self._load_or_build_scores()
-            self._write_comparative_reports(scores, analysis_scope=self.analysis_scope, preserve_dag_atlas=True)
         copied = 0
         for candidate in (
             "biology_correlation_global.csv",
@@ -1371,17 +1367,10 @@ class MultiEngineAnalysisPipeline:
 
     def _dag_compute_reports_node(self, paths: Dict[str, Path]) -> Dict[str, object]:
         reports_file = paths["reports"]
-        existing_summary = self.output_dir / "reports" / "summary.txt"
-        if existing_summary.exists():
-            reports_file.parent.mkdir(parents=True, exist_ok=True)
-            if existing_summary.resolve() != reports_file.resolve():
-                shutil.copy2(existing_summary, reports_file)
-        elif not reports_file.exists():
-            reports_file.parent.mkdir(parents=True, exist_ok=True)
-            reports_file.write_text(
-                "Report generation completed through comparative writer, but summary artifact was absent.\n",
-                encoding="utf-8",
-            )
+        # Spec 038 D-A1: the comparative writer is the single writer of reports/summary.txt. A missing summary is a
+        # failure, never a placeholder that counts as a pass.
+        if not reports_file.is_file():
+            raise RuntimeError(f"comparative writer did not produce the summary: {reports_file}")
 
         figures_manifest_file = paths.get("figures_manifest")
         figures_embedded = 0
@@ -1520,6 +1509,7 @@ class MultiEngineAnalysisPipeline:
             cacheable: bool = True,
             content_hash_inputs: bool = False,
             optional_inputs: Optional[List[Path]] = None,
+            retire_outputs: bool = True,
         ) -> None:
             graph.register(
                 ArtifactNode(
@@ -1531,6 +1521,7 @@ class MultiEngineAnalysisPipeline:
                     cacheable=cacheable,
                     content_hash_inputs=content_hash_inputs,
                     optional_inputs=[str(path) for path in (optional_inputs or [])],
+                    retire_outputs=retire_outputs,
                 )
             )
 
@@ -1661,6 +1652,8 @@ class MultiEngineAnalysisPipeline:
                     if node_name == "comparative"
                     else self._dag_compute_biology_correlation_node(paths)
                 ),
+                # Spec 038 D-A1: the polypharmacology directory is written by the comparative writer, not by this node.
+                retire_outputs=node_name != "polypharmacology",
             )
         _register(
             "interactions",
@@ -1691,6 +1684,9 @@ class MultiEngineAnalysisPipeline:
             [paths["reports"]],
             lambda: self._dag_compute_reports_node(paths),
             cacheable=False,
+            # Spec 038 D-A1: reports/summary.txt is written by the comparative writer. Retiring it here would
+            # leave this node with no summary (the placeholder bug).
+            retire_outputs=False,
             # figures_manifest is produced by the optional visualizations node (Spec 026).
             optional_inputs=[paths["figures_manifest"]],
         )
@@ -3515,6 +3511,7 @@ class MultiEngineAnalysisPipeline:
             "sqlite_write_summary": json.dumps(self.sqlite_write_summary),
         }
         start_here_artifacts.update(consolidated_outputs)
+        dashboard_input_artifacts = dict(start_here_artifacts)
         dashboard_outputs = generate_dashboard_index(
             numbered_reports_root,
             run_context=run_context,
@@ -3546,6 +3543,13 @@ class MultiEngineAnalysisPipeline:
         summary_file = reports_dir / "summary.txt"
         summary_file.write_text("\n".join(summary_lines), encoding="utf-8")
         start_here_artifacts["summary_txt"] = str(summary_file)
+        # Spec 038 D-A1: the dashboard index records whether the summary exists, so it is regenerated after the write.
+        generate_dashboard_index(
+            numbered_reports_root,
+            run_context=run_context,
+            artifact_paths={**dashboard_input_artifacts, "summary_txt": str(summary_file)},
+            output_stem="dashboard_export_index",
+        )
         generate_start_here_index(
             numbered_reports_root,
             project_root=self.project_dir,

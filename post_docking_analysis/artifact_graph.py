@@ -49,6 +49,9 @@ class ArtifactNode:
     # Kept for call-site compatibility (Spec 024 branch). Every input is now
     # content-fingerprinted, so this flag has no effect.
     content_hash_inputs: bool = False
+    # Spec 038 D-A1: False for a node that does not replace its outputs (another node writes them). Existing
+    # outputs are then left in place instead of being moved to .artifact_history before the node runs.
+    retire_outputs: bool = True
 
 
 class ArtifactGraph:
@@ -236,6 +239,8 @@ class ArtifactGraph:
 
     def _retire_outputs(self, node: ArtifactNode) -> None:
         """Preserve old/partial generated outputs outside the published paths."""
+        if not node.retire_outputs:
+            return
         inputs = self._artifact_path_rows(node.inputs)
         history_root = self.cache_file.parent.resolve() / ".artifact_history"
         history = None

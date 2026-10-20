@@ -218,7 +218,6 @@ def test_legacy_single_engine_smina_completes(runs):
     assert (runs["legacy_single_smina"]["session"] / "smina" / "best_poses.csv").exists()
 
 
-@pytest.mark.xfail(strict=True, reason=STOP_SUMMARY)
 def test_dag_reports_summary_is_the_full_summary(runs):
     summary = (runs["dag_comparative"]["session"] / "reports" / "summary.txt").read_text(encoding="utf-8")
     assert "Multi-engine docking summary" in summary
@@ -259,7 +258,6 @@ def test_run_routes_through_the_dag():
     assert "request_artifact_scope" in inspect.getsource(MultiEngineAnalysisPipeline.run)
 
 
-@pytest.mark.xfail(strict=True, reason=STOP_WRITER)
 def test_report_nodes_do_not_call_the_comparative_writer():
     from post_docking_analysis import multi_engine_pipeline_impl as mep
 
@@ -267,7 +265,6 @@ def test_report_nodes_do_not_call_the_comparative_writer():
         assert "_write_comparative_reports(" not in inspect.getsource(getattr(mep.MultiEngineAnalysisPipeline, method))
 
 
-@pytest.mark.xfail(strict=True, reason=STOP_WRITER)
 def test_dag_run_retires_no_shared_report_files(runs):
     root = runs["dag_comparative"]["root"]
     retired = [
