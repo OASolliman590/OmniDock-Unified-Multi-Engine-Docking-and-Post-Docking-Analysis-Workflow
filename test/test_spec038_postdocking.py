@@ -40,7 +40,6 @@ STOP_FAVORITE = "STOP D-A3 (Spec 038 R3): the DAG path has no favorite_engine_co
 STOP_ROUTE = "STOP D-A (Spec 038 R3): run() is not yet routed through the DAG; that changes legacy outputs."
 STOP_FILTER = "STOP D-B (Spec 038 R3): the DAG ignores the problematic-ligand filter; legacy applies it when enabled."
 STOP_WRITER = "Single-writer violation (Spec 038 R3): DAG nodes share reports/ paths with the comparative writer."
-SMINA_CRASH = "Pre-existing defect: legacy single-engine smina raises AttributeError: engine_detection_report."
 
 
 def _seed_three_engines(root: Path) -> None:
@@ -214,7 +213,6 @@ def test_legacy_filter_applied_when_enabled_and_not_when_disabled(runs):
 
 # ----------------------------------------------------------------- STOP points (strict xfail)
 
-@pytest.mark.xfail(strict=True, reason=SMINA_CRASH)
 def test_legacy_single_engine_smina_completes(runs):
     assert runs["legacy_single_smina"]["error"] == ""
     assert (runs["legacy_single_smina"]["session"] / "smina" / "best_poses.csv").exists()

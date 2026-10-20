@@ -120,3 +120,15 @@ The new module was run on the current tree with the other agents' changes presen
 
 - Non-scientific nondeterminism: the seaborn jitter (section 1). Not fixed, because seeding would change the figures.
 - A stray empty directory `/spec038_harness` at the filesystem root was created by mistake during the golden setup. A safety check blocked its removal. It should be removed with `rmdir /spec038_harness`. The harness itself lives in the scratchpad.
+
+## 9. Golden diff log (per fix, after the Lead decision of 2026-10-20)
+
+Each entry lists every golden difference against `spec038_golden/baseline`, with the decision that covers it.
+Any difference not covered by a decision is a STOP.
+
+### Step 1: E-1 (legacy single-engine smina crash)
+
+- Change: `MultiEngineAnalysisPipeline.__init__` defaults `engine_detection_report = {}`.
+- `synthetic__single_smina__legacy` now completes (was `AttributeError`). Its outputs are new files under `session/smina/`, and `START_HERE.md` is written.
+- Intended, covered by E-1. Run-tracking status files change from `exception` to `completed`.
+- Provenance gap, intended and temporary: the base-class path does not run detection, so `engine_settings.smina.smina_scoring_function` is `{}` (the DAG records the weights) and `scope_source` is `detected_all`. Closed by step 7, where legacy `run()` executes the DAG, which runs detection.

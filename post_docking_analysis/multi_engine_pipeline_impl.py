@@ -470,6 +470,9 @@ class MultiEngineAnalysisPipeline:
         except (TypeError, ValueError):
             self.global_rmsd_defer_threshold = 150
         self.manifest = load_manifest(self.project_dir)
+        # Spec 038 E-1: single-engine writers read this attribute. Only the unified subclass sets it, so the base
+        # class must default it, or a legacy single-engine smina run raises AttributeError.
+        self.engine_detection_report: Dict[str, object] = {}
         self.pairlist_df = self._load_pairlist_with_intent()
         self.selected_query_tags: Set[str] = set()
         if self.complex_query and not self.pairlist_df.empty:
