@@ -154,3 +154,14 @@ Golden differences against `baseline_ext`, all mapped to D-A1:
 - `session/favorite_engine/deep_analysis/reports/best_poses.csv` (legacy, `favorite_gnina`): the D-C change from step 2, unchanged by this step.
 - Run tracking and DAG execution report: status and timing fields only.
 - No new files. The legacy path writes the same reports as before.
+
+### Step 4: D-A2 (top-pose outputs carry the normalised score and the accepted status columns)
+
+Design: the top-pose atlas node builds its pose table with the writer's own construction. A shared helper `_normalized_engine_frame` (normalisation, pair metadata, scope columns) serves both the comparative writer and the atlas node. The atlas node takes the redocking status from the validation node (`validation_gate` is now an atlas input) and attaches it to the consensus table and the pose table, as the writer does.
+
+Golden differences against `baseline_ext`, all mapped to D-A2:
+- `top_pose_ligand_performance/top_pose_per_ligand_global.csv` and `top_pose_per_ligand_per_protein.csv` (DAG, five runs, `session/` and `5-Analysis/` mirrors): `normalized_affinity_score` NaN -> per-engine-rank values, the same values as the legacy path (for example 1.0, 0.7727, 0.5, 0.1818 on the synthetic fixture). Added columns: `normalization_method`, the engine-scope columns, `replicates_pooled`, `pose_reproducibility_*`, `docked_microspecies_smiles`, `docked_net_charge`, `protonation_policy`, `docked_state_source`, `redocking_validation_status`, `redocking_validation_reason`, `redocking_reference`.
+- Checked: no existing column changed except `normalized_affinity_score`. Ranks (`consensus_rank_global`, `consensus_rank_within_protein`), winner engines, consensus scores, selected tags and poses, and statuses are identical to the baseline. The DAG global and per-protein files equal the legacy files on every non-scope column.
+- `ligand_performance_summary.csv` and `top_pose_confidence_metrics.csv`: unchanged.
+- `top_pose_selection_manifest.json` (DAG): the column lists in the manifest gain the added columns. No rank or selection field changed.
+- The mirror removals from step 3 still apply to `5-Analysis/comparative/*`.

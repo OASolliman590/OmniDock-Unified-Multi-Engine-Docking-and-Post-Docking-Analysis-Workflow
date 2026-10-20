@@ -877,14 +877,37 @@ class MultiEngineAnalysisPipeline:
         classified.to_csv(paths["classified_hits"], index=False)
         return {"details": f"classified_rows={len(classified)}"}
 
+    def _normalized_engine_frame(self, scores: pd.DataFrame) -> pd.DataFrame:
+        """Normalised per-engine score rows with pair metadata and scope columns (Spec 038 D-A2).
+
+        The one construction shared by the comparative writer and the top-pose atlas node, so both see the same
+        normalised scores and the same pair columns.
+        """
+        normalized = normalize_engine_scores(
+            scores,
+            method=self.normalization_method,
+            score_column="affinity_kcal_mol",
+            normalized_column="normalized_affinity_score",
+            group_keys=["engine", "protein"],
+        )
+        normalized = self._merge_pair_metadata(normalized, self._pair_metadata_frame())
+        return self._annotate_scope_columns(normalized)
+
     def _dag_compute_top_pose_atlas_node(self, paths: Dict[str, Path]) -> Dict[str, object]:
         classified_file = paths["classified_hits"]
-        normalized_file = paths["normalized_scores"]
+        raw_file = paths["raw_scores"]
         classified = pd.read_csv(classified_file) if classified_file.exists() else pd.DataFrame()
-        normalized_scores = pd.read_csv(normalized_file) if normalized_file.exists() else self._load_or_build_scores()
-        best_by_engine = select_best_pose_rows(normalized_scores).sort_values(
-            ["engine", "affinity_kcal_mol", "tag"]
+        # The writer attaches the redocking status to the consensus table before it builds the atlas. Do the same.
+        redocking_status_df = self._load_redocking_status(paths["validation_gate"].parent)
+        classified = attach_redocking_status(classified, redocking_status_df) if not classified.empty else classified
+        raw_scores = pd.read_csv(raw_file) if raw_file.exists() else self._load_or_build_scores()
+        normalized_scores = self._normalized_engine_frame(raw_scores) if not raw_scores.empty else pd.DataFrame()
+        # Same pose table as the comparative writer (normalised scores, reproducibility, microspecies, protonation).
+        best_by_engine = self._select_best_pose_table(
+            normalized_scores, pair_metadata=self._pair_metadata_frame()
         ) if not normalized_scores.empty else pd.DataFrame()
+        if not best_by_engine.empty:
+            best_by_engine = attach_redocking_status(best_by_engine, redocking_status_df)
         top_pose_payload = build_top_pose_atlas(
             best_by_engine=best_by_engine,
             consensus_df=classified,
@@ -905,7 +928,6 @@ class MultiEngineAnalysisPipeline:
                 "detected_engine_count": int(self.detected_engine_count or len(self.manifest.get("engines", []))),
             },
         )
-        redocking_status_df = self._load_redocking_status(paths["validation_gate"].parent)
         per_protein = top_pose_payload.get("top_pose_per_ligand_per_protein")
         if isinstance(per_protein, pd.DataFrame) and "protein" in per_protein.columns:
             top_pose_payload["top_pose_per_ligand_per_protein"] = attach_redocking_status(per_protein, redocking_status_df)
@@ -1580,7 +1602,8 @@ class MultiEngineAnalysisPipeline:
         ]
         _register(
             "top_pose_atlas",
-            [paths["classified_hits"], paths["normalized_scores"], paths["analysis_parameters"]],
+            # validation_gate: the atlas carries the per-target redocking status (Spec 038 D-A2).
+            [paths["classified_hits"], paths["normalized_scores"], paths["analysis_parameters"], paths["validation_gate"]],
             atlas_outputs,
             lambda: self._dag_compute_top_pose_atlas_node(paths),
         )
@@ -2939,16 +2962,8 @@ class MultiEngineAnalysisPipeline:
         numbered_scores_consensus = numbered_layout["post_scores_consensus"]
         numbered_reports_root = numbered_layout["reports_root_numbered"]
 
-        normalized_scores = normalize_engine_scores(
-            scores,
-            method=self.normalization_method,
-            score_column="affinity_kcal_mol",
-            normalized_column="normalized_affinity_score",
-            group_keys=["engine", "protein"],
-        )
+        normalized_scores = self._normalized_engine_frame(scores)
         pair_metadata = self._pair_metadata_frame()
-        normalized_scores = self._merge_pair_metadata(normalized_scores, pair_metadata)
-        normalized_scores = self._annotate_scope_columns(normalized_scores)
         normalized_scores.to_csv(reports_dir / "combined_engine_scores.csv", index=False)
         normalized_scores.to_csv(reports_dir / "consensus_inputs_all_engines.csv", index=False)
         normalized_scores[UNIFIED_COMPAT_COLUMNS].to_csv(raw_dir / "unified_all_scores.csv", index=False)

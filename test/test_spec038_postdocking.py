@@ -223,7 +223,6 @@ def test_dag_reports_summary_is_the_full_summary(runs):
     assert "Multi-engine docking summary" in summary
 
 
-@pytest.mark.xfail(strict=True, reason=STOP_ATLAS)
 def test_top_pose_normalized_score_matches_legacy(runs):
     name = "top_pose_ligand_performance/top_pose_per_ligand_global.csv"
     dag = pd.read_csv(runs["dag_comparative"]["session"] / name)
@@ -231,7 +230,6 @@ def test_top_pose_normalized_score_matches_legacy(runs):
     pd.testing.assert_series_equal(dag["normalized_affinity_score"], legacy["normalized_affinity_score"], check_names=False)
 
 
-@pytest.mark.xfail(strict=True, reason=STOP_ATLAS)
 def test_top_pose_status_columns_present_on_dag(runs):
     name = "top_pose_ligand_performance/top_pose_per_ligand_global.csv"
     dag_cols = set(pd.read_csv(runs["dag_comparative"]["session"] / name, nrows=0).columns)
